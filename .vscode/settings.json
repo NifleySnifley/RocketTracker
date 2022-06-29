@@ -1,0 +1,12 @@
+{
+    "workbench.colorCustomizations": {
+        "[Visual Studio 2019 Light][Default Light+][Visual Studio Light]": {
+            "editor.background": "#d5d5d2",
+            "panel.background": "#d0d0d0",
+            "sideBar.background": "#d1d2d0"
+        },
+        "activityBar.background": "#210895",
+        "titleBar.activeBackground": "#2E0BD0",
+        "titleBar.activeForeground": "#FDFDFF"
+    }
+}
