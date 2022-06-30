@@ -2,9 +2,10 @@ use clap::{Arg, Parser};
 use eframe::egui;
 use egui::{RichText, Window};
 use peripherals::{Compass, GUIItem, Radio, GPS};
+
+mod configuration;
 mod peripherals;
 mod widgets;
-// use serde_derive::{Deserialize, Serialize};
 
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
@@ -12,6 +13,9 @@ struct Args {
     /// Name of the person to greet
     #[clap(short, long, value_parser)]
     gps_port: String,
+
+    #[clap(short, long, value_parser)]
+    calibrate_magnetometer: bool,
 }
 
 pub mod items {
@@ -47,7 +51,13 @@ impl Seeker {
             gps: GPS::new(args.gps_port),
             compass: Compass::new(cc),
         };
-        // s.radio
+
+        #[cfg(target_arch = "arm")]
+        if (args.calibrate_magnetometer) {
+            s.compass
+                .run_calibration()
+                .expect("Error during magnetometer configuration");
+        }
 
         return s;
     }

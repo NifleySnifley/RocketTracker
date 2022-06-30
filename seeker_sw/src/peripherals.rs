@@ -1,9 +1,11 @@
 #![allow(dead_code, non_camel_case_types, unused_must_use)]
 
+use crate::configuration::SeekerConfiguration;
 use crate::widgets::CompassWidget;
 
 use std::{
     collections::*,
+    error::Error,
     fs::File,
     io::{BufRead, BufReader},
     sync::{Arc, Mutex},
@@ -23,6 +25,7 @@ use serde::{Deserialize, Serialize};
 
 use nmea::{self, *};
 
+#[cfg(target_arch = "arm")]
 use rppal::i2c::I2c;
 
 pub trait GUIItem {
@@ -99,6 +102,7 @@ pub struct GPS {
     data: Arc<Mutex<GPSData>>,
 }
 
+#[cfg(target_arch = "arm")]
 impl GPS {
     pub fn new(port: String) -> Self {
         let mut gps = GPS {
@@ -135,6 +139,27 @@ impl GPS {
                 _ => {}
             }
         }
+    }
+}
+
+#[cfg(not(target_arch = "arm"))]
+impl GPS {
+    pub fn new(port: String) -> Self {
+        let mut gpsdata = GPSData::default();
+
+        gpsdata.latitude = 40.7128;
+        gpsdata.longitude = 74.0060;
+        gpsdata.latitude_dir = CompassDirection::North;
+        gpsdata.longitude_dir = CompassDirection::West;
+        gpsdata.satellites_fixed = 7;
+        gpsdata.altitude = 100f64;
+
+        let mut gps = GPS {
+            serial_port: port,
+            data: Arc::new(Mutex::new(gpsdata)),
+        };
+
+        gps
     }
 }
 
@@ -189,6 +214,7 @@ pub enum LIS3MDL_REG {
     INT_THS_H = 0x33,
 }
 
+#[cfg(target_arch = "arm")]
 pub struct Compass {
     i2c_conn: I2c,
     heading: f64,
@@ -196,8 +222,16 @@ pub struct Compass {
     heading_samples: VecDeque<f64>,
     widget: Arc<Mutex<CompassWidget>>,
     mag_vec: [f64; 3],
+    calibration_offsets: [f64; 3],
 }
 
+#[cfg(not(target_arch = "arm"))]
+pub struct Compass {
+    heading: f64,
+    widget: Arc<Mutex<CompassWidget>>,
+}
+
+#[cfg(target_arch = "arm")]
 impl<'a> Compass {
     pub fn new(cc: &'a eframe::CreationContext<'a>) -> Self {
         let i2c_conn = I2c::with_bus(1).expect("Error, failed to open I2c");
@@ -208,10 +242,30 @@ impl<'a> Compass {
             heading_samples: VecDeque::new(),
             widget: Arc::new(Mutex::new(CompassWidget::new(cc.gl.as_ref()))),
             mag_vec: [0f64; 3],
+            calibration_offsets: [0f64; 3], // TODO: Add calibration function instead of using these magic numbers
         };
+
+        let cfg = SeekerConfiguration::load().unwrap();
+        compass.calibration_offsets = cfg.magnetometer_offsets;
 
         compass.init_sensor();
         return compass;
+    }
+
+    pub fn run_calibration(&mut self) -> Result<(), Box<dyn Error>> {
+        let mut samples: Vec<&[f64; 3]> = vec![];
+        let mut cfg_file = SeekerConfiguration::load()?;
+        // loop {}
+
+        // Process samples:
+        // - Remove 1% outliers
+        // - Find center of ellipsoid
+        // - Save to configuration file
+
+        cfg_file.magnetometer_offsets = [1f64, 2f64, 3f64];
+        cfg_file.save()?;
+
+        Ok(())
     }
 
     fn init_sensor(&mut self) {
@@ -239,27 +293,32 @@ impl<'a> Compass {
         buf[0]
     }
 
-    fn read_sensor(&mut self) {
+    pub fn read_sensor(&mut self) {
         // self.mag_vec[0] = ((self.reg_read(LIS3MDL_REG::OUT_X_H) as i16) << 8) | (self.reg_read(LIS3MDL_REG::OUT_X_L) as i16);
         // self.mag_vec[1] = ((self.reg_read(LIS3MDL_REG::OUT_Y_H) as i16) << 8) | (self.reg_read(LIS3MDL_REG::OUT_Y_L) as i16);
         // self.mag_vec[2] = ((self.reg_read(LIS3MDL_REG::OUT_Z_H) as i16) << 8) | (self.reg_read(LIS3MDL_REG::OUT_Z_L) as i16);
 
         /*
-            [3860, 4019, 3151]
-            [-4438, -4593, -4815]
-
-            [-289. -287. -832.]
+            [2863, 3329, 2851]
+            [-4428, -3809, -4650]
+            [-782.5 -240.  -899.5]
         */
 
         let mut buf = [0u8; 6];
         self.i2c_conn
             .write_read(&[LIS3MDL_REG::OUT_X_L as u8], &mut buf)
             .expect("Error, unable to interface with I2C bus");
-        self.mag_vec[0] = (((buf[1] as i16) << 8) | (buf[0] as i16)) as f64 - -289.0;
-        self.mag_vec[1] = (((buf[3] as i16) << 8) | (buf[2] as i16)) as f64 - -287.0;
-        self.mag_vec[2] = (((buf[5] as i16) << 8) | (buf[4] as i16)) as f64 - -832.0;
+        self.mag_vec[0] =
+            (((buf[1] as i16) << 8) | (buf[0] as i16)) as f64 - self.calibration_offsets[0];
+        self.mag_vec[1] =
+            (((buf[3] as i16) << 8) | (buf[2] as i16)) as f64 - self.calibration_offsets[1];
+        self.mag_vec[2] =
+            (((buf[5] as i16) << 8) | (buf[4] as i16)) as f64 - self.calibration_offsets[2];
 
         let mut calculated_heading = (self.mag_vec[1]).atan2(self.mag_vec[0]);
+        if calculated_heading < 0.0 {
+            calculated_heading = (2.0 * std::f64::consts::PI) + calculated_heading;
+        }
         if (self.heading_samples.len() < self.heading_avg_size) {
             for i in 0..self.heading_avg_size {
                 self.heading_samples.push_front(calculated_heading);
@@ -272,10 +331,7 @@ impl<'a> Compass {
         // Make heading the running average of the last <heading_avg_size> values read from the magnetometer
         // Really helps make the readout more smooth
         self.heading = self.heading_samples.iter().sum::<f64>() / (self.heading_avg_size as f64);
-
-        // if (self.heading < 0f64) {
-        //     self.heading += 2f64 * std::f64::consts::PI;
-        // }
+        self.heading += std::f64::consts::PI;
 
         // println!(
         //     "{},{},{},{}",
@@ -284,6 +340,21 @@ impl<'a> Compass {
         //     self.mag_vec[2],
         //     self.heading.to_degrees()
         // );
+    }
+}
+
+#[cfg(not(target_arch = "arm"))]
+impl<'a> Compass {
+    pub fn new(cc: &'a eframe::CreationContext<'a>) -> Self {
+        Self {
+            heading: 0f64,
+            widget: Arc::new(Mutex::new(CompassWidget::new(cc.gl.as_ref()))),
+        }
+    }
+
+    fn read_sensor(&mut self) {
+        self.heading = self.heading + (std::f64::consts::PI * 2f64) / 120f64;
+        self.heading = self.heading.rem_euclid(std::f64::consts::PI * 2f64)
     }
 }
 

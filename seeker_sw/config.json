@@ -1,0 +1,10 @@
+{
+    "magnetometer_offsets": [
+        -782.5,
+        -240.0,
+        -899.5
+    ],
+    "radio_network": 0,
+    "radio_id": 0,
+    "version": 0.1
+}
