@@ -17,6 +17,7 @@ egui_glow = { version = "0.18.1", features = ["winit"] }
 serde_bson = "0.0.1"
 prost = "0.10.4"
 nmea = "0.2.0"
+chrono = "0.4"
 image = "0.24.2"
 # rfm9x = "0.1.2"
 

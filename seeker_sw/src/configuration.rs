@@ -10,6 +10,7 @@ static CFG_VERS: f32 = 0.1;
 #[derive(Serialize, Deserialize, Debug)]
 pub struct SeekerConfiguration {
     pub magnetometer_offsets: [f64; 3],
+    pub heading_offset: f64,
     pub radio_network: u8,
     pub radio_id: u8,
     version: f32,
@@ -19,6 +20,7 @@ impl Default for SeekerConfiguration {
     fn default() -> Self {
         Self {
             magnetometer_offsets: [0f64; 3],
+            heading_offset: 0f64,
             radio_network: 0,
             radio_id: 0,
             version: CFG_VERS,
@@ -43,10 +45,10 @@ impl SeekerConfiguration {
         // Create config file if it doesn't exist
         if !configpath.exists() {
             let default_cfg = SeekerConfiguration::default();
-            fs::write(&configpath, serde_json::to_string(&default_cfg)?);
+            fs::write(&configpath, serde_json::to_string_pretty(&default_cfg)?)?;
         }
 
-        let mut reader = BufReader::new(File::open(configpath)?);
+        let reader = BufReader::new(File::open(configpath)?);
         *self = serde_json::from_reader(reader)?;
 
         Ok(())
@@ -57,7 +59,7 @@ impl SeekerConfiguration {
         configpath.pop();
         configpath.push("config.json");
 
-        fs::write(&configpath, serde_json::to_string(&self)?);
+        fs::write(&configpath, serde_json::to_string_pretty(&self)?)?;
         Ok(())
     }
 }

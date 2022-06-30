@@ -10,7 +10,6 @@ use std::io::Cursor;
 pub struct CompassWidget {
     program: glow::Program,
     vertex_array: glow::VertexArray,
-    image: Vec<u8>,
     texture: glow::NativeTexture,
 }
 
@@ -101,7 +100,6 @@ impl CompassWidget {
             Self {
                 program,
                 vertex_array,
-                image: img_data,
                 texture: tex,
             }
         }

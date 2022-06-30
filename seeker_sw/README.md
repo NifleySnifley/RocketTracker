@@ -40,7 +40,11 @@ Compilation and deployment is handled by the makefile, which provides 5 targets:
 
 - `dev` - Builds, deploys, and runs the application on the target
 
-- `build` - Compiles the source using `cross` for `arm-unknown-linux-gnueabihf`
+- `build` - Compiles the source using `cross` for `arm-unknown-linux-gnueabihf` (raspberry pi)
+
+- `res` - Moves resources to the target, which includes neccesary textures and shaders for the GUI
+
+- `fmt` - Formats the source code using rustc
 
 - `exec_remote` - Runs the application on the target
   

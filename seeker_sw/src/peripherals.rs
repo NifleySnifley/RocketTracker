@@ -1,11 +1,12 @@
 #![allow(dead_code, non_camel_case_types, unused_must_use)]
 
 use crate::configuration::SeekerConfiguration;
-use crate::widgets::CompassWidget;
+use crate::widgets::{CompassWidget};
 
 use std::{
     collections::*,
     error::Error,
+    fmt::{self, Display},
     fs::File,
     io::{BufRead, BufReader},
     sync::{Arc, Mutex},
@@ -21,8 +22,11 @@ use eframe::{
 };
 use egui_glow;
 use egui_glow::{glow, Painter};
-use serde::{Deserialize, Serialize};
 
+use serde::{Deserialize, Serialize};
+use serde_json;
+
+use chrono::{NaiveDate, NaiveTime, TimeZone, Utc};
 use nmea::{self, *};
 
 #[cfg(target_arch = "arm")]
@@ -61,6 +65,7 @@ impl GUIItem for Radio {
     }
 }
 
+#[derive(Debug)]
 pub enum CompassDirection {
     North,
     South,
@@ -76,7 +81,7 @@ pub struct GPSData {
     satellites_fixed: usize,
     altitude: f64,
     fixed: bool,
-    utc_time: f64,
+    fix_time: NaiveTime,
     debug: String,
 }
 
@@ -89,10 +94,27 @@ impl Default for GPSData {
             longitude_dir: CompassDirection::West,
             altitude: 0.0,
             fixed: false,
-            utc_time: 0.0,
+            fix_time: NaiveTime::from_hms(0, 0, 0),
             satellites_fixed: 0,
             debug: String::new(),
         }
+    }
+}
+
+//°
+impl Display for GPSData {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}: {}° {:?}, {}° {:?} at {} UTC using {} satellites",
+            if self.fixed { "Fixed" } else { "NOT FIXED" },
+            self.latitude,
+            self.latitude_dir,
+            self.longitude,
+            self.longitude_dir,
+            self.fix_time,
+            self.satellites_fixed
+        )
     }
 }
 
@@ -105,7 +127,7 @@ pub struct GPS {
 #[cfg(target_arch = "arm")]
 impl GPS {
     pub fn new(port: String) -> Self {
-        let mut gps = GPS {
+        let gps = GPS {
             serial_port: port,
             data: Arc::new(Mutex::new(GPSData::default())),
         };
@@ -120,7 +142,7 @@ impl GPS {
     pub fn listener_fn(port: String, data_record: Arc<Mutex<GPSData>>) {
         let device_file = File::open(port).expect("Error, unable to open GPS device file.");
         let mut readbuf = BufReader::new(device_file);
-        while (true) {
+        loop {
             let mut lbuf = String::new();
             readbuf
                 .read_line(&mut lbuf)
@@ -130,13 +152,48 @@ impl GPS {
                 continue;
             }
 
-            let parsed = nmea::parse(lbuf.as_bytes()).unwrap();
-            match parsed {
-                ParseResult::GGA(data) => {
-                    data_record.lock().as_mut().unwrap().debug =
-                        format!("Lat: {}\r", data.latitude.unwrap_or(0.0f64));
+            let nmea_result = nmea::parse(lbuf.as_bytes());
+            
+            // TODO: Add more supported messages
+            if let (Ok(parsed)) = nmea_result {
+                match parsed {
+                    ParseResult::GGA(data) => {
+                        let mut record = data_record.lock();
+                        if let Some(latitude) = data.latitude {
+                            record.as_mut().unwrap().latitude = latitude
+                        };
+                        if let Some(longitude) = data.longitude {
+                            record.as_mut().unwrap().longitude = longitude
+                        };
+                        if let Some(satellites) = data.fix_satellites {
+                            record.as_mut().unwrap().satellites_fixed = satellites as usize
+                        };
+                        if let Some(alt) = data.altitude {
+                            record.as_mut().unwrap().altitude = alt as f64
+                        };
+                        if let Some(time) = data.fix_time {
+                            record.as_mut().unwrap().fix_time = time
+                        };
+
+                        record.as_mut().unwrap().fixed = match data.fix_type.unwrap() {
+                            nmea::FixType::Gps
+                            | nmea::FixType::DGps
+                            | nmea::FixType::Pps
+                            | nmea::FixType::Rtk
+                            | nmea::FixType::FloatRtk
+                            | nmea::FixType::Estimated => true,
+                            _ => false,
+                        };
+                    }
+                    ParseResult::GLL(data) => {
+                        let mut record = data_record.lock();
+                        record.as_mut().unwrap().latitude = data.latitude.unwrap_or(0f64);
+                        record.as_mut().unwrap().longitude = data.longitude.unwrap_or(0f64);
+                        record.as_mut().unwrap().fixed = data.valid;
+                        record.as_mut().unwrap().fix_time = data.fix_time;
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
         }
     }
@@ -171,12 +228,12 @@ impl GUIItem for GPS {
     }
 
     fn render_widget(&mut self, ctx: &Context, ui: &mut Ui) {
-        ui.code(RichText::new(self.data.lock().unwrap().debug.to_string()));
+        ui.label(self.data.lock().unwrap().to_string());
 
-        //let ports = serialport::available_ports().expect("No ports found!");
-        //ui.label(format!("{} ports found", ports.len()));
+        // let ports = serialport::available_ports().expect("No ports found!");
+        // ui.label(format!("{} ports found", ports.len()));
 
-        //for port in ports {
+        // for port in ports {
         //    ui.collapsing(port.port_name, |ui| {
         //        ui.label(match (port.port_type) {
         //            SerialPortType::UsbPort(info) => format!(
@@ -186,7 +243,7 @@ impl GUIItem for GPS {
         //            _ => "Unknown".to_string(),
         //        });
         //    });
-        //}
+        // }
     }
 }
 
@@ -214,52 +271,61 @@ pub enum LIS3MDL_REG {
     INT_THS_H = 0x33,
 }
 
+// TODO: Readout and GUI for Gyro
+// TODO: Tilt compensation for compass
+// TODO: Implement calibration
+
 #[cfg(target_arch = "arm")]
-pub struct Compass {
-    i2c_conn: I2c,
+pub struct Imu9DOF {
+    mag_i2c_conn: I2c,
     heading: f64,
     heading_avg_size: usize,
     heading_samples: VecDeque<f64>,
-    widget: Arc<Mutex<CompassWidget>>,
+    compass_widget: Arc<Mutex<CompassWidget>>,
     mag_vec: [f64; 3],
     calibration_offsets: [f64; 3],
+    heading_offset: f64,
 }
 
 #[cfg(not(target_arch = "arm"))]
-pub struct Compass {
+pub struct Imu9DOF {
     heading: f64,
-    widget: Arc<Mutex<CompassWidget>>,
+    compass_widget: Arc<Mutex<CompassWidget>>,
 }
 
 #[cfg(target_arch = "arm")]
-impl<'a> Compass {
+impl<'a> Imu9DOF {
     pub fn new(cc: &'a eframe::CreationContext<'a>) -> Self {
-        let i2c_conn = I2c::with_bus(1).expect("Error, failed to open I2c");
-        let mut compass = Self {
-            i2c_conn,
+        let mag_i2c_conn = I2c::with_bus(1).expect("Error, failed to open I2c");
+        let mut imu = Self {
+            mag_i2c_conn,
             heading: 0f64,
             heading_avg_size: 20,
             heading_samples: VecDeque::new(),
-            widget: Arc::new(Mutex::new(CompassWidget::new(cc.gl.as_ref()))),
+            compass_widget: Arc::new(Mutex::new(CompassWidget::new(cc.gl.as_ref()))),
             mag_vec: [0f64; 3],
-            calibration_offsets: [0f64; 3], // TODO: Add calibration function instead of using these magic numbers
+            calibration_offsets: [0f64; 3],
+            heading_offset: 0f64,
         };
 
         let cfg = SeekerConfiguration::load().unwrap();
-        compass.calibration_offsets = cfg.magnetometer_offsets;
+        imu.calibration_offsets = cfg.magnetometer_offsets;
+        imu.heading_offset = cfg.heading_offset;
 
-        compass.init_sensor();
-        return compass;
+        imu.init_sensors();
+        return imu;
     }
 
     pub fn run_calibration(&mut self) -> Result<(), Box<dyn Error>> {
-        let mut samples: Vec<&[f64; 3]> = vec![];
-        let mut cfg_file = SeekerConfiguration::load()?;
-        // loop {}
+        let samples: Vec<&[f64; 3]> = vec![];
+        let cfg_file = SeekerConfiguration::load()?;
+
+        // Collect samples until console input
+        loop {}
 
         // Process samples:
         // - Remove 1% outliers
-        // - Find center of ellipsoid
+        // - Find center of ellipsoid ((min+max)/2)
         // - Save to configuration file
 
         cfg_file.magnetometer_offsets = [1f64, 2f64, 3f64];
@@ -268,36 +334,32 @@ impl<'a> Compass {
         Ok(())
     }
 
-    fn init_sensor(&mut self) {
-        self.i2c_conn.set_slave_address(0x1C); // LSM303AGR triple axis magnetometer + accelerometer
+    fn init_sensors(&mut self) {
+        self.mag_i2c_conn.set_slave_address(0x1C); // LSM303AGR triple axis magnetometer + accelerometer
 
         // Startup sequence from datasheet
-        self.reg_write(LIS3MDL_REG::CTRL_REG1, 0b01010000);
-        self.reg_write(LIS3MDL_REG::CTRL_REG2, 0b00000000);
-        self.reg_write(LIS3MDL_REG::CTRL_REG3, 0b00000000);
-        self.reg_write(LIS3MDL_REG::CTRL_REG4, 0b00000000);
-        self.reg_write(LIS3MDL_REG::CTRL_REG5, 0b00000000);
+        self.reg_write_m(LIS3MDL_REG::CTRL_REG1, 0b01010000);
+        self.reg_write_m(LIS3MDL_REG::CTRL_REG2, 0b00000000);
+        self.reg_write_m(LIS3MDL_REG::CTRL_REG3, 0b00000000);
+        self.reg_write_m(LIS3MDL_REG::CTRL_REG4, 0b00000000);
+        self.reg_write_m(LIS3MDL_REG::CTRL_REG5, 0b00000000);
     }
 
-    fn reg_write(&mut self, reg: LIS3MDL_REG, data: u8) {
-        self.i2c_conn
+    fn reg_write_m(&mut self, reg: LIS3MDL_REG, data: u8) {
+        self.mag_i2c_conn
             .write(&[reg as u8, data])
             .expect("Error, unable to interface with I2C bus");
     }
 
-    fn reg_read(&mut self, reg: LIS3MDL_REG) -> u8 {
+    fn reg_read_m(&mut self, reg: LIS3MDL_REG) -> u8 {
         let mut buf = [0u8; 1];
-        self.i2c_conn
+        self.mag_i2c_conn
             .write_read(&[reg as u8], &mut buf)
             .expect("Error, unable to interface with I2C bus");
         buf[0]
     }
 
-    pub fn read_sensor(&mut self) {
-        // self.mag_vec[0] = ((self.reg_read(LIS3MDL_REG::OUT_X_H) as i16) << 8) | (self.reg_read(LIS3MDL_REG::OUT_X_L) as i16);
-        // self.mag_vec[1] = ((self.reg_read(LIS3MDL_REG::OUT_Y_H) as i16) << 8) | (self.reg_read(LIS3MDL_REG::OUT_Y_L) as i16);
-        // self.mag_vec[2] = ((self.reg_read(LIS3MDL_REG::OUT_Z_H) as i16) << 8) | (self.reg_read(LIS3MDL_REG::OUT_Z_L) as i16);
-
+    pub fn read_sensors(&mut self) {
         /*
             [2863, 3329, 2851]
             [-4428, -3809, -4650]
@@ -305,7 +367,7 @@ impl<'a> Compass {
         */
 
         let mut buf = [0u8; 6];
-        self.i2c_conn
+        self.mag_i2c_conn
             .write_read(&[LIS3MDL_REG::OUT_X_L as u8], &mut buf)
             .expect("Error, unable to interface with I2C bus");
         self.mag_vec[0] =
@@ -314,6 +376,8 @@ impl<'a> Compass {
             (((buf[3] as i16) << 8) | (buf[2] as i16)) as f64 - self.calibration_offsets[1];
         self.mag_vec[2] =
             (((buf[5] as i16) << 8) | (buf[4] as i16)) as f64 - self.calibration_offsets[2];
+
+        // DONE: Fix weird spinning when there are some negative values
 
         let mut calculated_heading = (self.mag_vec[1]).atan2(self.mag_vec[0]);
         if calculated_heading < 0.0 {
@@ -330,25 +394,30 @@ impl<'a> Compass {
 
         // Make heading the running average of the last <heading_avg_size> values read from the magnetometer
         // Really helps make the readout more smooth
-        self.heading = self.heading_samples.iter().sum::<f64>() / (self.heading_avg_size as f64);
-        self.heading += std::f64::consts::PI;
-
-        // println!(
-        //     "{},{},{},{}",
-        //     self.mag_vec[0],
-        //     self.mag_vec[1],
-        //     self.mag_vec[2],
-        //     self.heading.to_degrees()
-        // );
+        let min_heading = self.heading_samples.iter().cloned().fold(360.0, f64::min);
+        let max_heading = self.heading_samples.iter().cloned().fold(0.0, f64::max);
+        self.heading = self
+            .heading_samples
+            .iter()
+            .map(|s| {
+                if (*s > (min_heading + std::f64::consts::PI)) {
+                    (*s - (2.0 * std::f64::consts::PI))
+                } else {
+                    *s
+                }
+            })
+            .sum::<f64>()
+            / (self.heading_avg_size as f64)
+            + self.heading_offset;
     }
 }
 
 #[cfg(not(target_arch = "arm"))]
-impl<'a> Compass {
+impl<'a> Imu9DOF {
     pub fn new(cc: &'a eframe::CreationContext<'a>) -> Self {
         Self {
             heading: 0f64,
-            widget: Arc::new(Mutex::new(CompassWidget::new(cc.gl.as_ref()))),
+            compass_widget: Arc::new(Mutex::new(CompassWidget::new(cc.gl.as_ref()))),
         }
     }
 
@@ -358,7 +427,7 @@ impl<'a> Compass {
     }
 }
 
-impl GUIItem for Compass {
+impl GUIItem for Imu9DOF {
     fn render_window(&mut self, ctx: &Context, frame: &mut Frame) {
         Window::new("Compass").show(ctx, |ui| {
             self.render_widget(ctx, ui);
@@ -369,27 +438,12 @@ impl GUIItem for Compass {
     }
 
     fn render_widget(&mut self, ctx: &Context, ui: &mut Ui) {
-        // Read i2c magnetometer
-        self.read_sensor();
+        self.read_sensors();
         ui.label(format!("Heading: {:.1}", self.heading.to_degrees()));
-        // println!("Sensor: {}", self.sensor_val);
-        // ui.add(egui::DragValue::new(&mut self.sensor_val));
-        // Display visual compass
     }
 }
 
-pub struct CallbackFn {
-    f: Box<dyn Fn(PaintCallbackInfo, &Painter) + Sync + Send>,
-}
-
-impl CallbackFn {
-    pub fn new<F: Fn(PaintCallbackInfo, &Painter) + Sync + Send + 'static>(callback: F) -> Self {
-        let f = Box::new(callback);
-        CallbackFn { f }
-    }
-}
-
-impl Compass {
+impl Imu9DOF {
     fn custom_painting(&mut self, ui: &mut egui::Ui) {
         let (rect, response) =
             ui.allocate_exact_size(egui::Vec2::splat(300.0), egui::Sense::drag());
@@ -398,11 +452,7 @@ impl Compass {
 
         // Clone locals so we can move them into the paint callback:
         let heading = self.heading;
-        let widget = self.widget.clone();
-
-        // let cb = egui_glow::painter::CallbackFn::new(move |_info, painter| {
-        //     widget.lock().unwrap().paint(painter.gl(), heading);
-        // });
+        let widget = self.compass_widget.clone();
 
         let callback = egui::PaintCallback {
             rect,

@@ -1,7 +1,8 @@
+#![allow(unused_imports, unused_parens, unused_variables)]
 use clap::{Arg, Parser};
 use eframe::egui;
 use egui::{RichText, Window};
-use peripherals::{Compass, GUIItem, Radio, GPS};
+use peripherals::{GUIItem, Imu9DOF, Radio, GPS};
 
 mod configuration;
 mod peripherals;
@@ -36,7 +37,7 @@ fn main() {
 struct Seeker {
     radio: Radio,
     gps: GPS,
-    compass: Compass,
+    imu: Imu9DOF,
 }
 
 impl Seeker {
@@ -49,12 +50,12 @@ impl Seeker {
         let mut s: Seeker = Seeker {
             radio: Radio::default(),
             gps: GPS::new(args.gps_port),
-            compass: Compass::new(cc),
+            imu: Imu9DOF::new(cc),
         };
 
         #[cfg(target_arch = "arm")]
         if (args.calibrate_magnetometer) {
-            s.compass
+            s.imu
                 .run_calibration()
                 .expect("Error during magnetometer configuration");
         }
@@ -73,7 +74,7 @@ impl eframe::App for Seeker {
 
         self.radio.render_window(ctx, frame);
         self.gps.render_window(ctx, frame);
-        self.compass.render_window(ctx, frame);
+        self.imu.render_window(ctx, frame);
         ctx.request_repaint();
     }
 }
