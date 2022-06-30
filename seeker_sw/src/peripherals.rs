@@ -1,14 +1,29 @@
+#![allow(dead_code, non_camel_case_types, unused_must_use)]
+
+use crate::widgets::CompassWidget;
+
 use std::{
+    collections::*,
+    fs::File,
+    io::{BufRead, BufReader},
     sync::{Arc, Mutex},
-    thread::JoinHandle,
+    thread::{sleep, JoinHandle, Thread},
+    time::Duration,
 };
 
 use eframe::{
-    egui,
+    egui::{self, RichText},
     egui::{Context, Ui, Window},
+    epaint::PaintCallbackInfo,
     Frame,
 };
+use egui_glow;
+use egui_glow::{glow, Painter};
 use serde::{Deserialize, Serialize};
+
+use nmea::{self, *};
+
+use rppal::i2c::I2c;
 
 pub trait GUIItem {
     fn render_window(&mut self, ctx: &Context, frame: &mut Frame);
@@ -47,7 +62,7 @@ pub enum CompassDirection {
     North,
     South,
     East,
-    West
+    West,
 }
 
 pub struct GPSData {
@@ -59,6 +74,7 @@ pub struct GPSData {
     altitude: f64,
     fixed: bool,
     utc_time: f64,
+    debug: String,
 }
 
 impl Default for GPSData {
@@ -71,7 +87,8 @@ impl Default for GPSData {
             altitude: 0.0,
             fixed: false,
             utc_time: 0.0,
-            satellites_fixed: 0
+            satellites_fixed: 0,
+            debug: String::new(),
         }
     }
 }
@@ -79,22 +96,46 @@ impl Default for GPSData {
 // #[derive(Serialize, Deserialize)]
 pub struct GPS {
     serial_port: String,
-    //pub data: Arc<Mutex<GPSData>>,
+    data: Arc<Mutex<GPSData>>,
 }
 
 impl GPS {
     pub fn new(port: String) -> Self {
         let mut gps = GPS {
             serial_port: port,
-      //      gps_data: Arc::new(Mutex::new(GPSData::default())),
+            data: Arc::new(Mutex::new(GPSData::default())),
         };
 
-        //std::thread::spawn(|| GPS::listener_fn());
+        let th_port = gps.serial_port.clone();
+        let th_dat = gps.data.clone();
+        std::thread::spawn(move || GPS::listener_fn(th_port, th_dat));
 
         gps
     }
 
-    //pub fn listener_fn(port: String, data_record: Arc<Mutex<GPSData>>) {}
+    pub fn listener_fn(port: String, data_record: Arc<Mutex<GPSData>>) {
+        let device_file = File::open(port).expect("Error, unable to open GPS device file.");
+        let mut readbuf = BufReader::new(device_file);
+        while (true) {
+            let mut lbuf = String::new();
+            readbuf
+                .read_line(&mut lbuf)
+                .expect("Error, unable to read from GPS device file.");
+
+            if (lbuf.len() <= 1) {
+                continue;
+            }
+
+            let parsed = nmea::parse(lbuf.as_bytes()).unwrap();
+            match parsed {
+                ParseResult::GGA(data) => {
+                    data_record.lock().as_mut().unwrap().debug =
+                        format!("Lat: {}\r", data.latitude.unwrap_or(0.0f64));
+                }
+                _ => {}
+            }
+        }
+    }
 }
 
 impl GUIItem for GPS {
@@ -105,7 +146,7 @@ impl GUIItem for GPS {
     }
 
     fn render_widget(&mut self, ctx: &Context, ui: &mut Ui) {
-        ui.heading("GPS Info");
+        ui.code(RichText::new(self.data.lock().unwrap().debug.to_string()));
 
         //let ports = serialport::available_ports().expect("No ports found!");
         //ui.label(format!("{} ports found", ports.len()));
@@ -121,5 +162,187 @@ impl GUIItem for GPS {
         //        });
         //    });
         //}
+    }
+}
+
+#[repr(u8)]
+#[derive(Copy, Clone)]
+pub enum LIS3MDL_REG {
+    WHO_AM_I_A = 0x0F,
+    CTRL_REG1 = 0x20,
+    CTRL_REG2 = 0x21,
+    CTRL_REG3 = 0x22,
+    CTRL_REG4 = 0x23,
+    CTRL_REG5 = 0x24,
+    STATUS_REG = 0x27,
+    OUT_X_L = 0x28,
+    OUT_X_H = 0x29,
+    OUT_Y_L = 0x2A,
+    OUT_Y_H = 0x2B,
+    OUT_Z_L = 0x2C,
+    OUT_Z_H = 0x2D,
+    TEMP_OUT_L = 0x2E,
+    TEMP_OUT_H = 0x2F,
+    INT_CFG = 0x30,
+    INT_SRC = 0x31,
+    INT_THS_L = 0x32,
+    INT_THS_H = 0x33,
+}
+
+pub struct Compass {
+    i2c_conn: I2c,
+    heading: f64,
+    heading_avg_size: usize,
+    heading_samples: VecDeque<f64>,
+    widget: Arc<Mutex<CompassWidget>>,
+    mag_vec: [f64; 3],
+}
+
+impl<'a> Compass {
+    pub fn new(cc: &'a eframe::CreationContext<'a>) -> Self {
+        let i2c_conn = I2c::with_bus(1).expect("Error, failed to open I2c");
+        let mut compass = Self {
+            i2c_conn,
+            heading: 0f64,
+            heading_avg_size: 20,
+            heading_samples: VecDeque::new(),
+            widget: Arc::new(Mutex::new(CompassWidget::new(cc.gl.as_ref()))),
+            mag_vec: [0f64; 3],
+        };
+
+        compass.init_sensor();
+        return compass;
+    }
+
+    fn init_sensor(&mut self) {
+        self.i2c_conn.set_slave_address(0x1C); // LSM303AGR triple axis magnetometer + accelerometer
+
+        // Startup sequence from datasheet
+        self.reg_write(LIS3MDL_REG::CTRL_REG1, 0b01010000);
+        self.reg_write(LIS3MDL_REG::CTRL_REG2, 0b00000000);
+        self.reg_write(LIS3MDL_REG::CTRL_REG3, 0b00000000);
+        self.reg_write(LIS3MDL_REG::CTRL_REG4, 0b00000000);
+        self.reg_write(LIS3MDL_REG::CTRL_REG5, 0b00000000);
+    }
+
+    fn reg_write(&mut self, reg: LIS3MDL_REG, data: u8) {
+        self.i2c_conn
+            .write(&[reg as u8, data])
+            .expect("Error, unable to interface with I2C bus");
+    }
+
+    fn reg_read(&mut self, reg: LIS3MDL_REG) -> u8 {
+        let mut buf = [0u8; 1];
+        self.i2c_conn
+            .write_read(&[reg as u8], &mut buf)
+            .expect("Error, unable to interface with I2C bus");
+        buf[0]
+    }
+
+    fn read_sensor(&mut self) {
+        // self.mag_vec[0] = ((self.reg_read(LIS3MDL_REG::OUT_X_H) as i16) << 8) | (self.reg_read(LIS3MDL_REG::OUT_X_L) as i16);
+        // self.mag_vec[1] = ((self.reg_read(LIS3MDL_REG::OUT_Y_H) as i16) << 8) | (self.reg_read(LIS3MDL_REG::OUT_Y_L) as i16);
+        // self.mag_vec[2] = ((self.reg_read(LIS3MDL_REG::OUT_Z_H) as i16) << 8) | (self.reg_read(LIS3MDL_REG::OUT_Z_L) as i16);
+
+        /*
+            [3860, 4019, 3151]
+            [-4438, -4593, -4815]
+
+            [-289. -287. -832.]
+        */
+
+        let mut buf = [0u8; 6];
+        self.i2c_conn
+            .write_read(&[LIS3MDL_REG::OUT_X_L as u8], &mut buf)
+            .expect("Error, unable to interface with I2C bus");
+        self.mag_vec[0] = (((buf[1] as i16) << 8) | (buf[0] as i16)) as f64 - -289.0;
+        self.mag_vec[1] = (((buf[3] as i16) << 8) | (buf[2] as i16)) as f64 - -287.0;
+        self.mag_vec[2] = (((buf[5] as i16) << 8) | (buf[4] as i16)) as f64 - -832.0;
+
+        let mut calculated_heading = (self.mag_vec[1]).atan2(self.mag_vec[0]);
+        if (self.heading_samples.len() < self.heading_avg_size) {
+            for i in 0..self.heading_avg_size {
+                self.heading_samples.push_front(calculated_heading);
+            }
+        } else {
+            self.heading_samples.pop_back();
+            self.heading_samples.push_front(calculated_heading);
+        }
+
+        // Make heading the running average of the last <heading_avg_size> values read from the magnetometer
+        // Really helps make the readout more smooth
+        self.heading = self.heading_samples.iter().sum::<f64>() / (self.heading_avg_size as f64);
+
+        // if (self.heading < 0f64) {
+        //     self.heading += 2f64 * std::f64::consts::PI;
+        // }
+
+        // println!(
+        //     "{},{},{},{}",
+        //     self.mag_vec[0],
+        //     self.mag_vec[1],
+        //     self.mag_vec[2],
+        //     self.heading.to_degrees()
+        // );
+    }
+}
+
+impl GUIItem for Compass {
+    fn render_window(&mut self, ctx: &Context, frame: &mut Frame) {
+        Window::new("Compass").show(ctx, |ui| {
+            self.render_widget(ctx, ui);
+            egui::Frame::canvas(ui.style()).show(ui, |ui| {
+                self.custom_painting(ui);
+            });
+        });
+    }
+
+    fn render_widget(&mut self, ctx: &Context, ui: &mut Ui) {
+        // Read i2c magnetometer
+        self.read_sensor();
+        ui.label(format!("Heading: {:.1}", self.heading.to_degrees()));
+        // println!("Sensor: {}", self.sensor_val);
+        // ui.add(egui::DragValue::new(&mut self.sensor_val));
+        // Display visual compass
+    }
+}
+
+pub struct CallbackFn {
+    f: Box<dyn Fn(PaintCallbackInfo, &Painter) + Sync + Send>,
+}
+
+impl CallbackFn {
+    pub fn new<F: Fn(PaintCallbackInfo, &Painter) + Sync + Send + 'static>(callback: F) -> Self {
+        let f = Box::new(callback);
+        CallbackFn { f }
+    }
+}
+
+impl Compass {
+    fn custom_painting(&mut self, ui: &mut egui::Ui) {
+        let (rect, response) =
+            ui.allocate_exact_size(egui::Vec2::splat(300.0), egui::Sense::drag());
+
+        // self.angle += response.drag_delta().x * 0.01;
+
+        // Clone locals so we can move them into the paint callback:
+        let heading = self.heading;
+        let widget = self.widget.clone();
+
+        // let cb = egui_glow::painter::CallbackFn::new(move |_info, painter| {
+        //     widget.lock().unwrap().paint(painter.gl(), heading);
+        // });
+
+        let callback = egui::PaintCallback {
+            rect,
+            callback: std::sync::Arc::new(move |_info, render_ctx| {
+                if let Some(painter) = render_ctx.downcast_ref::<egui_glow::Painter>() {
+                    widget.lock().unwrap().paint(painter.gl(), heading);
+                } else {
+                    eprintln!("Can't do custom painting because we are not using a glow context");
+                }
+            }),
+        };
+        ui.painter().add(callback);
     }
 }

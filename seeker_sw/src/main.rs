@@ -1,8 +1,9 @@
 use clap::{Arg, Parser};
 use eframe::egui;
 use egui::{RichText, Window};
-use peripherals::{GUIItem, Radio, GPS};
+use peripherals::{Compass, GUIItem, Radio, GPS};
 mod peripherals;
+mod widgets;
 // use serde_derive::{Deserialize, Serialize};
 
 #[derive(Parser, Debug)]
@@ -22,7 +23,7 @@ fn main() {
     let args = Args::parse();
 
     eframe::run_native(
-        "My egui App",
+        "Rocket Seeker V0.1 indev",
         native_options,
         Box::new(|cc| Box::new(Seeker::new(cc, args))),
     );
@@ -31,6 +32,7 @@ fn main() {
 struct Seeker {
     radio: Radio,
     gps: GPS,
+    compass: Compass,
 }
 
 impl Seeker {
@@ -39,12 +41,13 @@ impl Seeker {
         // Restore app state using cc.storage (requires the "persistence" feature).
         // Use the cc.gl (a glow::Context) to create graphics shaders and buffers that you can use
         // for e.g. egui::PaintCallback.
+
         let mut s: Seeker = Seeker {
             radio: Radio::default(),
-            gps: GPS::new(args.gps_port)
+            gps: GPS::new(args.gps_port),
+            compass: Compass::new(cc),
         };
         // s.radio
-
 
         return s;
     }
@@ -60,5 +63,7 @@ impl eframe::App for Seeker {
 
         self.radio.render_window(ctx, frame);
         self.gps.render_window(ctx, frame);
+        self.compass.render_window(ctx, frame);
+        ctx.request_repaint();
     }
 }
