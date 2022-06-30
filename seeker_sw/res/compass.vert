@@ -18,7 +18,7 @@ uniform float heading;
 
 void main() {
     v_uv = uvs[gl_VertexID];
-    float h = PI - heading;
+    float h = -(PI - heading);
     mat2 mat = mat2(
         cos(h), sin(h),
         sin(h), -cos(h)

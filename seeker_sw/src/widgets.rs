@@ -10,23 +10,22 @@ use std::io::Cursor;
 pub struct CompassWidget {
     program: glow::Program,
     vertex_array: glow::VertexArray,
-    texture: glow::NativeTexture,
+    pointer_texture: glow::NativeTexture,
+    dial_texture: glow::NativeTexture,
 }
 
 #[allow(unsafe_code)] // we need unsafe code to use glow
 impl CompassWidget {
-    pub fn new(gl: &glow::Context) -> Self {
-        use glow::HasContext as _;
-        let img = ImageReader::open("./res/compass.png")
-            .unwrap()
-            .decode()
-            .unwrap()
-            .into_rgb8();
-        let img_data = img.clone().into_flat_samples().samples;
-
-        let shader_version = "#version 300 es";
-
+    pub fn load_texture(gl: &glow::Context, path: &str) -> glow::NativeTexture {
         unsafe {
+            use glow::HasContext as _;
+            let img = ImageReader::open(path)
+                .unwrap()
+                .decode()
+                .unwrap()
+                .into_rgba8();
+            let img_data = img.clone().into_flat_samples().samples;
+
             let tex = gl.create_texture().unwrap();
             gl.bind_texture(glow::TEXTURE_2D, Some(tex));
             gl.tex_parameter_i32(
@@ -42,15 +41,28 @@ impl CompassWidget {
             gl.tex_image_2d(
                 glow::TEXTURE_2D,
                 0,
-                glow::RGB as i32,
+                glow::RGBA as i32,
                 img.width() as i32,
                 img.height() as i32,
                 0,
-                glow::RGB,
+                glow::RGBA,
                 glow::UNSIGNED_BYTE,
                 Some(img_data.as_slice()),
             );
             gl.generate_mipmap(glow::TEXTURE_2D);
+
+            tex
+        }
+    }
+
+    pub fn new(gl: &glow::Context) -> Self {
+        use glow::HasContext as _;
+
+        let shader_version = "#version 300 es";
+
+        unsafe {
+            let tex = CompassWidget::load_texture(gl, "./res/pointer.png");
+            let dial_tex = CompassWidget::load_texture(gl, "./res/dial.png");
 
             let program = gl.create_program().expect("Cannot create program");
 
@@ -100,7 +112,8 @@ impl CompassWidget {
             Self {
                 program,
                 vertex_array,
-                texture: tex,
+                pointer_texture: tex,
+                dial_texture: dial_tex,
             }
         }
     }
@@ -116,13 +129,22 @@ impl CompassWidget {
     pub fn paint(&self, gl: &glow::Context, compass_heading: f64) {
         use glow::HasContext as _;
         unsafe {
+            // Draw dial
             gl.use_program(Some(self.program));
+            gl.uniform_1_f32(
+                gl.get_uniform_location(self.program, "heading").as_ref(),
+                0f32,
+            );
+            gl.bind_texture(glow::TEXTURE_2D, Some(self.dial_texture));
+            gl.bind_vertex_array(Some(self.vertex_array));
+            gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);
+
+            // Draw pointer
             gl.uniform_1_f32(
                 gl.get_uniform_location(self.program, "heading").as_ref(),
                 compass_heading as f32,
             );
-            // gl.active_texture(glow::TEXTURE0);
-            gl.bind_texture(glow::TEXTURE_2D, Some(self.texture));
+            gl.bind_texture(glow::TEXTURE_2D, Some(self.pointer_texture));
             gl.bind_vertex_array(Some(self.vertex_array));
             gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);
         }

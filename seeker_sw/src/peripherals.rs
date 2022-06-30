@@ -1,7 +1,7 @@
 #![allow(dead_code, non_camel_case_types, unused_must_use)]
 
 use crate::configuration::SeekerConfiguration;
-use crate::widgets::{CompassWidget};
+use crate::widgets::CompassWidget;
 
 use std::{
     collections::*,
@@ -153,7 +153,7 @@ impl GPS {
             }
 
             let nmea_result = nmea::parse(lbuf.as_bytes());
-            
+
             // TODO: Add more supported messages
             if let (Ok(parsed)) = nmea_result {
                 match parsed {
