@@ -8,9 +8,12 @@ use std::{
     error::Error,
     fmt::{self, Display},
     fs::File,
-    io::{BufRead, BufReader},
-    sync::{Arc, Mutex},
-    thread::{sleep, JoinHandle, Thread},
+    io::{self, BufRead, BufReader},
+    sync::{
+        mpsc::{self, Receiver, Sender},
+        Arc, Mutex,
+    },
+    thread::{self, sleep, JoinHandle, Thread},
     time::Duration,
 };
 
@@ -28,6 +31,8 @@ use serde_json;
 
 use chrono::{NaiveDate, NaiveTime, TimeZone, Utc};
 use nmea::{self, *};
+
+use average::{Estimate, Quantile};
 
 #[cfg(target_arch = "arm")]
 use rppal::i2c::I2c;
@@ -271,13 +276,123 @@ pub enum LIS3MDL_REG {
     INT_THS_H = 0x33,
 }
 
+#[repr(u8)]
+#[derive(Copy, Clone)]
+enum LSM6DSOX_REG {
+    FUNC_CFG_ACCESS = 0x01,
+    PIN_CTRL = 0x02,
+    S4S_TPH_L = 0x04,
+    S4S_TPH_H = 0x05,
+    S4S_RR = 0x06,
+    FIFO_CTRL1 = 0x07,
+    FIFO_CTRL2 = 0x08,
+    FIFO_CTRL3 = 0x09,
+    FIFO_CTRL4 = 0x0A,
+    COUNTER_BDR_REG1 = 0x0B,
+    COUNTER_BDR_REG2 = 0x0C,
+    INT1_CTRL = 0x0D,
+    INT2_CTRL = 0x0E,
+    WHO_AM_I = 0x0F,
+    CTRL1_XL = 0x10,
+    CTRL2_G = 0x11,
+    CTRL3_C = 0x12,
+    CTRL4_C = 0x13,
+    CTRL5_C = 0x14,
+    CTRL6_C = 0x15,
+    CTRL7_G = 0x16,
+    CTRL8_XL = 0x17,
+    CTRL9_XL = 0x18,
+    CTRL10_C = 0x19,
+    ALL_INT_SRC = 0x1A,
+    WAKE_UP_SRC = 0x1B,
+    TAP_SRC = 0x1C,
+    D6D_SRC = 0x1D,
+    STATUS_REG = 0x1E,
+    OUT_TEMP_L = 0x20,
+    OUT_TEMP_H = 0x21,
+    OUTX_L_G = 0x22,
+    OUTX_H_G = 0x23,
+    OUTY_L_G = 0x24,
+    OUTY_H_G = 0x25,
+    OUTZ_L_G = 0x26,
+    OUTZ_H_G = 0x27,
+    OUTX_L_A = 0x28,
+    OUTX_H_A = 0x29,
+    OUTY_L_A = 0x2A,
+    OUTY_H_A = 0x2B,
+    OUTZ_L_A = 0x2C,
+    OUTZ_H_A = 0x2D,
+    EMB_FUNC_STATUS_MAINPAGE = 0x35,
+    FSM_STATUS_A_MAINPAGE = 0x36,
+    FSM_STATUS_B_MAINPAGE = 0x37,
+    MLC_STATUS_MAINPAGE = 0x38,
+    STATUS_MASTER_MAINPAGE = 0x39,
+    FIFO_STATUS1 = 0x3A,
+    FIFO_STATUS2 = 0x3B,
+    TIMESTAMP0 = 0x40,
+    TIMESTAMP1 = 0x41,
+    TIMESTAMP2 = 0x42,
+    TIMESTAMP3 = 0x43,
+    UI_STATUS_REG_OIS = 49,
+    UI_OUTX_L_G_OIS = 0x4A,
+    UI_OUTX_H_G_OIS = 0x4B,
+    UI_OUTY_L_G_OIS = 0x4C,
+    UI_OUTY_H_G_OIS = 0x4D,
+    UI_OUTZ_L_G_OIS = 0x4E,
+    UI_OUTZ_H_G_OIS = 0x4F,
+    UI_OUTX_L_A_OIS = 0x50,
+    UI_OUTX_H_A_OIS = 0x51,
+    UI_OUTY_L_A_OIS = 0x52,
+    UI_OUTY_H_A_OIS = 0x53,
+    UI_OUTZ_L_A_OIS = 0x54,
+    UI_OUTZ_H_A_OIS = 0x55,
+    TAP_CFG0 = 0x56,
+    TAP_CFG1 = 0x57,
+    TAP_CFG2 = 0x58,
+    TAP_THS_6D = 0x59,
+    INT_DUR2 = 0x5A,
+    WAKE_UP_THS = 0x5B,
+    WAKE_UP_DUR = 0x5C,
+    FREE_FALL = 0x5D,
+    MD1_CFG = 0x5E,
+    MD2_CFG = 0x5F,
+    S4S_ST_CMD_CODE = 60,
+    S4S_DT_REG = 0x61,
+    I3C_BUS_AVB = 0x62,
+    INTERNAL_FREQ_FINE = 63,
+    UI_INT_OIS = 0x6F,
+    UI_CTRL1_OIS = 0x70,
+    UI_CTRL2_OIS = 0x71,
+    UI_CTRL3_OIS = 0x72,
+    X_OFS_USR = 0x73,
+    Y_OFS_USR = 0x74,
+    Z_OFS_USR = 0x75,
+    FIFO_DATA_OUT_TAG = 0x78,
+    FIFO_DATA_OUT_X_L = 0x79,
+    FIFO_DATA_OUT_X_H = 0x7A,
+    FIFO_DATA_OUT_Y_L = 0x7B,
+    FIFO_DATA_OUT_Y_H = 0x7C,
+    FIFO_DATA_OUT_Z_L = 0x7D,
+    FIFO_DATA_OUT_Z_H = 0x7E,
+}
+
+#[derive(Default)]
+pub struct IMUReading {
+    raw_accel: [f64; 3],
+    raw_gyro: [f64; 3],
+
+    rotation: [f64; 3],
+    velocity: [f64; 3],
+}
+
 // TODO: Readout and GUI for Gyro
 // TODO: Tilt compensation for compass
-// TODO: Implement calibration
+//        - Get gyro tilt as a matrix, then apply the inverse to the magnetometer reading
+// DONE: Implement calibration
 
 #[cfg(target_arch = "arm")]
 pub struct Imu9DOF {
-    mag_i2c_conn: I2c,
+    i2c_conn: I2c,
     heading: f64,
     heading_avg_size: usize,
     heading_samples: VecDeque<f64>,
@@ -285,6 +400,8 @@ pub struct Imu9DOF {
     mag_vec: [f64; 3],
     calibration_offsets: [f64; 3],
     heading_offset: f64,
+
+    imu_reading: Arc<Mutex<IMUReading>>,
 }
 
 #[cfg(not(target_arch = "arm"))]
@@ -296,9 +413,9 @@ pub struct Imu9DOF {
 #[cfg(target_arch = "arm")]
 impl<'a> Imu9DOF {
     pub fn new(cc: &'a eframe::CreationContext<'a>) -> Self {
-        let mag_i2c_conn = I2c::with_bus(1).expect("Error, failed to open I2c");
+        let i2c_conn = I2c::with_bus(1).expect("Error, failed to open I2c");
         let mut imu = Self {
-            mag_i2c_conn,
+            i2c_conn,
             heading: 0f64,
             heading_avg_size: 20,
             heading_samples: VecDeque::new(),
@@ -306,6 +423,8 @@ impl<'a> Imu9DOF {
             mag_vec: [0f64; 3],
             calibration_offsets: [0f64; 3],
             heading_offset: 0f64,
+
+            imu_reading: Arc::new(Mutex::new(IMUReading::default())),
         };
 
         let cfg = SeekerConfiguration::load().unwrap();
@@ -317,57 +436,146 @@ impl<'a> Imu9DOF {
     }
 
     pub fn run_calibration(&mut self) -> Result<(), Box<dyn Error>> {
-        let samples: Vec<&[f64; 3]> = vec![];
-        let cfg_file = SeekerConfiguration::load()?;
+        let mut samples: Vec<[f64; 3]> = vec![];
+        let mut cfg_file = SeekerConfiguration::load()?;
 
-        // Collect samples until console input
-        loop {}
+        println!("Starting calibration\nPlease move the magnetometer around as much as possible\nPress return when finished...");
+
+        let (tx, rx): (Sender<()>, Receiver<()>) = mpsc::channel();
+        thread::spawn(move || {
+            let mut input = String::new();
+            io::stdin().read_line(&mut input); // Blocks here
+            tx.send(()).unwrap(); // Notify the loop that it should quit
+        });
+
+        let mut sample_ct = 0usize;
+        const quant_threshold: f64 = 0.005;
+        let mut quantiles_lo = [
+            Quantile::new(quant_threshold),
+            Quantile::new(quant_threshold),
+            Quantile::new(quant_threshold),
+        ];
+
+        let mut quantiles_hi = [
+            Quantile::new(1.0 - quant_threshold),
+            Quantile::new(1.0 - quant_threshold),
+            Quantile::new(1.0 - quant_threshold),
+        ];
+
+        // Make sure to reset calbration values to zero before sampling
+        self.calibration_offsets = [0f64; 3];
+
+        // Collect samples until quit signal
+        loop {
+            if rx.try_recv().is_ok() {
+                print!("Data collection done!                       \n");
+                break;
+            }
+            print!("{sample_ct} data points collected\r");
+
+            self.read_sensors();
+            for i in 0..3 {
+                quantiles_lo[i].add(self.mag_vec[i]);
+                quantiles_hi[i].add(self.mag_vec[i]);
+            }
+            samples.push(self.mag_vec.clone());
+
+            sample_ct += 1;
+        }
+
+        println!("Finished calibration!");
+
+        let quantiles_calcd_lo: Vec<f64> = quantiles_lo.iter().map(|q| q.quantile()).collect();
+        let quantiles_calcd_hi: Vec<f64> = quantiles_hi.iter().map(|q| q.quantile()).collect();
 
         // Process samples:
         // - Remove 1% outliers
         // - Find center of ellipsoid ((min+max)/2)
         // - Save to configuration file
 
-        cfg_file.magnetometer_offsets = [1f64, 2f64, 3f64];
+        cfg_file.magnetometer_offsets = [
+            (quantiles_calcd_lo[0] + quantiles_calcd_hi[0]) / 2f64,
+            (quantiles_calcd_lo[1] + quantiles_calcd_hi[1]) / 2f64,
+            (quantiles_calcd_lo[2] + quantiles_calcd_hi[2]) / 2f64,
+        ];
+        self.calibration_offsets = cfg_file.magnetometer_offsets.clone();
+
+        println!("Calibration offsets: {:?}", cfg_file.magnetometer_offsets);
+
         cfg_file.save()?;
 
         Ok(())
     }
 
     fn init_sensors(&mut self) {
-        self.mag_i2c_conn.set_slave_address(0x1C); // LSM303AGR triple axis magnetometer + accelerometer
-
-        // Startup sequence from datasheet
+        // Startup sequence from datasheet (LIS3MDL)
         self.reg_write_m(LIS3MDL_REG::CTRL_REG1, 0b01010000);
         self.reg_write_m(LIS3MDL_REG::CTRL_REG2, 0b00000000);
         self.reg_write_m(LIS3MDL_REG::CTRL_REG3, 0b00000000);
         self.reg_write_m(LIS3MDL_REG::CTRL_REG4, 0b00000000);
         self.reg_write_m(LIS3MDL_REG::CTRL_REG5, 0b00000000);
+
+        // Initialize accelerometer and gyro of LSM6DSOX IMU
+        // NOTE: Gyro: 1000dps, Accelerometer: 16g
+        self.reg_write_i(LSM6DSOX_REG::CTRL1_XL, 0b0101_01_0_0);
+        self.reg_write_i(LSM6DSOX_REG::CTRL2_G, 0b0101_10_0_0);
+
+        // TODO: Gyro multithreading for better integration?
+        // TODO: Better I2C error handling
+    }
+
+    fn read_imu(&mut self, imu_data: Arc<Mutex<IMUReading>>) {
+        let mut readout = imu_data.lock().unwrap();
+        let mut buf = [0u8; 12];
+
+        // TODO: Finish reading all IMU values and integrating them
+        self.i2c_conn
+            .write_read(&[LSM6DSOX_REG::OUTX_L_G as u8], &mut buf)
+            .expect("Error, unable to interface with I2C bus");
+
+        readout.raw_gyro[0] = (((buf[1] as i16) << 8) | (buf[0] as i16)) as f64;
     }
 
     fn reg_write_m(&mut self, reg: LIS3MDL_REG, data: u8) {
-        self.mag_i2c_conn
+        self.i2c_conn.set_slave_address(0x1C);
+        self.i2c_conn
             .write(&[reg as u8, data])
             .expect("Error, unable to interface with I2C bus");
     }
 
     fn reg_read_m(&mut self, reg: LIS3MDL_REG) -> u8 {
+        self.i2c_conn.set_slave_address(0x1C);
         let mut buf = [0u8; 1];
-        self.mag_i2c_conn
+        self.i2c_conn
+            .write_read(&[reg as u8], &mut buf)
+            .expect("Error, unable to interface with I2C bus");
+        buf[0]
+    }
+
+    fn reg_write_i(&mut self, reg: LSM6DSOX_REG, data: u8) {
+        self.i2c_conn.set_slave_address(0x6A);
+        self.i2c_conn
+            .write(&[reg as u8, data])
+            .expect("Error, unable to interface with I2C bus");
+    }
+
+    fn reg_read_i(&mut self, reg: LSM6DSOX_REG) -> u8 {
+        self.i2c_conn.set_slave_address(0x6A);
+        let mut buf = [0u8; 1];
+        self.i2c_conn
             .write_read(&[reg as u8], &mut buf)
             .expect("Error, unable to interface with I2C bus");
         buf[0]
     }
 
     pub fn read_sensors(&mut self) {
-        /*
-            [2863, 3329, 2851]
-            [-4428, -3809, -4650]
-            [-782.5 -240.  -899.5]
-        */
+        self.i2c_conn.set_slave_address(0x6A);
 
+        self.read_imu(self.imu_reading.clone());
+
+        self.i2c_conn.set_slave_address(0x1C); // LSM303AGR triple axis magnetometer + accelerometer
         let mut buf = [0u8; 6];
-        self.mag_i2c_conn
+        self.i2c_conn
             .write_read(&[LIS3MDL_REG::OUT_X_L as u8], &mut buf)
             .expect("Error, unable to interface with I2C bus");
         self.mag_vec[0] =
@@ -440,6 +648,10 @@ impl GUIItem for Imu9DOF {
     fn render_widget(&mut self, ctx: &Context, ui: &mut Ui) {
         self.read_sensors();
         ui.label(format!("Heading: {:.1}", self.heading.to_degrees()));
+        ui.label(format!(
+            "IMU: {:.1}",
+            self.imu_reading.lock().unwrap().raw_gyro[0]
+        ));
     }
 }
 

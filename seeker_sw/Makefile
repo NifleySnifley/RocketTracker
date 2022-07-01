@@ -20,7 +20,7 @@ fmt:
 deploy: build
 	rsync -P ${BUILT_PATH} ${TARGET_HOST}:${TARGET_PATH}
 	rsync -P ${REMOTE_SCRIPT} ${TARGET_HOST}:${TARGET_PATH}
-# 	rsync -P ${CONFIG_FILE} ${TARGET_HOST}:${TARGET_PATH}
+	rsync -P ${CONFIG_FILE} ${TARGET_HOST}:${TARGET_PATH}
 
 exec_remote: 
 	ssh -m hmac-sha1 -c aes128-ctr -C -X ${TARGET_HOST} "cd ${TARGET_PATH} && ./${REMOTE_SCRIPT}"
