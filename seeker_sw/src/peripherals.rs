@@ -8,6 +8,7 @@ use std::{
     error::Error,
     fmt::{self, Display},
     fs::File,
+    io::Cursor,
     io::{self, BufRead, BufReader},
     sync::{
         mpsc::{self, Receiver, Sender},
@@ -36,6 +37,8 @@ use average::{Estimate, Quantile};
 
 #[cfg(target_arch = "arm")]
 use rppal::i2c::I2c;
+
+use byteorder::{BigEndian, LittleEndian, ReadBytesExt};
 
 pub trait GUIItem {
     fn render_window(&mut self, ctx: &Context, frame: &mut Frame);
@@ -376,19 +379,18 @@ enum LSM6DSOX_REG {
     FIFO_DATA_OUT_Z_H = 0x7E,
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct IMUReading {
     raw_accel: [f64; 3],
     raw_gyro: [f64; 3],
-
-    rotation: [f64; 3],
-    velocity: [f64; 3],
 }
 
 // TODO: Readout and GUI for Gyro
-// TODO: Tilt compensation for compass
+// TODO: Proper filtered gyro readout
+// TODO: Tilt compensation for compass using gyro
 //        - Get gyro tilt as a matrix, then apply the inverse to the magnetometer reading
 // DONE: Implement calibration
+// TODO: Map server in JS with websocket
 
 #[cfg(target_arch = "arm")]
 pub struct Imu9DOF {
@@ -517,8 +519,8 @@ impl<'a> Imu9DOF {
 
         // Initialize accelerometer and gyro of LSM6DSOX IMU
         // NOTE: Gyro: 1000dps, Accelerometer: 16g
-        self.reg_write_i(LSM6DSOX_REG::CTRL1_XL, 0b0101_01_0_0);
-        self.reg_write_i(LSM6DSOX_REG::CTRL2_G, 0b0101_10_0_0);
+        self.reg_write_i(LSM6DSOX_REG::CTRL1_XL, 0b0101_01_1_0);
+        self.reg_write_i(LSM6DSOX_REG::CTRL2_G, 0b0101_10_1_0);
 
         // TODO: Gyro multithreading for better integration?
         // TODO: Better I2C error handling
@@ -528,12 +530,27 @@ impl<'a> Imu9DOF {
         let mut readout = imu_data.lock().unwrap();
         let mut buf = [0u8; 12];
 
-        // TODO: Finish reading all IMU values and integrating them
         self.i2c_conn
             .write_read(&[LSM6DSOX_REG::OUTX_L_G as u8], &mut buf)
             .expect("Error, unable to interface with I2C bus");
 
-        readout.raw_gyro[0] = (((buf[1] as i16) << 8) | (buf[0] as i16)) as f64;
+        let mut reader = Cursor::new(buf);
+
+        // Read out and convert to radians/second
+        readout.raw_gyro[0] =
+            (reader.read_i16::<LittleEndian>().unwrap() as f64) / (i16::MAX as f64) * 17.45330; //(((buf[1] as i16) << 8) | (buf[0] as i16)) as f64;
+        readout.raw_gyro[1] =
+            (reader.read_i16::<LittleEndian>().unwrap() as f64) / (i16::MAX as f64) * 17.45330;
+        readout.raw_gyro[2] =
+            (reader.read_i16::<LittleEndian>().unwrap() as f64) / (i16::MAX as f64) * 17.45330;
+
+        // Read and convert to m/s^2
+        readout.raw_accel[0] =
+            (reader.read_i16::<LittleEndian>().unwrap() as f64) / (i16::MAX as f64) * 156.9064;
+        readout.raw_accel[1] =
+            (reader.read_i16::<LittleEndian>().unwrap() as f64) / (i16::MAX as f64) * 156.9064;
+        readout.raw_accel[2] =
+            (reader.read_i16::<LittleEndian>().unwrap() as f64) / (i16::MAX as f64) * 156.9064;
     }
 
     fn reg_write_m(&mut self, reg: LIS3MDL_REG, data: u8) {
@@ -648,10 +665,7 @@ impl GUIItem for Imu9DOF {
     fn render_widget(&mut self, ctx: &Context, ui: &mut Ui) {
         self.read_sensors();
         ui.label(format!("Heading: {:.1}", self.heading.to_degrees()));
-        ui.label(format!(
-            "IMU: {:.1}",
-            self.imu_reading.lock().unwrap().raw_gyro[0]
-        ));
+        ui.label(format!("IMU: {:?}", self.imu_reading.lock().unwrap()));
     }
 }
 

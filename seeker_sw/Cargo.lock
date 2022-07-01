@@ -1796,6 +1796,7 @@ name = "seeker"
 version = "0.1.0"
 dependencies = [
  "average",
+ "byteorder",
  "chrono",
  "clap",
  "eframe",
