@@ -7,11 +7,9 @@
 
 #include "protocol.h"
 #include "messages.pb.h"
-#include "configuration.pb.h"
+#include "configuration.h"
 
 #define GPS_serial Serial3
-
-Configuration config;
 
 // RFM97 has the following connections:
 // CS pin:    10
@@ -21,6 +19,9 @@ RFM97 radio = new Module(10, 2, 3);
 Adafruit_GPS GPS(&GPS_serial);
 
 GPSData lastGPSreading;
+
+// Global configuration table for storing nonvolatile configuration data
+Configuration config;
 
 void setup() {
     Serial.begin(115200);
@@ -51,15 +52,12 @@ void printGPS() {
     Serial.println(GPS.milliseconds);
 }
 
-// TODO: Writes config to EEPROM
-void writeConfig() {}
-
-// TODO: Reads config from EEPROM or loads the default
-void readConfig() {}
-
 RadioMessage radio_buf;
 
 void loop() {
+    static uint32_t lastSend = 0;
+    uint32_t now = millis();
+
     // Parse GPS message (or at least try to)
     if (GPS_serial.available() > 0) {
         GPS.read();
@@ -74,7 +72,18 @@ void loop() {
         }
     }
 
-    pb_ostream_t stream = pb_ostream_from_buffer(radio_buf.data, sizeof(radio_buf.data));
-    pb_encode(&stream, GPSData_fields, &lastGPSreading);
-    // Log other data, transmit messages, etc.
+    if ((now - lastSend) > 1000) {
+        lastSend = now;
+        LocationData loc;
+        loc.gps_reading = lastGPSreading;
+        loc.has_magnetometer_reading = false;
+
+        pb_ostream_t stream = pb_ostream_from_buffer(radio_buf.data, sizeof(radio_buf.data));
+        pb_encode(&stream, LocationData_fields, &loc);
+        // Log other data, transmit messages, etc.
+
+        // Idk, this is bad
+        radio.transmit((uint8_t*)&radio_buf, sizeof(radio_buf), (uint8_t)config.receiver_address);
+    }
+
 }
