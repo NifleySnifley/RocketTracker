@@ -45,7 +45,6 @@ void setup() {
 
     if (radio.init())
         Serial.println("Radio initialized successfully");
-    // radio.startReceive(252, RADIOLIB_SX127X_RXCONTINUOUS);
     radio.enableRXInterrupt();
     radio.setDio0Action(recv_ISR);
 

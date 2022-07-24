@@ -32,12 +32,14 @@ public:
 
     int16_t transmit(uint8_t* data, size_t len) {
         txflag = true;
-        return RFM97::transmit(data, len, 0);
+        int status = RFM97::transmit(data, len, 0);
+        startReceive(255, RADIOLIB_SX127X_RXCONTINUOUS);
+        return status;
     }
 
     bool received() {
         if (rxflag) {
-            txflag = false;
+            rxflag = false;
             return true;
         }
         return false;
