@@ -1,0 +1,15 @@
+{
+    "files.associations": {
+        "*.excalidraw": "json",
+        "*.excalidrawlib": "json",
+        "*.txt": "plaintext",
+        "*.fs": "fsharp",
+        "*.js": "javascript",
+        "*.html": "html",
+        "type_traits": "cpp",
+        "utility": "cpp",
+        "limits": "cpp",
+        "string": "cpp",
+        "initializer_list": "cpp"
+    }
+}
