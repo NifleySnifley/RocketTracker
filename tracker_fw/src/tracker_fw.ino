@@ -1,21 +1,24 @@
 #include <Arduino.h>
 #include <RadioLib.h>
 #include <Adafruit_GPS.h>
+
 #include <pb_common.h>
 #include <pb_decode.h>
 #include <pb_encode.h>
 
 #include "protocol.h"
+#include "radio.h"
 #include "messages.pb.h"
 #include "configuration.h"
 
 #define GPS_serial Serial3
+#define DEBUG 1 
 
 // RFM97 has the following connections:
 // CS pin:    10
 // DIO0 pin:  2
 // RESET pin: 3
-RFM97 radio = new Module(10, 2, 3);
+RFM97_LoRa radio = new Module(10, 2, 3);
 Adafruit_GPS GPS(&GPS_serial);
 
 GPSData lastGPSreading;
@@ -23,14 +26,33 @@ GPSData lastGPSreading;
 // Global configuration table for storing nonvolatile configuration data
 Configuration config;
 
+void recv_ISR(void) {
+    if (radio.transmitted()) return;
+    radio.detectReceive();
+    radio.readData(radio.data, 255);
+}
+
 void setup() {
+#if DEBUG 
+    cleanConfig();
+#endif
+    readConfig(&config);
+
     Serial.begin(115200);
-    GPS.begin(9600);
-    radio.begin();
-    radio.setNodeAddress(config.addr);
+    while (!Serial) {}
+    if (!GPS.begin(9600))
+        Serial.println("Error initializing GPS!");
+
+    if (radio.init())
+        Serial.println("Radio initialized successfully");
+    // radio.startReceive(252, RADIOLIB_SX127X_RXCONTINUOUS);
+    radio.enableRXInterrupt();
+    radio.setDio0Action(recv_ISR);
 
     GPS.sendCommand(PMTK_SET_NMEA_OUTPUT_RMCGGA);
     GPS.sendCommand(PMTK_SET_NMEA_UPDATE_1HZ);
+
+    Serial.println("Initialization complete!");
 }
 
 void printGPS() {
@@ -63,7 +85,7 @@ void loop() {
         GPS.read();
         if (GPS.newNMEAreceived()) {
             GPS.parse(GPS.lastNMEA());
-            printGPS();
+            // printGPS();
             lastGPSreading = {
                 .latitude = (double)GPS.latitudeDegrees,
                 .longitude = (double)GPS.longitudeDegrees,
@@ -72,8 +94,9 @@ void loop() {
         }
     }
 
-    if ((now - lastSend) > 1000) {
-        lastSend = now;
+    if ((millis() - lastSend) > 5000) {
+        Serial.println("Sending message");
+
         LocationData loc;
         loc.gps_reading = lastGPSreading;
         loc.has_magnetometer_reading = false;
@@ -83,7 +106,51 @@ void loop() {
         // Log other data, transmit messages, etc.
 
         // Idk, this is bad
-        radio.transmit((uint8_t*)&radio_buf, sizeof(radio_buf), (uint8_t)config.receiver_address);
+        // radio.transmit((uint8_t*)&radio_buf, sizeof(radio_buf));
+        radio.data[0] = radio.data[1] = radio.data[2] = radio.data[3] = 0xFF;
+        for (int i = 4; i < 255; ++i)
+            radio.data[i] = 'E';
+        radio.transmit(radio.data, 255);
+        lastSend = millis();
     }
 
+    // delay(1000);
+    if (radio.received()) {
+        Serial.println("Received a radio message!");
+        Serial.print("RSSI: "); Serial.println(radio.getRSSI());
+        // Serial.println("Data:");
+        // for (int i = 0; i < 252; ++i) {
+        //     Serial.print("\t");
+        //     Serial.println(buf[i], HEX);
+        // }
+    }
+
+    // String str;
+    // int state = radio.receive(str);
+    // if (state == RADIOLIB_ERR_NONE) {
+    //     // packet was successfully received
+    //     Serial.println(F("success!"));
+
+    //     // print the data of the packet
+    //     Serial.print(F("[RF69] Data:\t\t"));
+    //     Serial.println(str);
+
+    //     // print RSSI (Received Signal Strength Indicator)
+    //     // of the last received packet
+    //     Serial.print(F("[RF69] RSSI:\t\t"));
+    //     Serial.print(radio.getRSSI());
+    //     Serial.println(F(" dBm"));
+    // } else if (state == RADIOLIB_ERR_RX_TIMEOUT) {
+    //     // timeout occurred while waiting for a packet
+    //     Serial.println(F("timeout!"));
+
+    // } else if (state == RADIOLIB_ERR_CRC_MISMATCH) {
+    //     // packet was received, but is malformed
+    //     Serial.println(F("CRC error!"));
+
+    // } else {
+    //     // some other error occurred
+    //     Serial.print(F("failed, code "));
+    //     Serial.println(state);
+    // }
 }
