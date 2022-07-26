@@ -19,6 +19,7 @@
 // DIO0 pin:  2
 // RESET pin: 3
 RFM97_LoRa radio = new Module(10, 2, 3);
+// RFM97_LoRa radio(10, 2, 3);
 Adafruit_GPS GPS(&GPS_serial);
 
 GPSData lastGPSreading;
@@ -47,6 +48,9 @@ void setup() {
         Serial.println("Radio initialized successfully");
     radio.enableRXInterrupt();
     radio.setDio0Action(recv_ISR);
+    // radio.setOutputPower(17); // Max boosted transmission power
+    // radio.forceLDRO(false);
+    // radio.explicitHeader();
 
     GPS.sendCommand(PMTK_SET_NMEA_OUTPUT_RMCGGA);
     GPS.sendCommand(PMTK_SET_NMEA_UPDATE_1HZ);
@@ -76,7 +80,8 @@ void printGPS() {
 RadioMessage radio_buf;
 
 void loop() {
-    static uint32_t lastSend = 0;
+    static uint32_t lastSend = 0, lastRecv = 0;
+    static bool missed = false;
     uint32_t now = millis();
 
     // Parse GPS message (or at least try to)
@@ -93,7 +98,7 @@ void loop() {
         }
     }
 
-    if ((millis() - lastSend) > 5000) {
+    if ((millis() - lastSend) > 10000) {
         Serial.println("Sending message");
 
         LocationData loc;
@@ -109,19 +114,29 @@ void loop() {
         radio.data[0] = radio.data[1] = radio.data[2] = radio.data[3] = 0xFF;
         for (int i = 4; i < 255; ++i)
             radio.data[i] = 'E';
+
         radio.transmit(radio.data, 255);
         lastSend = millis();
+        missed = true;
     }
 
     // delay(1000);
     if (radio.received()) {
+        missed = false;
+        lastRecv = millis();
         Serial.println("Received a radio message!");
         Serial.print("RSSI: "); Serial.println(radio.getRSSI());
+        Serial.print("SNR: "); Serial.println(radio.getSNR());
         // Serial.println("Data:");
         // for (int i = 0; i < 252; ++i) {
         //     Serial.print("\t");
         //     Serial.println(buf[i], HEX);
         // }
+    }
+
+    if ((millis() - lastSend) > 5000 && missed) {
+        missed = false;
+        Serial.println("Missed acknowledgement!");
     }
 
     // String str;
