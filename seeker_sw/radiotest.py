@@ -20,14 +20,16 @@ def rfm9x_callback(rfm9x_irq):
     # print("IRQ detected ", rfm9x_irq, rfm9x.rx_done)
     # check to see if this was a rx interrupt - ignore tx
     if rfm9x.rx_done:
+
         packet = rfm9x.receive(timeout=None)
         if packet is not None:
             packet_received = True
             # Received a packet!
             # Print out the raw bytes of the packet:
-            print("Received (raw bytes): {0}".format(packet))
-            print([hex(x) for x in packet])
-            print("RSSI: {0}".format(rfm9x.last_rssi))
+            # print("Received (raw bytes): {0}".format(packet))
+            # print([hex(x) for x in packet])
+            print("Received:\r\tRSSI: {0}".format(rfm9x.last_rssi))
+            print("\tSNR: {0}".format(rfm9x.last_snr))
 
 
 # Define radio parameters.
@@ -43,15 +45,21 @@ spi = busio.SPI(board.SCK, MOSI=board.MOSI, MISO=board.MISO)
 
 # Initialze RFM radio
 rfm9x = adafruit_rfm9x.RFM9x(spi, CS, RESET, RADIO_FREQ_MHZ)
+# rfm9x.high_power = True
+rfm9x.signal_bandwidth = 125000 #500000
+rfm9x.spreading_factor = 7
+rfm9x.coding_rate = 5
+rfm9x.auto_agc = True
 
 # Note that the radio is configured in LoRa mode so you can't control sync
 # word, encryption, frequency deviation, or other settings!
 
 # You can however adjust the transmit power (in dB).  The default is 13 dB but
 # high power radios like the RFM95 can go up to 23 dB:
-rfm9x.tx_power = 13
-rfm9x.node = 255
-rfm9x.destination = 255
+rfm9x.tx_power = 23
+rfm9x.xmit_timeout = 10.0
+# rfm9x.node = 255
+# rfm9x.destination = 255
 
 # configure the interrupt pin and event handling.
 RFM9X_G0 = 26
@@ -78,5 +86,6 @@ while True:
     if packet_received:
         print("received message!")
         packet_received = False
-
+        # time.sleep(1)
         rfm9x.send(bytearray(b'EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE'), keep_listening=True)
+        print("Sent pong!")
