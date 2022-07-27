@@ -18,8 +18,8 @@
 // CS pin:    10
 // DIO0 pin:  2
 // RESET pin: 3
-RFM97_LoRa radio = new Module(10, 2, 3);
-// RFM97_LoRa radio(10, 2, 3);
+// RFM97_LoRa_RL radio = new Module(10, 2, 3);
+RFM97_LoRa radio = RFM97_LoRa(10, 2, 3);
 Adafruit_GPS GPS(&GPS_serial);
 
 GPSData lastGPSreading;
@@ -27,10 +27,12 @@ GPSData lastGPSreading;
 // Global configuration table for storing nonvolatile configuration data
 Configuration config;
 
+uint8_t data[256];
+
 void recv_ISR(void) {
-    if (radio.transmitted()) return;
-    radio.detectReceive();
-    radio.readData(radio.data, 255);
+    // if (radio.transmitted()) return;
+    // radio.detectReceive();
+    // radio.readData(radio.data, 255);
 }
 
 void setup() {
@@ -41,16 +43,13 @@ void setup() {
 
     Serial.begin(115200);
     while (!Serial) {}
+
     if (!GPS.begin(9600))
         Serial.println("Error initializing GPS!");
 
     if (radio.init())
         Serial.println("Radio initialized successfully");
-    radio.enableRXInterrupt();
-    radio.setDio0Action(recv_ISR);
-    // radio.setOutputPower(17); // Max boosted transmission power
-    // radio.forceLDRO(false);
-    // radio.explicitHeader();
+    else Serial.println("Radio error");
 
     GPS.sendCommand(PMTK_SET_NMEA_OUTPUT_RMCGGA);
     GPS.sendCommand(PMTK_SET_NMEA_UPDATE_1HZ);
@@ -81,10 +80,9 @@ RadioMessage radio_buf;
 
 void loop() {
     static uint32_t lastSend = 0, lastRecv = 0;
-    static bool missed = false;
     uint32_t now = millis();
 
-    // Parse GPS message (or at least try to)
+    // Parse GPS message(or at least try to)
     if (GPS_serial.available() > 0) {
         GPS.read();
         if (GPS.newNMEAreceived()) {
@@ -111,60 +109,11 @@ void loop() {
 
         // Idk, this is bad
         // radio.transmit((uint8_t*)&radio_buf, sizeof(radio_buf));
-        radio.data[0] = radio.data[1] = radio.data[2] = radio.data[3] = 0xFF;
+        data[0] = data[1] = data[2] = data[3] = 0xFF;
         for (int i = 4; i < 255; ++i)
-            radio.data[i] = 'E';
+            data[i] = 'E';
 
-        radio.transmit(radio.data, 255);
+        radio.transmit(data, 255);
         lastSend = millis();
-        missed = true;
     }
-
-    // delay(1000);
-    if (radio.received()) {
-        missed = false;
-        lastRecv = millis();
-        Serial.println("Received a radio message!");
-        Serial.print("RSSI: "); Serial.println(radio.getRSSI());
-        Serial.print("SNR: "); Serial.println(radio.getSNR());
-        // Serial.println("Data:");
-        // for (int i = 0; i < 252; ++i) {
-        //     Serial.print("\t");
-        //     Serial.println(buf[i], HEX);
-        // }
-    }
-
-    if ((millis() - lastSend) > 5000 && missed) {
-        missed = false;
-        Serial.println("Missed acknowledgement!");
-    }
-
-    // String str;
-    // int state = radio.receive(str);
-    // if (state == RADIOLIB_ERR_NONE) {
-    //     // packet was successfully received
-    //     Serial.println(F("success!"));
-
-    //     // print the data of the packet
-    //     Serial.print(F("[RF69] Data:\t\t"));
-    //     Serial.println(str);
-
-    //     // print RSSI (Received Signal Strength Indicator)
-    //     // of the last received packet
-    //     Serial.print(F("[RF69] RSSI:\t\t"));
-    //     Serial.print(radio.getRSSI());
-    //     Serial.println(F(" dBm"));
-    // } else if (state == RADIOLIB_ERR_RX_TIMEOUT) {
-    //     // timeout occurred while waiting for a packet
-    //     Serial.println(F("timeout!"));
-
-    // } else if (state == RADIOLIB_ERR_CRC_MISMATCH) {
-    //     // packet was received, but is malformed
-    //     Serial.println(F("CRC error!"));
-
-    // } else {
-    //     // some other error occurred
-    //     Serial.print(F("failed, code "));
-    //     Serial.println(state);
-    // }
 }
