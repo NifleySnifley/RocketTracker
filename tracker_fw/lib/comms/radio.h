@@ -1,71 +1,71 @@
 #include <RadioLib.h>
 #include <SPI.h>
 
-class RFM97_LoRa_RL : public RFM97 {
-private:
-    bool txflag, rxflag;
+// class RFM97_LoRa_RL : public RFM97 {
+// private:
+//     bool txflag, rxflag;
 
-public:
-    uint8_t data[256];
+// public:
+//     uint8_t data[256];
 
-    RFM97_LoRa_RL(Module* mod) : RFM97(mod) {}
+//     RFM97_LoRa_RL(Module* mod) : RFM97(mod) {}
 
-    bool init() {
-        reset();
-        // 915.0, 125.0, 7U, 5U, 18, 20, 8U, 0
+//     bool init() {
+//         reset();
+//         // 915.0, 125.0, 7U, 5U, 18, 20, 8U, 0
 
-        /*
-            915.0,  // Freq
-            125.0,  // 125.0,  // Bandwidth
-            7U,    // Spreading factor
-            5U,     // Coding rate denominator
-            0x12,   // LoRa Sync word
-            10,     // TX Power
-            8U,     // Preamble length
-            0       // Gain (0 for AGC)
-        */
+//         /*
+//             915.0,  // Freq
+//             125.0,  // 125.0,  // Bandwidth
+//             7U,    // Spreading factor
+//             5U,     // Coding rate denominator
+//             0x12,   // LoRa Sync word
+//             10,     // TX Power
+//             8U,     // Preamble length
+//             0       // Gain (0 for AGC)
+//         */
 
-        return begin(
-            915.0, 125.0, 7U, 5U, 18, 20, 8U, 0
-        ) == RADIOLIB_ERR_NONE;
-    }
+//         return begin(
+//             915.0, 125.0, 7U, 5U, 18, 20, 8U, 0
+//         ) == RADIOLIB_ERR_NONE;
+//     }
 
-    // Enables interrupt on DIO0 when a message is fully received
-    int16_t enableRXInterrupt() {
-        return _mod->SPIsetRegValue(RADIOLIB_SX127X_REG_DIO_MAPPING_1, RADIOLIB_SX127X_DIO0_PACK_PAYLOAD_READY, 7, 6);
-    }
+//     // Enables interrupt on DIO0 when a message is fully received
+//     int16_t enableRXInterrupt() {
+//         return _mod->SPIsetRegValue(RADIOLIB_SX127X_REG_DIO_MAPPING_1, RADIOLIB_SX127X_DIO0_PACK_PAYLOAD_READY, 7, 6);
+//     }
 
-    int16_t transmit(uint8_t* data, size_t len) {
-        txflag = true;
-        int status = RFM97::transmit(data, len, 0);
-        startReceive(255, RADIOLIB_SX127X_RXCONTINUOUS);
-        return status;
-    }
+//     int16_t transmit(uint8_t* data, size_t len) {
+//         txflag = true;
+//         int status = RFM97::transmit(data, len, 0);
+//         startReceive(255, RADIOLIB_SX127X_RXCONTINUOUS);
+//         return status;
+//     }
 
-    bool received() {
-        if (rxflag) {
-            rxflag = false;
-            return true;
-        }
-        return false;
-    };
+//     bool received() {
+//         if (rxflag) {
+//             rxflag = false;
+//             return true;
+//         }
+//         return false;
+//     };
 
-    bool transmitted() {
-        if (txflag) {
-            txflag = false;
-            return true;
-        }
-        return false;
-    };
+//     bool transmitted() {
+//         if (txflag) {
+//             txflag = false;
+//             return true;
+//         }
+//         return false;
+//     };
 
-    void detectTransmit() {
-        txflag = true;
-    }
+//     void detectTransmit() {
+//         txflag = true;
+//     }
 
-    void detectReceive() {
-        rxflag = true;
-    }
-};
+//     void detectReceive() {
+//         rxflag = true;
+//     }
+// };
 
 #define SX1276_REG_FIFO 0x00
 #define SX1276_REG_OPMODE 0x01
@@ -240,17 +240,32 @@ public:
 
 #define ASSURE(x) if (!(x)) return false;
 
+enum class RFM97_RadioState {
+    TX_WAITING,
+    TX_FINISHED,
+    RX_WAITING,
+    RX_FINISHED,
+    SLEEP,
+    STANDBY,
+};
+
 class RFM97_LoRa {
 public:
     int cs, rst, dio0;
     SPISettings settings;
 
-    bool received() {
+    uint8_t rxbuf[256];
+    uint8_t lastRxLen;
 
-    }
+    volatile RFM97_RadioState state = RFM97_RadioState::SLEEP;
 
-    bool transmitted() {
+    bool messageAvailable() {
+        if (state == RFM97_RadioState::RX_FINISHED) {
+            state = RFM97_RadioState::RX_WAITING;
+            return true;
+        }
 
+        return false;
     }
 
     void reset() {
@@ -349,7 +364,6 @@ public:
         write(SX1276_REG_FIFO_TX_BASEADDR, 0x00);
     }
 
-public:
     RFM97_LoRa(int CS, int DIO0, int RST) : cs(CS), rst(RST), dio0(DIO0), settings(2000000, MSBFIRST, SPI_MODE0) {}
 
     // LongRangeMode
@@ -387,7 +401,7 @@ public:
         ASSURE(setBandwidth(SX1276_BANDWIDTH_125KHZ));
 
         // Set spreading factor to 12 (4096 chirps per bit) for best decoding.
-        ASSURE(setSpreadingFactor(12));
+        ASSURE(setSpreadingFactor(7));
 
         // Set coding rate denominator to 5
         ASSURE(setCodingRate(5));
@@ -410,6 +424,7 @@ public:
         // Set overcurrent protection to 120mA
         setOCP(true, 15);
 
+        state = RFM97_RadioState::STANDBY;
         return true;
     }
 
@@ -422,6 +437,21 @@ public:
 
         // Set FIFO pointers
         initFIFO();
+    }
+
+    /// @param func ISR function to be called when DIO0 rises. the ISR MUST call onInterrupt() for proper behavior of the radio.
+    void setISR(void(*func)(void)) {
+        attachInterrupt(digitalPinToInterrupt(dio0), func, RISING);
+    }
+
+    void standby() {
+        setMode(SX1276_MODE_STDBY);
+        state = RFM97_RadioState::STANDBY;
+    }
+
+    void sleep() {
+        setMode(SX1276_MODE_SLEEP);
+        state = RFM97_RadioState::SLEEP;
     }
 
     // Clears all IRQ flags by writing ones
@@ -438,7 +468,7 @@ public:
         // TODO: Fix this with more realistic limits
         ASSURE(freq_mhz < 1000.0 && freq_mhz > 400.0);
 
-        uint32_t FRF = (freq_mhz * (uint32_t(1) << RADIOLIB_SX127X_DIV_EXPONENT)) / RADIOLIB_SX127X_CRYSTAL_FREQ;
+        uint32_t FRF = (freq_mhz * (uint32_t(1) << 19)) / 32.0;
 
         // write registers
         write(SX1276_REG_FRF_MSB, (FRF & 0xFF0000) >> 16);
@@ -453,7 +483,7 @@ public:
         uint8_t paconfig_val = 0x00;
         bool padac_highpower = false;
 
-        setMode(SX1276_MODE_STDBY);
+        standby();
 
         if (pa_boost) {
             ASSURE(power > 2 && (power <= 17 || power == 20));
@@ -651,6 +681,7 @@ public:
     }
 
     // DetectionThreshold
+    // TODO
     void setDetectionThreshold() {
 
     }
@@ -661,6 +692,7 @@ public:
     }
 
     // InvertIQ RX and TX
+    // TODO
     void setInvIQ(bool inverted) {
 
     }
@@ -690,14 +722,33 @@ public:
     }
 
     // Called by a ISR on DIO0
+    // Updates the radio's state machine based on radio IRQs
     void onInterrupt() {
+        switch (state) {
+            case RFM97_RadioState::TX_WAITING:
+                state = RFM97_RadioState::TX_FINISHED;
+                break;
+                // case RFM97_RadioState::RX_FINISHED:
+            case RFM97_RadioState::RX_WAITING:
+                receive();
+                break;
+            default:
+                return;
+        };
+        clearIRQ();
+    }
 
+    void startReceiving() {
+        standby();
+        state = RFM97_RadioState::RX_WAITING;
+        configDIO(0, SX1276_DIO0_RX_DONE);
+        setMode(SX1276_MODE_RXCONTINUOUS);
     }
 
     bool transmit(uint8_t* data, size_t len, bool return_to_rx = false) {
         ASSURE(len > 0 && len < 256);
 
-        setMode(SX1276_MODE_STDBY);
+        standby();
         clearIRQ();
 
         write(SX1276_REG_PAYLOADLENGTH, (uint8_t)len);
@@ -706,21 +757,42 @@ public:
         ASSURE(configDIO(0, SX1276_DIO0_TX_DONE));
         clearIRQ();
 
+        state = RFM97_RadioState::TX_WAITING;
         setMode(SX1276_MODE_TX);
 
         // Wait for the transmit done IRQ
-        while (!digitalRead(dio0)) {}
+        while (state != RFM97_RadioState::TX_FINISHED) {}
 
         clearIRQ();
-        setMode(SX1276_MODE_STDBY);
+        standby();
+        state = RFM97_RadioState::STANDBY;
 
-        if (return_to_rx) setMode(SX1276_MODE_RXCONTINUOUS);
+        if (return_to_rx) startReceiving();
 
         return true;
     }
 
-    // TODO
-    bool receive(uint8_t* buffer, uint8_t* len) {
-        return false;
+    // Doesn't actually receive, but collects recently received data
+    void receive() {
+        lastRxLen = read(SX1276_REG_RX_NB_BYTES);
+        readFIFO(rxbuf, lastRxLen);
+        state = RFM97_RadioState::RX_FINISHED;
     }
+
+    /// @return true if a message was successfully received in the timeout period, false if timed out
+    // TODO: Fix using the real-time modem status register and/or IRQ flags register and the symbol timeout
+    // bool waitForRX(uint32_t timeout_ms = -1) {
+    //     state = RFM97_RadioState::RX_WAITING;
+    //     setMode(SX1276_MODE_RXSINGLE);
+    //     configDIO(0, SX1276_DIO0_RX_DONE);
+
+    //     uint32_t time_started = millis();
+    //     while (state != RFM97_RadioState::RX_FINISHED) {
+    //         // Timed out
+    //         if ((millis() - time_started) >= timeout_ms) {
+    //             standby();
+    //             return false;
+    //         }
+    //     };
+    // }
 };

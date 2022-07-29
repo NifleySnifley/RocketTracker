@@ -29,10 +29,8 @@ Configuration config;
 
 uint8_t data[256];
 
-void recv_ISR(void) {
-    // if (radio.transmitted()) return;
-    // radio.detectReceive();
-    // radio.readData(radio.data, 255);
+void radio_ISR(void) {
+    radio.onInterrupt();
 }
 
 void setup() {
@@ -42,7 +40,7 @@ void setup() {
     readConfig(&config);
 
     Serial.begin(115200);
-    while (!Serial) {}
+    // while (!Serial) {}
 
     if (!GPS.begin(9600))
         Serial.println("Error initializing GPS!");
@@ -50,6 +48,8 @@ void setup() {
     if (radio.init())
         Serial.println("Radio initialized successfully");
     else Serial.println("Radio error");
+    radio.setISR(radio_ISR);
+    radio.startReceiving();
 
     GPS.sendCommand(PMTK_SET_NMEA_OUTPUT_RMCGGA);
     GPS.sendCommand(PMTK_SET_NMEA_UPDATE_1HZ);
@@ -96,7 +96,7 @@ void loop() {
         }
     }
 
-    if ((millis() - lastSend) > 10000) {
+    if ((millis() - lastSend) > 2000) {
         Serial.println("Sending message");
 
         LocationData loc;
@@ -113,7 +113,13 @@ void loop() {
         for (int i = 4; i < 255; ++i)
             data[i] = 'E';
 
-        radio.transmit(data, 255);
+        radio.transmit(data, 255, true);
         lastSend = millis();
+    }
+
+    if (radio.messageAvailable()) {
+        Serial.println("Received a message!");
+        Serial.print("RSSI: "); Serial.println(radio.getRSSI());
+        Serial.print("SNR: "); Serial.println(radio.getSNR());
     }
 }
