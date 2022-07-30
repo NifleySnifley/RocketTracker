@@ -17,8 +17,7 @@ uint8_t configbuf[E2END - 1 - EEPROM_CONFIGURATION_OFFS];
 
 /// Generates the default configuration
 const Configuration CONFIG_DEFAULT = Configuration{
-    .addr = 13,
-    .receiver_address = 12
+    .id = 1
 };
 
 /// Writes config to EEPROM
