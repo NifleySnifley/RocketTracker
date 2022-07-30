@@ -10,16 +10,18 @@
 #include "radio.h"
 #include "messages.pb.h"
 #include "configuration.h"
+#include "errors.h"
 
 #define GPS_serial Serial3
 #define DEBUG 1 
+#define ASSERT_ERR(x,e) if (!(x)) { return e; }
+#define CHECK_ERR(e) if (err != ERR_NONE) { handleError(e, __FILE__, __LINE__); }
 
 // RFM97 has the following connections:
 // CS pin:    10
 // DIO0 pin:  2
 // RESET pin: 3
-RFM97_LoRa radio = new Module(10, 2, 3);
-// RFM97_LoRa radio(10, 2, 3);
+RFM97_LoRa radio = RFM97_LoRa(10, 2, 3);
 Adafruit_GPS GPS(&GPS_serial);
 
 GPSData lastGPSreading;
@@ -27,10 +29,8 @@ GPSData lastGPSreading;
 // Global configuration table for storing nonvolatile configuration data
 Configuration config;
 
-void recv_ISR(void) {
-    if (radio.transmitted()) return;
-    radio.detectReceive();
-    radio.readData(radio.data, 255);
+void radio_ISR(void) {
+    radio.onInterrupt();
 }
 
 void setup() {
@@ -39,23 +39,22 @@ void setup() {
 #endif
     readConfig(&config);
 
+    // Serial can be used for higher speed communication using the same protocol as the radio
     Serial.begin(115200);
     while (!Serial) {}
+
+    // Configure GPS
     if (!GPS.begin(9600))
         Serial.println("Error initializing GPS!");
-
-    if (radio.init())
-        Serial.println("Radio initialized successfully");
-    radio.enableRXInterrupt();
-    radio.setDio0Action(recv_ISR);
-    // radio.setOutputPower(17); // Max boosted transmission power
-    // radio.forceLDRO(false);
-    // radio.explicitHeader();
-
     GPS.sendCommand(PMTK_SET_NMEA_OUTPUT_RMCGGA);
     GPS.sendCommand(PMTK_SET_NMEA_UPDATE_1HZ);
 
-    Serial.println("Initialization complete!");
+    // Configure radio
+    if (radio.init())
+        Serial.println("Radio initialized successfully");
+    else Serial.println("Radio error");
+    radio.setISR(radio_ISR);
+    radio.startReceiving();
 }
 
 void printGPS() {
@@ -77,14 +76,14 @@ void printGPS() {
     Serial.println(GPS.milliseconds);
 }
 
-RadioMessage radio_buf;
+RadioMessage rx_buf;
+RadioMessage tx_buf;
 
 void loop() {
     static uint32_t lastSend = 0, lastRecv = 0;
-    static bool missed = false;
     uint32_t now = millis();
 
-    // Parse GPS message (or at least try to)
+    // Parse GPS message(or at least try to)
     if (GPS_serial.available() > 0) {
         GPS.read();
         if (GPS.newNMEAreceived()) {
@@ -98,73 +97,74 @@ void loop() {
         }
     }
 
-    if ((millis() - lastSend) > 10000) {
+    if ((millis() - lastSend) > 2000) {
         Serial.println("Sending message");
 
         LocationData loc;
         loc.gps_reading = lastGPSreading;
+        // TODO: Add more sensors
         loc.has_magnetometer_reading = false;
+        loc.has_altitude = false;
 
-        pb_ostream_t stream = pb_ostream_from_buffer(radio_buf.data, sizeof(radio_buf.data));
+        pb_ostream_t stream = pb_ostream_from_buffer(tx_buf.data, sizeof(tx_buf.data));
         pb_encode(&stream, LocationData_fields, &loc);
+        tx_buf.message_type = MSGTYPE_BROADCAST;
+        tx_buf.message_category = BM_POSITION_BROADCAST;
         // Log other data, transmit messages, etc.
 
-        // Idk, this is bad
-        // radio.transmit((uint8_t*)&radio_buf, sizeof(radio_buf));
-        radio.data[0] = radio.data[1] = radio.data[2] = radio.data[3] = 0xFF;
-        for (int i = 4; i < 255; ++i)
-            radio.data[i] = 'E';
+        radio.transmit((uint8_t*)&tx_buf, sizeof(RadioMessage) - 1, true);
 
-        radio.transmit(radio.data, 255);
         lastSend = millis();
-        missed = true;
     }
 
-    // delay(1000);
-    if (radio.received()) {
-        missed = false;
-        lastRecv = millis();
-        Serial.println("Received a radio message!");
-        Serial.print("RSSI: "); Serial.println(radio.getRSSI());
-        Serial.print("SNR: "); Serial.println(radio.getSNR());
-        // Serial.println("Data:");
-        // for (int i = 0; i < 252; ++i) {
-        //     Serial.print("\t");
-        //     Serial.println(buf[i], HEX);
-        // }
+    if (radio.messageAvailable()) {
+        // Serial.println("Received a message!");
+        // Serial.print("RSSI: "); Serial.println(radio.getRSSI());
+        // Serial.print("SNR: "); Serial.println(radio.getSNR());
+
+        // Crude deserialization of the messagge into the standardized packet format
+        memcpy(radio.rxbuf, (void*)&rx_buf, min(radio.lastRxLen, sizeof(RadioMessage) - 1));
+
+        // Process message
+        uint16_t err = messageReceived(rx_buf, radio.getRSSI(), radio.getSNR());
+        CHECK_ERR(err);
+    }
+}
+
+// Called when a message is received
+uint16_t messageReceived(const RadioMessage& message, int RSSI, float SNR) {
+    // Ignore messages sent by other trackers
+    if (message.sender == 1) return;
+
+    // If the message isn't a broadcast (ID of 0), ignore it if it doesn't have this tracker's ID.
+    if (message.tracker_id != 0 && message.tracker_id != config.id) return;
+
+    switch (message.message_type) {
+        case MSGTYPE_CONFIG_GET:
+            pb_ostream_t stream = pb_ostream_from_buffer(tx_buf.data, sizeof(tx_buf.data));
+            pb_encode(&stream, Configuration_fields, &config);
+
+            tx_buf.message_type = MSGTYPE_CONFIG_GET;
+            tx_buf.message_category = CM_REPLY;
+
+            // Reply with the current configuration
+            radio.transmit((uint8_t*)&tx_buf, sizeof(RadioMessage) - 1, true);
+            break;
+        case MSGTYPE_CONFIG_SET:
+            if (message.message_category == CM_ASK) {
+                // Decode sent config
+                pb_istream_t stream = pb_istream_from_buffer(message.data, sizeof(message.data));
+                ASSERT_ERR(pb_decode(&stream, Configuration_fields, &config), ERR_INVALID_PROTOBUF);
+                writeConfig(config);
+            }
+            break;
+        default:
+            break;
     }
 
-    if ((millis() - lastSend) > 5000 && missed) {
-        missed = false;
-        Serial.println("Missed acknowledgement!");
-    }
+    return ERR_NONE;
+}
 
-    // String str;
-    // int state = radio.receive(str);
-    // if (state == RADIOLIB_ERR_NONE) {
-    //     // packet was successfully received
-    //     Serial.println(F("success!"));
-
-    //     // print the data of the packet
-    //     Serial.print(F("[RF69] Data:\t\t"));
-    //     Serial.println(str);
-
-    //     // print RSSI (Received Signal Strength Indicator)
-    //     // of the last received packet
-    //     Serial.print(F("[RF69] RSSI:\t\t"));
-    //     Serial.print(radio.getRSSI());
-    //     Serial.println(F(" dBm"));
-    // } else if (state == RADIOLIB_ERR_RX_TIMEOUT) {
-    //     // timeout occurred while waiting for a packet
-    //     Serial.println(F("timeout!"));
-
-    // } else if (state == RADIOLIB_ERR_CRC_MISMATCH) {
-    //     // packet was received, but is malformed
-    //     Serial.println(F("CRC error!"));
-
-    // } else {
-    //     // some other error occurred
-    //     Serial.print(F("failed, code "));
-    //     Serial.println(state);
-    // }
+void handleError(uint16_t err, const char* file, uint32_t line) {
+    Serial.print("ERROR #"); Serial.print(err); Serial.print(" in "); Serial.print(file); Serial.print(" at line "); Serial.println(line);
 }

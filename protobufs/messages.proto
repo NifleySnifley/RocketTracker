@@ -14,7 +14,10 @@ message GPSData {
   double altitude = 3;
 }
 
+message Altitude { double alt_m = 1; }
+
 message LocationData {
   GPSData gps_reading = 1;
   MagnetometerVector magnetometer_reading = 2;
+  Altitude altitude = 3;
 }

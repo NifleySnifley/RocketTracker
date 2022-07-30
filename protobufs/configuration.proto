@@ -1,6 +1,3 @@
 syntax = "proto3";
 
-message Configuration {
-  uint32 addr = 1;
-  uint32 receiver_address = 2;
-}
+message Configuration { uint32 id = 1; }
