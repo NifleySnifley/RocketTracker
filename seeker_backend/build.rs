@@ -1,6 +1,13 @@
 use std::io::Result;
 
 fn main() -> Result<()> {
-    prost_build::compile_protos(&["src/items.proto"], &["src/"])?;
+    // TODO use FS to search folder and compile all protos
+    prost_build::compile_protos(
+        &[
+            "../protobufs/configuration.proto",
+            "../protobufs/messages.proto",
+        ],
+        &["../protobufs/"],
+    )?;
     Ok(())
 }

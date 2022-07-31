@@ -1,4 +1,3 @@
-#include <RadioLib.h>
 #include <SPI.h>
 
 // class RFM97_LoRa_RL : public RFM97 {

@@ -11,7 +11,7 @@ all: res deploy
 
 dev: deploy exec_remote
 
-build: fmt
+build: 
 	cross build ${BUILDARGS} --target ${TARGET_ARCH}
 
 fmt: 
