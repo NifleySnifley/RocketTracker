@@ -20,8 +20,10 @@ nmea = "0.2.0"
 chrono = "0.4"
 # Calibration 
 average = "0.13.1"
+# Async and servers
 tokio = { version = "1.20.1", features = ["full"] }
-# rfm9x = "0.1.2"
+warp = "0.3"
+tokio-tungstenite = "0.17.2"
 
 [target.'cfg(target_arch = "arm")'.dependencies]
 rppal = { version = "0.13.1", features = ["hal"] }

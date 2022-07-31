@@ -1,0 +1,7 @@
+{
+	"editor.tabSize": 4,
+	"editor.insertSpaces": false,
+	"files.associations": {
+		"*.js": "javascriptreact",
+	}
+}
