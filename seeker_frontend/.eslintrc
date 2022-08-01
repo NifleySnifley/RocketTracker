@@ -4,6 +4,11 @@
 		"xo-react"
 	],
 	"env": {
-		"browser": true
+		"browser": true,
+	},
+	"rules": {
+		"no-unused-vars": "off",
+		"react/prop-types": "off",
+		"no-bitwise": "off"
 	}
 }
