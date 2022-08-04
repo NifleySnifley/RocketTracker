@@ -13,12 +13,14 @@ const defaultGridState = () => ({
 			document.documentElement.clientHeight / 3 * 2,
 		],
 	},
-	flex: 'height',
+	flex: 1,
 });
 
+// Add reactive bars to adjust dividers and flex direction
 export default function Grid(props) {
 	const [layout, setLayout] = useState(defaultGridState());
 	const resizerAdded = useRef(false);
+	const divBar = useRef(null);
 
 	const fixedChildren = React.Children.map(props.children, child => {
 		// Checking isValidElement is the safe way and avoids a typescript
@@ -43,6 +45,16 @@ export default function Grid(props) {
 
 	return (
 		<div>
+			<div
+				ref={divBar}
+				className='grid-adjuster'
+				style={{
+					position: 'absolute',
+					left: layout.flex === 0 ? 0 : layout.divisions.x[0],
+					top: layout.flex === 1 ? 0 : layout.divisions.y[0],
+					width: layout.flex === 0 ? layout.width : 0,
+					height: layout.flex === 1 ? layout.height : 0,
+				}}/>
 			{fixedChildren}
 		</div>
 	);
