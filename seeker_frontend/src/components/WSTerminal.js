@@ -16,6 +16,6 @@ export default function WSTerminal(_props) {
 	});
 
 	return (
-		<code style={{whiteSpace: 'pre-wrap'}}>{data}</code>
+		<code style={{whiteSpace: 'pre-wrap', overflow: 'scroll'}}>{data}</code>
 	);
 }

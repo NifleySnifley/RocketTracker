@@ -7,9 +7,10 @@ edition = "2021"
 
 [dependencies]
 libc = "0.2.126"
-# Configuration
+# Configuration and serialization
 serde = { version = "1.0.137", features = ["derive"] }
 serde_json = "1.0.81"
+typetag = "0.2"
 # Argument parsing
 clap = { version = "3.2.5", features = ["derive"] }
 # Radio communication, utility
@@ -22,7 +23,6 @@ chrono = "0.4"
 average = "0.13.1"
 # Async and servers
 tokio = { version = "1.20.1", features = ["full"] }
-# warp = "0.3"
 tungstenite = "0.17.3"
 tokio-tungstenite = "0.17.2"
 futures = "0.3"
