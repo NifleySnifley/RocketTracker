@@ -22,8 +22,10 @@ chrono = "0.4"
 average = "0.13.1"
 # Async and servers
 tokio = { version = "1.20.1", features = ["full"] }
-warp = "0.3"
+# warp = "0.3"
+tungstenite = "0.17.3"
 tokio-tungstenite = "0.17.2"
+futures = "0.3"
 # Async functions in adapter traits
 async-trait = "0.1.57"
 # IMU shenanigans
