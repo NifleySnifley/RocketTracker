@@ -6,6 +6,7 @@ import Grid from './components/Grid';
 import GridItem from './components/GridItem';
 import Settings from './Settings';
 import Terminal from './Terminal';
+import MapRenderer from './components/MapRenderer';
 
 function App() {
 	return (
