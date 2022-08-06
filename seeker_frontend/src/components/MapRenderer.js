@@ -4,8 +4,8 @@ import maplibregl from 'maplibre-gl';
 export default function MapRenderer() {
 	const mapContainer = useRef(null);
 	const map = useRef(null);
-	const [lng, setLng] = useState(139.753);
-	const [lat, setLat] = useState(35.6844);
+	const [lng, setLng] = useState(-93.258133);
+	const [lat, setLat] = useState(44.986656);
 	const [zoom, setZoom] = useState(14);
 	const API_KEY = process.env.REACT_APP_MAPTILER_API_KEY;
 
@@ -24,9 +24,26 @@ export default function MapRenderer() {
 
 		map.current.addControl(new maplibregl.NavigationControl(), 'top-right');
 
-		new maplibregl.Marker({color: '#FF0000'})
-			.setLngLat([139.7525, 35.6846])
-			.addTo(map.current);
+		map.current.on('load', () => {
+			map.current.addSource('wms-gisdata-mn', {
+				type: 'raster',
+				// https://maplibre.org/maplibre-gl-js-docs/style-spec/sources/
+				tiles: [
+					// 'https://imageserver.gisdata.mn.gov/cgi-bin/mncomp?bbox={bbox-epsg-3857}&service=WMS&version=1.1.1&request=GetMap&srs=EPSG:3857&transparent=true&width=256&height=256&layers=mncomp',
+					'https://imageserver.gisdata.mn.gov/cgi-bin/wms?bbox={bbox-epsg-3857}&service=WMS&version=1.1.1&request=GetMap&srs=EPSG:3857&transparent=true&width=256&height=256&layers=fsa2021',
+				],
+				tileSize: 256,
+			});
+			map.current.addLayer(
+				{
+					id: 'gisdata-mn',
+					type: 'raster',
+					source: 'wms-gisdata-mn',
+					paint: {},
+				},
+				'aeroway_fill',
+			);
+		});
 	});
 
 	return (
