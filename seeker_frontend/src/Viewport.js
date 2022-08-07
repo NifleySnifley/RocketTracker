@@ -1,9 +1,8 @@
 import React from 'react';
 import MapRenderer from './components/MapRenderer';
 
-export default function Map(_props) {
+export default function Viewport(_props) {
 	return (
-		// <div>Map</div>
 		<MapRenderer/>
 	);
 }

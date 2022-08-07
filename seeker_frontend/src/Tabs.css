@@ -1,0 +1,47 @@
+.tab-container {
+	width: 100%;
+	height: 100%;
+	flex-direction: column;
+	display: flex;
+	justify-content: flex-start;
+}
+
+.tab-container>hr {
+	flex-grow: 0;
+}
+
+
+/* Holds the currently selected tab */
+.selected-tab-container {
+	width: 100%;
+	height: 100%;
+	flex-grow: 1;
+}
+
+
+/* Tab selection container */
+.tab-selectors {
+	height: 1.5em;
+	display: flex;
+	overflow-x: scroll;
+	flex-grow: 0;
+}
+
+
+/* No scrollbars but allow scrolling */
+.tab-selectors {
+	-ms-overflow-style: none;
+	scrollbar-width: none;
+}
+
+.tab-selectors::-webkit-scrollbar {
+	display: none;
+}
+
+
+/* Tab selection buttons */
+.tab-selectors>button {
+	border-radius: 0.5em;
+	border-bottom-left-radius: 0;
+	border-bottom-right-radius: 0;
+}

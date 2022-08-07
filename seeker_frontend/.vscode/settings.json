@@ -3,5 +3,9 @@
 	"editor.insertSpaces": false,
 	"files.associations": {
 		"*.js": "javascriptreact",
-	}
+	},
+	"[javascriptreact]": {
+		"typescript.suggest.completeJSDocs": true,
+		"javascript.suggest.completeJSDocs": true
+	},
 }

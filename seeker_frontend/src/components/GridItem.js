@@ -3,13 +3,11 @@ import GridState from './Grid';
 
 /**
  * Item in a grid
- * MUST be child of a GridItem
+ * MUST be child of a {@link GridItem}
  * @param {{index: Number}} props
  * @returns Grid element
  */
 export default function GridItem({children, layout, index}) {
-	const gridstate = useContext(GridState);
-
 	let x = 0;
 	let y = 0;
 	let width = 0;

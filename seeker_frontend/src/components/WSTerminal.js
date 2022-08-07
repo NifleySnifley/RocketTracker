@@ -1,21 +1,13 @@
 import React, {useEffect, useState} from 'react';
-import {w3cwebsocket as W3CWebSocket} from 'websocket';
-
-const client = new W3CWebSocket('ws://localhost:9002');
+import {RealtimeEvents, ClientEvents, Client} from '../RealtimeEvents';
 
 export default function WSTerminal(_props) {
 	const [data, setData] = useState('');
 	useEffect(() => {
-		client.onopen = () => {
-			console.log('WebSocket Client Connected');
-		};
-
-		client.onmessage = message => {
-			setData(data + `${message.data}\n`);
-		};
+		ClientEvents.addEventListener('message', m => setData(data + '\n' + m.detail.message.data));
 	});
 
 	return (
-		<code style={{whiteSpace: 'pre-wrap', overflow: 'scroll'}}>{data}</code>
+		<code style={{whiteSpace: 'pre-wrap', overflow: 'scroll', width: '100%', height: '100%'}}>{data}</code>
 	);
 }

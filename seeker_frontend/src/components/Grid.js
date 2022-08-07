@@ -1,23 +1,45 @@
 /* eslint-disable react/jsx-no-bind */
+import * as Icons from '@fortawesome/free-solid-svg-icons';
+import {FontAwesomeIcon} from '@fortawesome/react-fontawesome';
 import React, {createContext, useRef, useState} from 'react';
 import GridAdjuster from './GridAdjuster';
 
-const defaultGridState = () => ({
+/**
+ * @typedef {width: number, height:number, divisions:{x:[number], y:[number]}} GridLayout
+ */
+
+/**
+ * Generates a new layout
+ * @param {number} flex axis to allow flexible adjustment in (0:x, 1:y)
+ * @returns {GridLayout} layout
+ */
+const defaultGridState = (flex = 0) => ({
 	width: document.documentElement.clientWidth,
 	height: document.documentElement.clientHeight,
 	divisions: {
-		x: [
+		x: flex === 1 ? [
 			document.documentElement.clientWidth / 3,
 			document.documentElement.clientWidth / 3,
+		] : [
+			document.documentElement.clientWidth / 3,
+			document.documentElement.clientWidth / 2,
 		],
-		y: [
-			document.documentElement.clientHeight / 2,
+		y: flex === 1 ? [
+			document.documentElement.clientHeight / 3,
+			document.documentElement.clientHeight / 3 * 2.5,
+		] : [
+			document.documentElement.clientHeight / 3 * 2,
 			document.documentElement.clientHeight / 3 * 2,
 		],
 	},
-	flex: 1,
+	flex,
 });
 
+/**
+ * Scales a layout with an out-of-date size to match the dimensions of the window currently.
+ * @param {GridLayout} layout layout to scale
+ * @returns {GridLayout} Properly sized layout proportional to the one provided
+ */
 function scaleLayout(layout) {
 	const newWH = {
 		width: document.documentElement.clientWidth,
@@ -29,30 +51,37 @@ function scaleLayout(layout) {
 		y: layout.divisions.y.map(s => (s / layout.height) * newWH.height),
 	};
 
-	console.log({...newDivs, ...newWH, flex: layout.flex});
 	return {divisions: newDivs, ...newWH, flex: layout.flex};
 }
 
+/**
+ * Tries to load a layout from localStorage and falls back to creating a new default layout.
+ * @returns {GridLayout} layout
+ */
 function loadLayout() {
 	if (window.localStorage.getItem('layout')) {
-		return JSON.parse(window.localStorage.getItem('layout'));
+		return scaleLayout(JSON.parse(window.localStorage.getItem('layout')));
 	}
 
 	return defaultGridState();
 }
 
-// Add reactive bars to adjust dividers and flex direction
+/**
+ * Adjustable grid layout container
+ * Holds (4) {@link GridItem} items
+ * @param {{children: [React.Component], }}} props
+ */
 export default function Grid(props) {
 	// eslint-disable-next-line react/hook-use-state
 	const [layout, setLayoutRaw] = useState(loadLayout());
 	const resizerAdded = useRef(false);
-	const divBar = useRef(null);
 
 	const setLayout = l => {
 		window.localStorage.setItem('layout', JSON.stringify(l));
 		setLayoutRaw(l);
 	};
 
+	/** @type {[React.Component]} */
 	const fixedChildren = React.Children.map(props.children, child => {
 		// Checking isValidElement is the safe way and avoids a typescript
 		// error too.
@@ -70,8 +99,9 @@ export default function Grid(props) {
 
 		if (!resizerAdded.current) {
 			window.addEventListener('resize', handleResize);
-			resizerAdded.current = true;
 		}
+
+		return () => window.removeEventListener('resize', handleResize);
 	});
 
 	/**
@@ -82,10 +112,10 @@ export default function Grid(props) {
 	 */
 	function drag(e, dir) {
 		const newLayout = {...layout};
-		const dirs = ['y', 'x'];
+		const dirs = ['x', 'y'];
 
 		if (Array.isArray(dir)) {
-			newLayout.divisions[dirs[1 - dir[0]]][dir[1]] = e[`client${dirs[1 - dir[0]].toUpperCase()}`];
+			newLayout.divisions[dirs[dir[0]]][dir[1]] = e[`client${dirs[dir[0]].toUpperCase()}`];
 		} else {
 			newLayout.divisions[dirs[dir]] = [0, 0].map(v => e[`client${dirs[dir].toUpperCase()}`]);
 		}
@@ -101,18 +131,21 @@ export default function Grid(props) {
 			<GridAdjuster layout={layout} size={adjusterSize} target={1 - layout.flex} onAdjust={drag}/>
 			<GridAdjuster layout={layout} size={adjusterSize} target={[layout.flex, 0]} onAdjust={drag}/>
 			<GridAdjuster layout={layout} size={adjusterSize} target={[layout.flex, 1]} onAdjust={drag}/>
-			{/* <div
-				ref={divBar}
-				draggable
-				className='grid-adjuster'
+			<FontAwesomeIcon
+				icon={layout.flex === 1 ? Icons.faArrowsLeftRight : Icons.faArrowsUpDown} color='white'
 				style={{
+					backgroundColor: 'black',
+					borderRadius: '0.6em',
+					border: '0.1em solid black',
+					width: '1em',
+					height: '1em',
 					position: 'absolute',
-					left: layout.flex === 0 ? 0 : layout.divisions.x[0] - adjusterSize,
-					top: layout.flex === 1 ? 0 : layout.divisions.y[0] - adjusterSize,
-					width: layout.flex === 0 ? layout.width : adjusterSize * 2,
-					height: layout.flex === 1 ? layout.height : adjusterSize * 2,
+					top: `calc(${layout.flex === 0 ? layout.divisions.y[0] : layout.height / 2}px - 0.6em)`,
+					left: `calc(${layout.flex === 1 ? layout.divisions.x[0] : layout.width / 2}px - 0.6em)`,
 				}}
-				onDragEnd={e => drag(e, layout.flex)}/> */}
+				fontSize='1em'
+				onClick={e => setLayout(defaultGridState(1 - layout.flex))}
+			/>
 		</div>
 	);
 }
