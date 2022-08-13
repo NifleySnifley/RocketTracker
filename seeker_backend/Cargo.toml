@@ -31,6 +31,15 @@ async-trait = "0.1.57"
 # IMU shenanigans
 ahrs = "0.5"
 nalgebra = "0.30"
+# QOL Macros
+event_derive = { path = "./event_derive/" }
+
+[dependencies.tokio_caching_proxy]
+path = "../tokio_caching_proxy/"
+
+[[bin]]
+name = "seeker_backend"
+path = "src/main.rs"
 
 [target.'cfg(target_arch = "arm")'.dependencies]
 rppal = { version = "0.13.1", features = ["hal"] }

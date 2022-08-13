@@ -1,33 +1,32 @@
+use event_derive::WriteableEventData;
 use serde::{Deserialize, Serialize};
+use std::fmt::Debug;
 
-#[typetag::serde(tag = "event_type")]
 pub trait EventData {}
-#[derive(Serialize, Deserialize)]
-pub struct GPSData {}
-#[typetag::serde]
-impl EventData for GPSData {}
+pub trait WriteableEventData: EventData + Debug + Clone {}
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, Debug, WriteableEventData)]
+pub struct GPSData {
+    longitude: f64,
+    latitude: f64,
+    altitude: Option<f64>,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug, WriteableEventData)]
+pub struct IMUData {}
+
+#[derive(Clone, Serialize, Deserialize, Debug, WriteableEventData)]
 pub struct LocalizationData {}
-#[typetag::serde]
-impl EventData for LocalizationData {}
-
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, Debug, WriteableEventData)]
 pub struct InFlightData {}
-#[typetag::serde]
-impl EventData for InFlightData {}
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, Debug, WriteableEventData)]
 pub struct FlightStatusData {}
-#[typetag::serde]
-impl EventData for FlightStatusData {}
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, Debug, WriteableEventData)]
 pub struct DebugData {
     message: String,
 }
-#[typetag::serde]
-impl EventData for DebugData {}
 
 impl DebugData {
     pub fn with_data(data: String) -> Self {
@@ -35,10 +34,15 @@ impl DebugData {
     }
 }
 
-pub enum RemoteUpdate {
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(tag = "event_type", content = "data")]
+pub enum Event {
     InFlightUpdate(InFlightData),
-    GPSUpdate(GPSData),
     FlightStatusUpdate(FlightStatusData),
     LocalizationUpdate(LocalizationData),
+
+    IMUUpdate(IMUData),
+    GPSUpdate(GPSData),
+
     Debug(DebugData),
 }

@@ -2,19 +2,20 @@ mod adapters;
 mod events;
 mod protos;
 
-use events::{DebugData, EventData};
+use events::{DebugData, Event};
 use futures::{SinkExt, StreamExt};
-use std::cell::RefCell;
+use std::path::Path;
 use std::rc::Rc;
-use std::sync::Arc;
 use std::{net::SocketAddr, time::Duration};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::broadcast::{self, Receiver, Sender};
+use tokio_caching_proxy::{CachingProxy, FilesystemCache};
 use tokio_tungstenite::{accept_async, tungstenite::Error};
 use tungstenite::{Message, Result};
+use typetag;
 
 // TODO See if I can fix the cursed +Send+Sync thing
-type Event = Arc<dyn EventData + Send + Sync>;
+// type Event = Arc<dyn WriteableEventData + Send + Sync + typetag>;
 
 async fn accept_connection(peer: SocketAddr, stream: TcpStream, broadcast: Sender<Event>) {
     if let Err(e) = handle_connection(peer, stream, &broadcast).await {
@@ -68,7 +69,7 @@ async fn handle_connection(
                 if let Ok(s) = recv {
                 ws_sender
                     .send(Message::Text(
-                        serde_json::to_string_pretty(s.as_ref()).unwrap_or_else(|e| "{}".to_owned()),
+                        serde_json::to_string_pretty(&s).unwrap_or_else(|_e| "{}".to_owned()),
                     ))
                     .await?;
                 }
@@ -107,11 +108,20 @@ async fn main() {
         }
     });
 
-    println!("Eeheheee");
+    tokio::task::spawn(async move {
+        let cache = FilesystemCache::new(Path::new("./data"));
+        let proxy = CachingProxy::new("127.0.0.1:8080".parse().unwrap(), cache);
+        println!("Starting proxy!");
+
+        // Start server (consumes object)
+        proxy.start().await;
+    });
 
     // broadcast_tx messages are sent to all connected websockets
     loop {
         std::thread::sleep(Duration::from_secs(1));
-        client_broadcast.send(Arc::new(DebugData::with_data("test".to_owned())));
+        client_broadcast
+            .send(Event::Debug(DebugData::with_data("test".to_owned())))
+            .unwrap_or(0);
     }
 }
