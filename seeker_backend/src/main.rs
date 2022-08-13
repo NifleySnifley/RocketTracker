@@ -2,6 +2,7 @@ mod adapters;
 mod events;
 mod protos;
 
+// use caching_proxy::{CachingProxy, FilesystemCache};
 use events::{DebugData, Event};
 use futures::{SinkExt, StreamExt};
 use std::path::Path;
@@ -9,7 +10,6 @@ use std::rc::Rc;
 use std::{net::SocketAddr, time::Duration};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::broadcast::{self, Receiver, Sender};
-use tokio_caching_proxy::{CachingProxy, FilesystemCache};
 use tokio_tungstenite::{accept_async, tungstenite::Error};
 use tungstenite::{Message, Result};
 use typetag;
@@ -108,14 +108,14 @@ async fn main() {
         }
     });
 
-    tokio::task::spawn(async move {
-        let cache = FilesystemCache::new(Path::new("./data"));
-        let proxy = CachingProxy::new("127.0.0.1:8080".parse().unwrap(), cache);
-        println!("Starting proxy!");
+    // tokio::task::spawn(async move {
+    //     let cache = FilesystemCache::new(Path::new("./data"));
+    //     let proxy = CachingProxy::new("127.0.0.1:8080".parse().unwrap(), cache);
+    //     println!("Starting proxy!");
 
-        // Start server (consumes object)
-        proxy.start().await;
-    });
+    //     // Start server (consumes object)
+    //     proxy.start().await;
+    // });
 
     // broadcast_tx messages are sent to all connected websockets
     loop {
