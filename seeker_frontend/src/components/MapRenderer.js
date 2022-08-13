@@ -1,5 +1,6 @@
 import React, {useRef, useEffect, useState} from 'react';
 import maplibregl, {Map} from 'maplibre-gl';
+import {Events} from '../RealtimeEvents';
 
 /**
  * Map renderer component
@@ -35,10 +36,11 @@ export default function MapRenderer({customLayers}) {
 				map.current.addSource('wms-gisdata-mn', {
 					type: 'raster',
 					// https://maplibre.org/maplibre-gl-js-docs/style-spec/sources/
-					tiles: [
-						// 'https://imageserver.gisdata.mn.gov/cgi-bin/mncomp?bbox={bbox-epsg-3857}&service=WMS&version=1.1.1&request=GetMap&srs=EPSG:3857&transparent=true&width=256&height=256&layers=mncomp',
-						'https://imageserver.gisdata.mn.gov/cgi-bin/wms?bbox={bbox-epsg-3857}&service=WMS&version=1.1.1&request=GetMap&srs=EPSG:3857&transparent=true&width=256&height=256&layers=fsa2021',
-					],
+					// tiles: [
+					// 	// 'https://imageserver.gisdata.mn.gov/cgi-bin/mncomp?bbox={bbox-epsg-3857}&service=WMS&version=1.1.1&request=GetMap&srs=EPSG:3857&transparent=true&width=256&height=256&layers=mncomp',
+					// 	'https://imageserver.gisdata.mn.gov/cgi-bin/wms?bbox={bbox-epsg-3857}&service=WMS&version=1.1.1&request=GetMap&srs=EPSG:3857&transparent=true&width=256&height=256&layers=fsa2021',
+					// ],
+					tiles: process.env.REACT_APP_WMS_URLS.split(','),
 					tileSize: 256,
 				});
 

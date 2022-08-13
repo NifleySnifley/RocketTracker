@@ -1,10 +1,17 @@
 import React, {useEffect, useState} from 'react';
-import {RealtimeEvents, ClientEvents, Client} from '../RealtimeEvents';
+import {ClientEvents, Events} from '../RealtimeEvents';
 
 export default function WSTerminal(_props) {
 	const [data, setData] = useState('');
+
 	useEffect(() => {
-		ClientEvents.addEventListener('message', m => setData(data + '\n' + m.detail.message.data));
+		// ClientEvents.addEventListener('message', m => {
+		// 	setData(data + '\n' + JSON.stringify(m.detail, null, 4));
+		// });
+
+		Events.addEventListener('Debug', e => {
+			console.log('Got one!!');
+		});
 	});
 
 	return (

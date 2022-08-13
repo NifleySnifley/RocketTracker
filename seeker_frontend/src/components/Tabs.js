@@ -4,24 +4,14 @@ import '../Tabs.css';
 /**
  * Tab switching container
  * Switches between child components and displays clickable tab buttons using children's `name` attribute
- * @returns
  */
+
+// TODO: Don't re-render tabs, just hide them
+
 export default function Tabs({children}) {
 	const [selected, setSelected] = useState(0);
 
 	const titles = React.Children.map(children, child => child.props.name);
-
-	/*
-	Const fixedChildren = React.Children.map(props.children, child => {
-		// Checking isValidElement is the safe way and avoids a typescript
-		// error too.
-		if (React.isValidElement(child)) {
-			return React.cloneElement(child, {layout, ...child.props});
-		}
-
-		return child;
-	});
-	*/
 
 	return (
 		<div className='tab-container'>
