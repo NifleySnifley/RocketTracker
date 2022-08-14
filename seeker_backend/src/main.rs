@@ -1,18 +1,22 @@
 mod adapters;
+mod endpoints;
 mod events;
 mod protos;
+mod websocket;
 
-// use caching_proxy::{CachingProxy, FilesystemCache};
+use adapters::Packet;
+use caching_proxy::{CachingProxy, FilesystemCache};
+use endpoints::{create_flight, get_flights, FlightLogMetadata};
 use events::{DebugData, Event};
 use futures::{SinkExt, StreamExt};
 use std::path::Path;
-use std::rc::Rc;
 use std::{net::SocketAddr, time::Duration};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::broadcast::{self, Receiver, Sender};
 use tokio_tungstenite::{accept_async, tungstenite::Error};
 use tungstenite::{Message, Result};
-use typetag;
+use warp::reply::json;
+use warp::Filter;
 
 // TODO See if I can fix the cursed +Send+Sync thing
 // type Event = Arc<dyn WriteableEventData + Send + Sync + typetag>;
@@ -40,25 +44,6 @@ async fn handle_connection(
     let mut listener = broadcast.subscribe();
 
     loop {
-        // tokio::select! {
-        //     msg = ws_receiver.next() => {
-        //         match msg {
-        //             Some(msg) => {
-        //                 let msg = msg?;
-        //                 if msg.is_text() ||msg.is_binary() {
-        //                     ws_sender.send(msg).await?;
-        //                 } else if msg.is_close() {
-        //                     break;
-        //                 }
-        //             }
-        //             None => break,
-        //         }
-        //     }
-        //     _ = interval.tick() => {
-        //         ws_sender.send(Message::Text("tick".to_owned())).await?;
-        //     }
-        // }
-
         tokio::select! {
             msg = ws_receiver.next() => {
                 if let Some(msg) = msg {
@@ -75,22 +60,13 @@ async fn handle_connection(
                 }
             }
         }
-        // while let Ok(s) = listener.recv().await {
-        //     ws_sender
-        //         .send(Message::Text(
-        //             serde_json::to_string_pretty(s.as_ref()).unwrap_or_else(|e| "{}".to_owned()),
-        //         ))
-        //         .await?;
-        // }
     }
-
-    Ok(())
 }
 
 #[tokio::main]
 async fn main() {
     let (client_broadcast, _) = broadcast::channel::<Event>(1);
-    let (radio_send, _) = broadcast::channel::<Rc<dyn prost::Message>>(32);
+    let (radio_send, _) = broadcast::channel::<Packet>(32);
 
     let ws_addr = "127.0.0.1:9002";
     let ws_listener = TcpListener::bind(&ws_addr).await.expect("Can't listen");
@@ -108,20 +84,49 @@ async fn main() {
         }
     });
 
-    // tokio::task::spawn(async move {
-    //     let cache = FilesystemCache::new(Path::new("./data"));
-    //     let proxy = CachingProxy::new("127.0.0.1:8080".parse().unwrap(), cache);
-    //     println!("Starting proxy!");
+    tokio::task::spawn(async move {
+        let cache = FilesystemCache::new(Path::new("./data"));
+        let proxy = CachingProxy::new("127.0.0.1:8080".parse().unwrap(), cache);
+        println!("Starting proxy on http://{}", proxy.sock_addr);
 
-    //     // Start server (consumes object)
-    //     proxy.start().await;
-    // });
+        // Start server (consumes object)
+        proxy.start().await;
+    });
 
     // broadcast_tx messages are sent to all connected websockets
+    // this loop runs to send global messages, events, etc.
+    // In the future it may handle receiving from the tracker
+    tokio::task::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            client_broadcast
+                .send(Event::Debug(DebugData::with_data("test".to_owned())))
+                .unwrap_or(0);
+        }
+    });
+
+    let flight_data_dir = Path::new("./flight_data");
+
+    // Start the REST API for flight data
+    // TODO Add subdir for API, subdir for frontend
+    let rest_sockaddr: SocketAddr = ([127, 0, 0, 1], 3030).into();
+    let get_flight_datas =
+        warp::path("flights").map(|| json(&get_flights(flight_data_dir).unwrap_or_default()));
+    let new_flight = warp::path!("flights" / "new").map(|| {
+        let new_data = FlightLogMetadata::default();
+        create_flight(flight_data_dir, &new_data).unwrap();
+        json(&new_data.id.to_string())
+    });
+
+    let routes = warp::get().and(new_flight).or(get_flight_datas);
+    tokio::task::spawn(async move {
+        println!("Starting REST flights API on http://{}", rest_sockaddr);
+        warp::serve(routes).run(rest_sockaddr).await;
+    });
+
     loop {
-        std::thread::sleep(Duration::from_secs(1));
-        client_broadcast
-            .send(Event::Debug(DebugData::with_data("test".to_owned())))
-            .unwrap_or(0);
+        // HACK Just let the thread wait indefinitely
+        // TODO Do something in here...
+        futures::future::pending::<()>().await;
     }
 }

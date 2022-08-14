@@ -1,0 +1,21 @@
+[package]
+name = "caching_proxy"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+hyper-tls = "0.5.0"
+hyper = { version = "0.14", features = ["full"] }
+urlencoding = "2.1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0.83"
+async-trait = "0.1.57"
+tokio = { version = "1.20.1", features = ["full"] }
+log = "0.4.0"
+env_logger = "0.8.4"
+
+[[bin]]
+path = "src/main.rs"
+name = "caching_proxy_demo"
