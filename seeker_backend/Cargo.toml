@@ -39,6 +39,9 @@ event_derive = { path = "./event_derive/" }
 # Logging
 log = "0.4.0"
 env_logger = "0.8.4"
+# Bluetooth 
+bluer = { version = "0.15.0", features = ["full"] }
+bluetooth-serial-port = "0.6.0"
 
 [dependencies.uuid]
 version = "1.1.2"

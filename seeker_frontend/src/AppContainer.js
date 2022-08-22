@@ -19,10 +19,7 @@ function App() {
 			<GridItem index={1}>
 				<Tabs>
 					<Viewport name='Map 2D'/>
-					<div name='Live Flight'>WIP</div>
-					<div name='Flight Data Recording'>WIP</div>
-					<div name='Stats'>WIP</div>
-					<div name='Visualization'>WIP</div>
+					<div name='Flight Data'>WIP</div>
 				</Tabs>
 			</GridItem>
 			<GridItem index={0}>

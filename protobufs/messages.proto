@@ -21,3 +21,33 @@ message LocationData {
   MagnetometerVector magnetometer_reading = 2;
   Altitude altitude = 3;
 }
+
+message Orientation {
+  double rx = 1;
+  double ry = 2;
+  double rz = 3;
+}
+
+message FlightUpdate {
+  GPSData gps_reading = 1;
+  Altitude altitude = 2;
+  uint64 timestamp = 3;
+  enum FlightState {
+    WaitingForLaunch = 0;
+    Ascending = 1;
+    Descending = 2;
+    Landed = 3;
+  }
+  FlightState flight_state = 4;
+  enum FlightEvent {
+    None = 0;
+    Apogee = 1;
+    Launch = 2;
+    Land = 3;
+  }
+  FlightEvent event = 5;
+  float batt_voltage = 6;
+  Orientation orientation = 7;
+  uint32 flight_time = 8;
+  uint32 recorded_samples = 9;
+}

@@ -2,13 +2,15 @@ mod adapters;
 mod endpoints;
 mod events;
 mod protos;
+mod tracker;
 mod websocket;
 
 use adapters::Packet;
 use caching_proxy::{CachingProxy, FilesystemCache};
-use endpoints::{create_flight, get_flights, FlightLogMetadata};
+use endpoints::{create_empty_flight, get_flights, FlightLogMetadata};
 use events::{DebugData, Event};
 use futures::{SinkExt, StreamExt};
+use std::fs;
 use std::path::Path;
 use std::{net::SocketAddr, time::Duration};
 use tokio::net::{TcpListener, TcpStream};
@@ -48,6 +50,9 @@ async fn handle_connection(
             msg = ws_receiver.next() => {
                 if let Some(msg) = msg {
                     println!("Received '{}' from client", msg.unwrap().to_text().unwrap_or("?"));
+                } else {
+                    println!("Disconnecting from websocket...");
+                    break;
                 }
             },
             recv = listener.recv() => {
@@ -61,6 +66,8 @@ async fn handle_connection(
             }
         }
     }
+
+    Ok(())
 }
 
 #[tokio::main]
@@ -78,7 +85,7 @@ async fn main() {
             let peer = stream
                 .peer_addr()
                 .expect("connected streams should have a peer address");
-            println!("Peer address: {}", peer);
+            // println!("Peer address: {}", peer);
 
             tokio::spawn(accept_connection(peer, stream, tx.clone()));
         }
@@ -106,6 +113,9 @@ async fn main() {
     });
 
     let flight_data_dir = Path::new("./flight_data");
+    if !flight_data_dir.is_dir() {
+        fs::create_dir(flight_data_dir).unwrap();
+    }
 
     // Start the REST API for flight data
     // TODO Add subdir for API, subdir for frontend
@@ -114,7 +124,7 @@ async fn main() {
         warp::path("flights").map(|| json(&get_flights(flight_data_dir).unwrap_or_default()));
     let new_flight = warp::path!("flights" / "new").map(|| {
         let new_data = FlightLogMetadata::default();
-        create_flight(flight_data_dir, &new_data).unwrap();
+        create_empty_flight(flight_data_dir, &new_data).unwrap();
         json(&new_data.id.to_string())
     });
 
