@@ -1,0 +1,5 @@
+(sym_lib_table
+  (lib (name "RocketTracker-SparkFun")(type "KiCad")(uri "/home/nifley/Documents/Rocket Tracker/RocketTracker-SparkFun.kicad_sym")(options "")(descr ""))
+  (lib (name "RocketTracker_Symbols")(type "KiCad")(uri "/home/nifley/Documents/Rocket Tracker/RocketTracker_Symbols.kicad_sym")(options "")(descr ""))
+  (lib (name "Parts")(type "Legacy")(uri "/home/nifley/Downloads/kicad-RFM9X/RFM9X.lib")(options "")(descr ""))
+)

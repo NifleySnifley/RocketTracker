@@ -1,6 +1,0 @@
-/target
-.vscode/
-./config.json
-.cargo/
-/data
-/flight_data
