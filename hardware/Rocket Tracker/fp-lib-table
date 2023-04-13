@@ -1,4 +1,0 @@
-(fp_lib_table
-  (lib (name "Parts")(type "KiCad")(uri "/home/nifley/Downloads/kicad-RFM9X/RFM9X.pretty")(options "")(descr ""))
-  (lib (name "SnapEDA_CONREVSMA003")(type "KiCad")(uri "/home/nifley/Documents/Rocket Tracker/CONREVSMA003.062")(options "")(descr ""))
-)

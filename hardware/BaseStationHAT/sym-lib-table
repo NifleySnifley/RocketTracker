@@ -1,8 +1,0 @@
-(sym_lib_table
-  (lib (name "raspberrypi_hat")(type "KiCad")(uri "${KIPRJMOD}/raspberrypi_hat.kicad_sym")(options "")(descr "")(disabled))
-  (lib (name "RocketTracker-SparkFun")(type "KiCad")(uri "/home/nifley/Documents/Rocket Tracker/RocketTracker-SparkFun.kicad_sym")(options "")(descr ""))
-  (lib (name "RocketTracker_Symbols")(type "KiCad")(uri "/home/nifley/Documents/Rocket Tracker/RocketTracker_Symbols.kicad_sym")(options "")(descr ""))
-  (lib (name "Parts")(type "Legacy")(uri "/home/nifley/Downloads/kicad-RFM9X/RFM9X.lib")(options "")(descr ""))
-  (lib (name "CONREVSMA003.062")(type "Legacy")(uri "/home/nifley/Documents/Rocket Tracker/CONREVSMA003.062/CONREVSMA003.062.lib")(options "")(descr ""))
-  (lib (name "SL871")(type "KiCad")(uri "${KIPRJMOD}/SL871.kicad_sym")(options "")(descr ""))
-)
