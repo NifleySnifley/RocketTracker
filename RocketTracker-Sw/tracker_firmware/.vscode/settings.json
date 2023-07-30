@@ -1,0 +1,15 @@
+{
+	"files.associations": {
+		"*.excalidraw": "json",
+		"*.excalidrawlib": "json",
+		"CMakeLists.txt": "cmake",
+		"*.fs": "fsharp",
+		"*.html": "html",
+		"*.ipynb": "python",
+		"bleutils.h": "c",
+		"bleserver.h": "c",
+		"task.h": "c",
+		"freertos.h": "c",
+		"esp_gatt_defs.h": "c"
+	}
+}
