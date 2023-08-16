@@ -1,3 +1,6 @@
 [submodule "RocketTracker-Hw"]
 	path = RocketTracker-Hw
 	url = https://github.com/NifleySnifley/RocketTracker-Hw
+[submodule "RocketTracker-Sw/nanopb"]
+	path = RocketTracker-Sw/nanopb
+	url = https://github.com/nanopb/nanopb

@@ -1,0 +1,32 @@
+{
+	"files.associations": {
+		"CMakeLists.txt": "cmake",
+		"*.fs": "fsharp",
+		"*.html": "html",
+		"*.ipynb": "python",
+		"cstddef": "cpp",
+		"list": "cpp",
+		"memory_resource": "cpp",
+		"type_traits": "cpp",
+		"arm.h": "c",
+		"util.h": "c",
+		"stdio.h": "c",
+		"*.tcc": "cpp",
+		"optional": "cpp",
+		"system_error": "cpp",
+		"array": "cpp",
+		"functional": "cpp",
+		"regex": "cpp",
+		"tuple": "cpp",
+		"utility": "cpp",
+		"istream": "cpp",
+		"ostream": "cpp",
+		"stdlib.h": "c",
+		"bitset": "cpp",
+		"string_view": "cpp",
+		"initializer_list": "cpp",
+		"ranges": "cpp",
+		"random": "cpp",
+		"string": "cpp"
+	}
+}

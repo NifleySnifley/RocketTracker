@@ -1,0 +1,14 @@
+{
+    "configurations": [
+        {
+            "name": "Linux",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "${workspaceFolder}/build/",
+                "${workspaceFolder}/../nanopb/**",
+                "~/Documents/pico-sdk/**"
+            ]
+        }
+    ],
+    "version": 4
+}

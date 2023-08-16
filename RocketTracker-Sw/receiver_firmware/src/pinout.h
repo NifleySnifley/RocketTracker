@@ -1,0 +1,39 @@
+#ifndef PINOUT_H
+#define PINOUT_H
+
+#define PIN_MISO_X 0
+#define PIN_SCK_DIO0 2
+#define PIN_MOSI_DIO4 3
+#define PIN_RST_DIO1 4
+#define PIN_CS_DIO3 5
+#define PIN_SDA0 8
+#define PIN_SCL0 9
+#define PIN_SDA1 10
+#define PIN_SCL1 11
+#define PIN_UART_TX 12
+#define PIN_UART_RX 13
+
+#define PIN_LED_R 18
+#define PIN_LED_G 19
+#define PIN_DIO5_DIO2 21
+#define PIN_DIO4_DIO5 22
+#define PIN_DIO3_RST 23
+#define PIN_DIO2_MISO 24
+#define PIN_DIO1_CS 25
+#define PIN_DIO0_SCK 26
+#define PIN_X_MOSI 27
+#define PIN_VSENSE 28
+
+#define RFM97CW_MOSI PIN_MOSI_DIO4
+#define RFM97CW_MISO PIN_MISO_X
+#define RFM97CW_SCK PIN_SCK_DIO0
+#define RFM97CW_CS PIN_CS_DIO3
+#define RFM97CW_RST PIN_RST_DIO1
+#define RFM97CW_DIO0 PIN_DIO0_SCK
+#define RFM97CW_DIO1 PIN_DIO1_CS
+#define RFM97CW_DIO2 PIN_DIO2_MISO
+#define RFM97CW_DIO3 PIN_DIO3_RST
+#define RFM97CW_DIO4 PIN_DIO4_DIO5
+#define RFM97CW_DIO5 PIN_DIO5_DIO2
+
+#endif
