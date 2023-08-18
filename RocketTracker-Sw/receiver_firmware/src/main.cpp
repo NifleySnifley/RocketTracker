@@ -1,5 +1,4 @@
 #define PICO_BOOT_STAGE2_CHOOSE_W25Q080 1
-// #define PICO_BOOT_STAGE2_CHOOSE_GENERIC_03H 1
 #define PICO_FLASH_SIZE_BYTES (4 * 1024 * 1024)
 #define PICO_FLASH_SPI_CLKDIV 2
 #define PICO_XOSC_STARTUP_DELAY_MULTIPLIER 64
@@ -15,23 +14,32 @@
 #include <pb_encode.h>
 #include <pb_decode.h>
 #include "protocol.pb.h"
+#include "comms/frame_manager.h"
 
-RFM97_LoRa radio(spi0, RFM97CW_CS, RFM97CW_DIO0, RFM97CW_RST, RFM97CW_MOSI, RFM97CW_MISO, RFM97CW_SCK);
+RFM97_LoRa radio(spi0, RFM97CW_CS, RFM97CW_DIO0, RFM97CW_RST, RFM97CW_MOSI, RFM97CW_MISO, RFM97CW_SCK, true);
+FrameManager fmg;
 
 uint8_t payload[] = "Hello World";
 
-float radio_snr;
-int radio_rssi;
+float radio_snr = 0;
+int radio_rssi = 0;
 auto_init_mutex(rdata_mutex);
 
-void dio0_isr(uint gpio, uint32_t events) {
-	radio.onInterrupt(gpio, events);
+void ISR_A(uint gpio, uint32_t events) {
+	// gpio_put(PIN_LED_G, 1);
+	radio.ISR_A(gpio, events);
+}
+
+void ISR_B() {
+	// gpio_put(PIN_LED_G, 1);
+	radio.ISR_B();
 }
 
 #define MS_SEND 2000
 #define MS_LED 100
 #define MSG_TXT "Testing sending some data!"
 
+// Runs on core 2, display/UI
 void core2() {
 	ssd1306_t display;
 
@@ -66,6 +74,14 @@ void core2() {
 	}
 }
 
+void read_datum(int i, MessageTypeID id, int len, uint8_t* data) {
+	printf("\tDatum ID %d of length %d\n", (int)id, len);
+	printf("\t\t");
+	for (int i = 0; i < len; ++i)
+		printf("%.2x ", data[i]);
+	printf("\n");
+}
+
 int main() {
 	stdio_init_all();
 
@@ -75,30 +91,58 @@ int main() {
 	gpio_set_dir(PIN_LED_R, GPIO_OUT);
 	gpio_init(PIN_LED_G);
 	gpio_set_dir(PIN_LED_G, GPIO_OUT);
+	gpio_put(PIN_LED_G, 0);
+
 
 	radio.init();
-	radio.setISR(dio0_isr);
+	radio.setISRA(ISR_A);
+	radio.setISRB(ISR_B);
+	radio.setPower(20, true); // Low-er power for testing :)
+	radio.setFreq(914.0);
 	radio.startReceiving();
-	radio.setFreq(915.0);
 
 	absolute_time_t ledr_d = get_absolute_time(), ledg_d = get_absolute_time(), send_d = make_timeout_time_ms(MS_SEND);
 	while (true) {
 		absolute_time_t t = get_absolute_time();
 
 		if (absolute_time_diff_us(get_absolute_time(), send_d) < 0) {
-			Raw_Datum msg = (Raw_Datum){
-				{strlen(MSG_TXT), MSG_TXT}
-			}; // (I hate C++ inline struct initialization)
+			GPS_Info gpsinfo;
+			gpsinfo.alt = 200.0;
+			gpsinfo.fix_status = 123;
+			gpsinfo.utc_time = 112233444;
+			gpsinfo.lat = 10.0;
+			gpsinfo.lon = 20.0;
+			gpsinfo.has_fix_status = true;
+			gpsinfo.has_sats_used = false;
 
-			uint8_t buffer[256];
-			pb_ostream_t stream = pb_ostream_from_buffer(buffer, sizeof(buffer));
-			pb_encode(&stream, Raw_Datum_fields, &msg);
+			Altitude_Info altinfo;
+			altinfo.alt_m = 500.65;
+			altinfo.v_speed = 1002.6;
+			altinfo.has_v_speed = true;
 
-			printf("Sending... ");
-			radio.transmit(payload, sizeof(payload), true);
-			printf("Sent!\n");
+			Orientation_Info orientinfo;
+			orientinfo.orientation_x = 1.41;
+			orientinfo.orientation_y = 1.41;
+			orientinfo.orientation_z = 1.41;
+
+			Battery_Info battinfo;
+			battinfo.battery_voltage = 3.65;
+			battinfo.charging = false;
+
+			fmg.reset();
+			fmg.encode_datum(MessageTypeID_TLM_GPS_Info, GPS_Info_fields, &gpsinfo);
+			fmg.encode_datum(MessageTypeID_TLM_Altitude_Info, Altitude_Info_fields, &altinfo);
+			fmg.encode_datum(MessageTypeID_TLM_Orientation_Info, Orientation_Info_fields, &orientinfo);
+			fmg.encode_datum(MessageTypeID_TLM_Battery_Info, Battery_Info_fields, &battinfo);
+
+			int s = 0;
+			uint8_t* data = fmg.get_frame(&s);
+			// printf("Sending... %d ", s);
+
+			radio.transmit(data, s, true);
+
+			// printf("Sent!\n");
 			send_d = make_timeout_time_ms(MS_SEND);
-
 			ledr_d = make_timeout_time_ms(MS_LED);
 		}
 
@@ -110,13 +154,17 @@ int main() {
 			}
 			mutex_exit(&rdata_mutex);
 
-			printf("Packet (%d) received, SNR: %f, RSSI: %d\n", radio.lastRxLen, radio.getSNR(), radio.getRSSI());
-			printf("Hex: ");
-			for (int i = 0; i < radio.lastRxLen; ++i)
-				printf("%02x ", radio.rxbuf[i]);
-			printf("\n");
-			printf("String: %.*s", radio.lastRxLen, radio.rxbuf);
-			printf("\n");
+			// printf("Packet (%d) received, SNR: %f, RSSI: %d\n", radio.lastRxLen, radio.getSNR(), radio.getRSSI());
+			// fmg.reset();
+			// fmg.load_frame((uint8_t*)radio.rxbuf, radio.lastRxLen);
+			// fmg.decode_frame(read_datum);
+			// printf("Hex: ");
+			// for (int i = 0; i < radio.lastRxLen; ++i)
+			// 	printf("%02x ", radio.rxbuf[i]);
+			// printf("\n");
+			// printf("String: %.*s", radio.lastRxLen, radio.rxbuf);
+			// printf("\n\n");
+
 			ledg_d = make_timeout_time_ms(100);
 		}
 

@@ -1,5 +1,5 @@
-#ifndef FRAME_SERIALIZER_H
-#define FRAME_SERIALIZER_H
+#ifndef FRAME_MANAGER_H
+#define FRAME_MANAGER_H
 
 #include <stdint.h>
 #include <protocol.pb.h>

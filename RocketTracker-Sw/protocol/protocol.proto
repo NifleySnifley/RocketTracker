@@ -15,8 +15,8 @@ message Battery_Info {
 	required bool charging = 2;
 }
 
-message Raw_Datum {
-	required bytes data = 1 [(nanopb).max_size = 128];
+message Raw {
+	required bytes data = 1 [(nanopb).max_size = 252];
 }
 
 message Altitude_Info {
@@ -49,7 +49,7 @@ message Alert {
 enum MessageTypeID {
 	// Telemetry
 	TLM_Blank = 0;
-	TLM_Raw_Datum = 1;
+	TLM_Raw = 1;
 	TLM_Battery_Info = 2;
 	TLM_GPS_Info = 3;
 	TLM_Altitude_Info = 4;

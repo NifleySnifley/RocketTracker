@@ -1,10 +1,11 @@
-#include <frame_manager.h>
+#include "frame_manager.h"
 
 FrameManager::FrameManager() {
 	reset();
 }
 
 void FrameManager::reset() {
+	this->cur_frame_len = 0;
 	this->frame.id = 0;
 	memset(this->tmp_buf, 0, sizeof(this->tmp_buf));
 	n_datum_encoded = 0;

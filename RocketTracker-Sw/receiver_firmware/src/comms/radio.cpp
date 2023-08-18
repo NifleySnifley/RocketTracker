@@ -5,6 +5,10 @@
 #include <stdio.h>
 #include "pico/stdlib.h"
 #include "pico/binary_info.h"
+#include "hardware/sync.h"
+
+#define SPI_AQUIRE wait_spi(); spi_lock = true;
+#define SPI_RELEASE spi_lock = false;
 
 bool RFM97_LoRa::messageAvailable() {
 	if (state == RFM97_RadioState::RX_FINISHED) {
@@ -21,15 +25,23 @@ void RFM97_LoRa::reset() {
 	gpio_put(rst, 1);
 }
 
+void RFM97_LoRa::wait_spi() {
+	while (spi_lock) {
+		__wfe();
+	}
+}
+
 /// Sets register reg to value
 /// @param reg register address to write to
 /// @param value value to write
 void RFM97_LoRa::write(uint8_t reg, uint8_t value) {
+	SPI_AQUIRE;
 	uint8_t reg_b = reg | 0b10000000;
 	gpio_put(cs, 0);
 	spi_write_blocking(spi_inst, &reg_b, 1); // Addr and wnr bit set to 1 for write
 	spi_write_blocking(spi_inst, &value, 1);
 	gpio_put(cs, 1);
+	SPI_RELEASE;
 }
 
 /// Writes len bytes stored in dataptr to registers starting at start or into the FIFO
@@ -37,24 +49,28 @@ void RFM97_LoRa::write(uint8_t reg, uint8_t value) {
 /// @param dataptr data to write to consecutive addresses
 /// @param len amount of bytes to write
 void RFM97_LoRa::write(uint8_t start, uint8_t* dataptr, size_t len) {
+	SPI_AQUIRE;
 	uint8_t start_b = start | 0b10000000;
 	gpio_put(cs, 0);
 	spi_write_blocking(spi_inst, &start_b, 1);
 	for (size_t i = 0; i < len; ++i)
 		spi_write_blocking(spi_inst, &dataptr[i], 1);
 	gpio_put(cs, 1);
+	SPI_RELEASE;
 }
 
 /// Reads from register at address reg
 /// @param reg register address to read from
 /// @return value stored at address
 uint8_t RFM97_LoRa::read(uint8_t reg) {
+	SPI_AQUIRE;
 	uint8_t reg_b = reg & 0b01111111;
 	gpio_put(cs, 0);
 	spi_write_blocking(spi_inst, &reg_b, 1); // Addr and wnr bit set to 0 for read
 	uint8_t value;
 	spi_read_blocking(spi_inst, 0xFF, &value, 1);
 	gpio_put(cs, 1);
+	SPI_RELEASE;
 
 	return value;
 }
@@ -64,11 +80,13 @@ uint8_t RFM97_LoRa::read(uint8_t reg) {
 /// @param dataout buffer to store read bytes into (must be at least len bytes)
 /// @param len number of bytes to read
 void RFM97_LoRa::read(uint8_t start, uint8_t* dataout, size_t len) {
+	SPI_AQUIRE;
 	uint8_t start_b = start & 0b01111111;
 	gpio_put(cs, 0);
 	spi_write_blocking(spi_inst, &start_b, 1); // Addr and wnr bit set to 0 for read
 	spi_read_blocking(spi_inst, 0xFF, dataout, len);
 	gpio_put(cs, 1);
+	SPI_RELEASE;
 }
 
 /// Writes n bytes to the FIFO
@@ -76,12 +94,34 @@ void RFM97_LoRa::read(uint8_t start, uint8_t* dataout, size_t len) {
 /// @param n number of bytes to write
 /// @param offset where to start writing
 /// @return true if parameters are valid, if not, writing is aborted
-bool RFM97_LoRa::writeFIFO(uint8_t* bytes, size_t n, uint8_t offset = 0) {
-	ASSURE(offset + n < 256);
+bool RFM97_LoRa::writeFIFO(uint8_t* bytes, size_t n) {
+	ASSURE(n <= 256);
 	ASSURE(n > 0);
 
-	write(SX1276_REG_FIFO_ADDR_PTR, offset);
 	write(SX1276_REG_FIFO, bytes, n);
+
+	return true;
+}
+
+
+bool RFM97_LoRa::writeFIFO_DMA(uint8_t* bytes, size_t n) {
+	ASSURE(n <= 256);
+	ASSURE(n > 0);
+
+	uint8_t w = SX1276_REG_FIFO & 0b01111111;
+
+	SPI_AQUIRE;
+	gpio_put(cs, 0);
+	spi_write_blocking(spi_inst, &w, 1);
+
+	hw_clear_bits(&dma_hw->ch[dma_RX].al1_ctrl, DMA_CH0_CTRL_TRIG_INCR_WRITE_BITS);
+	hw_clear_bits(&dma_hw->ch[dma_RX].al1_ctrl, DMA_CH0_CTRL_TRIG_INCR_READ_BITS);
+
+	hw_set_bits(&dma_hw->ch[dma_TX].al1_ctrl, DMA_CH0_CTRL_TRIG_INCR_READ_BITS);
+	hw_clear_bits(&dma_hw->ch[dma_TX].al1_ctrl, DMA_CH0_CTRL_TRIG_INCR_WRITE_BITS);
+
+	dma_channel_transfer_to_buffer_now(dma_RX, &dma_dummy, n);
+	dma_channel_transfer_from_buffer_now(dma_TX, bytes, n);
 
 	return true;
 }
@@ -91,12 +131,35 @@ bool RFM97_LoRa::writeFIFO(uint8_t* bytes, size_t n, uint8_t offset = 0) {
 /// @param n number of bytes to read
 /// @param offset where to start reading
 /// @return true if parameters are valid, if not, reading is aborted
-bool RFM97_LoRa::readFIFO(uint8_t* bytes, size_t n, uint8_t offset = 0) {
-	ASSURE(offset + n < 256);
-	ASSURE(offset >= 0 && n > 0);
+bool RFM97_LoRa::readFIFO(uint8_t* bytes, size_t n) {
+	ASSURE(n <= 256);
+	ASSURE(n > 0);
 
-	write(SX1276_REG_FIFO_ADDR_PTR, offset);
+	// write(SX1276_REG_FIFO_ADDR_PTR, offset);
 	read(SX1276_REG_FIFO, bytes, n);
+
+	return true;
+}
+
+bool RFM97_LoRa::readFIFO_DMA(volatile uint8_t* bytes, size_t n) {
+	ASSURE(n <= 256);
+	ASSURE(n > 0);
+
+	uint8_t w = SX1276_REG_FIFO & 0b01111111;
+
+	SPI_AQUIRE;
+	gpio_put(cs, 0);
+	spi_write_blocking(spi_inst, &w, 1);
+	// read(SX1276_REG_FIFO, (uint8_t*)bytes, n);
+
+	hw_set_bits(&dma_hw->ch[dma_RX].al1_ctrl, DMA_CH0_CTRL_TRIG_INCR_WRITE_BITS);
+	hw_clear_bits(&dma_hw->ch[dma_RX].al1_ctrl, DMA_CH0_CTRL_TRIG_INCR_READ_BITS);
+
+	hw_clear_bits(&dma_hw->ch[dma_TX].al1_ctrl, DMA_CH0_CTRL_TRIG_INCR_READ_BITS);
+	hw_clear_bits(&dma_hw->ch[dma_TX].al1_ctrl, DMA_CH0_CTRL_TRIG_INCR_WRITE_BITS);
+
+	dma_channel_transfer_to_buffer_now(dma_RX, bytes, n);
+	dma_channel_transfer_from_buffer_now(dma_TX, &dma_dummy, n);
 
 	return true;
 }
@@ -107,7 +170,7 @@ void RFM97_LoRa::initFIFO() {
 	write(SX1276_REG_FIFO_TX_BASEADDR, 0x00);
 }
 
-RFM97_LoRa::RFM97_LoRa(spi_inst_t* SPI, int CS, int DIO0, int RST, int STX, int SRX, int SCK) : spi_inst(SPI), cs(CS), rst(RST), dio0(DIO0), sck(SCK), stx(STX), srx(SRX) {}
+RFM97_LoRa::RFM97_LoRa(spi_inst_t* SPI, int CS, int DIO0, int RST, int STX, int SRX, int SCK, bool use_dma) : spi_inst(SPI), cs(CS), rst(RST), dio0(DIO0), sck(SCK), stx(STX), srx(SRX), use_dma(use_dma) {}
 
 bool RFM97_LoRa::spiInit(uint baud) {
 	ASSURE(spi_init(spi_inst, baud));
@@ -136,6 +199,26 @@ bool RFM97_LoRa::init() {
 
 	// SPI Init
 	ASSURE(spiInit(1000 * 1000));
+
+	dma_TX = dma_claim_unused_channel(true);
+	dma_RX = dma_claim_unused_channel(true);
+
+	// DMA Init
+	dma_channel_config cfg = dma_channel_get_default_config(dma_TX);
+	channel_config_set_transfer_data_size(&cfg, DMA_SIZE_8);
+	channel_config_set_dreq(&cfg, spi_get_dreq(spi_inst, true));
+	channel_config_set_write_increment(&cfg, false);
+	dma_channel_configure(dma_TX, &cfg, &spi_get_hw(spi_inst)->dr, 0, 0, false);
+
+	cfg = dma_channel_get_default_config(dma_RX);
+	channel_config_set_transfer_data_size(&cfg, DMA_SIZE_8);
+	channel_config_set_dreq(&cfg, spi_get_dreq(spi_inst, false));
+	channel_config_set_read_increment(&cfg, false);
+	dma_channel_configure(dma_RX, &cfg, 0, &spi_get_hw(spi_inst)->dr, 0, false);
+
+	dma_channel_set_irq0_enabled(dma_RX, true);
+	dma_channel_set_irq0_enabled(dma_TX, false);
+	irq_set_enabled(DMA_IRQ_0, true);
 
 	reset();
 
@@ -205,9 +288,15 @@ void RFM97_LoRa::configure() {
 }
 
 /// @param func ISR function to be called when DIO0 rises. the ISR MUST call onInterrupt() for proper behavior of the radio.
-void RFM97_LoRa::setISR(gpio_irq_callback_t func) {
+void RFM97_LoRa::setISRA(gpio_irq_callback_t func) {
 	gpio_set_irq_enabled_with_callback(dio0, GPIO_IRQ_EDGE_RISE, true, func);
 }
+
+/// @param func ISR function to be called when DMA completes. the ISR MUST call onInterrupt() for proper behavior of the radio.
+void RFM97_LoRa::setISRB(irq_handler_t func) {
+	irq_set_exclusive_handler(DMA_IRQ_0, func);
+}
+
 
 void RFM97_LoRa::standby() {
 	setMode(SX1276_MODE_STDBY);
@@ -488,10 +577,17 @@ void RFM97_LoRa::setOCP(bool enabled, uint8_t trim = 0x0b) {
 
 // Called by a ISR on DIO0
 // Updates the radio's state machine based on radio IRQs
-void RFM97_LoRa::onInterrupt(uint gpio, uint32_t events) {
+void RFM97_LoRa::ISR_A(uint gpio, uint32_t events) {
+	clearIRQ();
+	// printf("ISR_A\n");
 	switch (state) {
 		case RFM97_RadioState::TX_WAITING:
-			state = RFM97_RadioState::TX_FINISHED;
+			clearIRQ();
+			if (tx_state_go_rx) startReceiving();
+			else {
+				standby();
+				state = RFM97_RadioState::STANDBY;
+			}
 			break;
 			// case RFM97_RadioState::RX_FINISHED:
 		case RFM97_RadioState::RX_WAITING:
@@ -500,43 +596,70 @@ void RFM97_LoRa::onInterrupt(uint gpio, uint32_t events) {
 		default:
 			return;
 	};
-	clearIRQ();
+}
+
+void RFM97_LoRa::ISR_B() {
+	hw_clear_bits(&dma_hw->ints0, 1u << dma_RX || 1u << dma_TX);
+	gpio_put(cs, 1);
+	SPI_RELEASE;
+
+	if (state == RFM97_RadioState::RX_DMA) {
+		state = RFM97_RadioState::RX_FINISHED;
+
+	} else if (state == RFM97_RadioState::TX_DMA) {
+		setMode(SX1276_MODE_TX); // Transmit
+		state = RFM97_RadioState::TX_WAITING;
+	}
 }
 
 void RFM97_LoRa::startReceiving() {
+	// while (!(state == RFM97_RadioState::RX_WAITING || state == RFM97_RadioState::STANDBY)) {
+	// 	__wfe();
+	// };
+
 	standby();
 	state = RFM97_RadioState::RX_WAITING;
 	configDIO(0, SX1276_DIO0_RX_DONE);
 	setMode(SX1276_MODE_RXCONTINUOUS);
 }
 
-bool RFM97_LoRa::transmit(uint8_t* data, size_t len, bool return_to_rx = false) {
-	ASSURE(len > 0 && len < 256);
+bool RFM97_LoRa::transmit(uint8_t* data, size_t len, bool return_to_rx = true) {
+	ASSURE(len > 0 && len <= 256);
+	tx_state_go_rx = return_to_rx;
+
+	// Wait for safe state to transmit, no way around it, maybe add a fail-poll mode?
+	while (!(state == RFM97_RadioState::RX_WAITING || state == RFM97_RadioState::STANDBY)) {
+		__wfe();
+	};
 
 	standby();
-	clearIRQ();
-
-	write(SX1276_REG_PAYLOADLENGTH, (uint8_t)len);
-	writeFIFO(data, len, 0);
-
 	ASSURE(configDIO(0, SX1276_DIO0_TX_DONE));
 	clearIRQ();
 
-	state = RFM97_RadioState::TX_WAITING;
-	setMode(SX1276_MODE_TX);
+	write(SX1276_REG_PAYLOADLENGTH, (uint8_t)len);
 
-	// Wait for the transmit done IRQ
-	// TODO: improve for async receiving (start receive and prep IRQ state to cleanup when done)
-	while (state != RFM97_RadioState::TX_FINISHED) {
-		// sleep_ms(1);
-		// Busy-wait
+	if (use_dma) {
+		writeFIFO_DMA(data, len);
+		state = RFM97_RadioState::TX_DMA;
+		return true; // ISR_B handles transmit
+	} else {
+		writeFIFO(data, len);
+		state = RFM97_RadioState::TX_WAITING;
+		setMode(SX1276_MODE_TX); // Transmit
 	}
 
-	clearIRQ();
-	standby();
-	state = RFM97_RadioState::STANDBY;
 
-	if (return_to_rx) startReceiving();
+
+	// // Wait for the transmit done IRQ
+	// // TODO: improve for async receiving (start receive and prep IRQ state to cleanup when done)
+	// while (state != RFM97_RadioState::TX_FINISHED) {
+	// 	// sleep_ms(1);
+	// 	// Busy-wait
+	// }
+
+	// clearIRQ();
+	// standby();
+	// state = RFM97_RadioState::STANDBY;
 
 	return true;
 }
@@ -545,8 +668,14 @@ bool RFM97_LoRa::transmit(uint8_t* data, size_t len, bool return_to_rx = false) 
 // dio0 IRQ (dma start) -> DMA done IRQ (set rxdone state)
 void RFM97_LoRa::receive() {
 	lastRxLen = read(SX1276_REG_RX_NB_BYTES);
-	readFIFO(rxbuf, lastRxLen);
-	state = RFM97_RadioState::RX_FINISHED;
+
+	if (use_dma) {
+		readFIFO_DMA(rxbuf, lastRxLen);
+		state = RFM97_RadioState::RX_DMA;
+	} else {
+		readFIFO((uint8_t*)rxbuf, lastRxLen);
+		state = RFM97_RadioState::RX_FINISHED;
+	}
 }
 
 /// @return true if a message was successfully received in the timeout period, false if timed out

@@ -2,6 +2,8 @@
 #define RADIO_H
 
 #include <hardware/spi.h>
+#include <hardware/dma.h>
+#include <hardware/irq.h>
 
 #define SX1276_REG_FIFO 0x00
 #define SX1276_REG_OPMODE 0x01
@@ -178,8 +180,10 @@
 
 enum class RFM97_RadioState {
 	TX_WAITING,
+	TX_DMA,
 	TX_FINISHED,
 	RX_WAITING,
+	RX_DMA,
 	RX_FINISHED,
 	SLEEP,
 	STANDBY,
@@ -191,14 +195,23 @@ private:
 	int rst, dio0;
 	int srx, stx, cs, sck;
 	spi_inst_t* spi_inst;
+	bool use_dma = true;
 
-	volatile RFM97_RadioState state = RFM97_RadioState::SLEEP;
+	volatile RFM97_RadioState state;
+
+	int dma_RX, dma_TX;
+	uint8_t dma_dummy = 0xFF; // Need an address with blank data for reading SPI with DMA
+	volatile bool spi_lock;
+
+	bool tx_state_go_rx;
+
+	void wait_spi();
 
 public:
-	uint8_t rxbuf[256];
-	uint8_t lastRxLen;
+	volatile uint8_t rxbuf[256];
+	volatile uint8_t lastRxLen;
 
-	RFM97_LoRa(spi_inst_t* SPI, int CS, int DIO0, int RST, int STX, int SRX, int SCK);
+	RFM97_LoRa(spi_inst_t* SPI, int CS, int DIO0, int RST, int STX, int SRX, int SCK, bool use_dma = true);
 
 	bool messageAvailable();
 
@@ -231,14 +244,19 @@ public:
 	/// @param n number of bytes to write
 	/// @param offset where to start writing
 	/// @return true if parameters are valid, if not, writing is aborted
-	bool writeFIFO(uint8_t* bytes, size_t n, uint8_t offset);
+	bool writeFIFO(uint8_t* bytes, size_t n);
+
+	bool writeFIFO_DMA(uint8_t* bytes, size_t n);
 
 	/// Reads n bytes from the FIFO
 	/// @param bytes buffer to store the read bytes (must have capacity for n bytes)
 	/// @param n number of bytes to read
 	/// @param offset where to start reading
 	/// @return true if parameters are valid, if not, reading is aborted
-	bool readFIFO(uint8_t* bytes, size_t n, uint8_t offset);
+	bool readFIFO(uint8_t* bytes, size_t n);
+
+	bool readFIFO_DMA(volatile uint8_t* bytes, size_t n);
+
 	// Make sure all of the FIFO pointers are correct
 	void initFIFO();
 
@@ -249,8 +267,10 @@ public:
 
 	void configure();
 
-	/// @param func ISR function to be called when DIO0 rises. the ISR MUST call onInterrupt() for proper behavior of the radio.
-	void setISR(gpio_irq_callback_t func);
+	/// @param func ISR function to be called when DIO0 rises. the ISR MUST call ISR_A() for proper behavior of the radio.
+	void setISRA(gpio_irq_callback_t func);
+	/// @param func ISR function to be called when DIO0 rises. the ISR MUST call ISR_B() for proper behavior of the radio.
+	void setISRB(irq_handler_t func);
 
 	void standby();
 
@@ -331,7 +351,10 @@ public:
 
 	// Called by a ISR on DIO0
 	// Updates the radio's state machine based on radio IRQs
-	void onInterrupt(uint gpio, uint32_t events);
+	void ISR_A(uint gpio, uint32_t events);
+
+	// Used by DMA controller
+	void ISR_B();
 
 	void startReceiving();
 
