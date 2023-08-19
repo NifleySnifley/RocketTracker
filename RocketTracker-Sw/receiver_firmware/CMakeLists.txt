@@ -23,12 +23,23 @@ add_executable(receiver_firmware
 	src/comms/radio.cpp
 	src/comms/frame_manager.cpp
 	src/display/ssd1306.cpp
+	src/usb_descriptors.c
 	${PROTO_SRCS} ${PROTO_HDRS}
 )
 
+target_include_directories(receiver_firmware PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
 pico_sdk_init()
 
-target_link_libraries(receiver_firmware pico_stdlib pico_multicore hardware_dma hardware_spi hardware_i2c)
+target_link_libraries(receiver_firmware 
+	pico_stdlib 
+	pico_multicore 
+	hardware_dma 
+	hardware_spi 
+	hardware_i2c 
+	tinyusb_device 
+	tinyusb_board
+)
 
 pico_enable_stdio_usb(receiver_firmware 1)
 pico_enable_stdio_uart(receiver_firmware 0)

@@ -3,6 +3,9 @@
 #define PICO_FLASH_SPI_CLKDIV 2
 #define PICO_XOSC_STARTUP_DELAY_MULTIPLIER 64
 
+#include "bsp/board.h"
+#include "tusb.h"
+
 #include <stdio.h>
 #include "pico/stdlib.h"
 #include "pico/multicore.h"
@@ -15,6 +18,7 @@
 #include <pb_decode.h>
 #include "protocol.pb.h"
 #include "comms/frame_manager.h"
+#include "tusb.h"
 
 RFM97_LoRa radio(spi0, RFM97CW_CS, RFM97CW_DIO0, RFM97CW_RST, RFM97CW_MOSI, RFM97CW_MISO, RFM97CW_SCK, true);
 FrameManager fmg;
@@ -83,7 +87,8 @@ void read_datum(int i, MessageTypeID id, int len, uint8_t* data) {
 }
 
 int main() {
-	stdio_init_all();
+	tud_init(BOARD_TUD_RHPORT);
+	stdio_usb_init();
 
 	multicore_launch_core1(core2);
 
@@ -103,6 +108,7 @@ int main() {
 
 	absolute_time_t ledr_d = get_absolute_time(), ledg_d = get_absolute_time(), send_d = make_timeout_time_ms(MS_SEND);
 	while (true) {
+		tud_task();
 		absolute_time_t t = get_absolute_time();
 
 		if (absolute_time_diff_us(get_absolute_time(), send_d) < 0) {
@@ -144,6 +150,11 @@ int main() {
 			// printf("Sent!\n");
 			send_d = make_timeout_time_ms(MS_SEND);
 			ledr_d = make_timeout_time_ms(MS_LED);
+
+			tud_cdc_n_write_str(0, "CDC0\r\n");
+			tud_cdc_n_write_flush(0);
+			tud_cdc_n_write_str(1, "CDC1\r\n");
+			tud_cdc_n_write_flush(1);
 		}
 
 		if (radio.messageAvailable()) {

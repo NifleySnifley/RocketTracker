@@ -27,6 +27,14 @@
 		"initializer_list": "cpp",
 		"ranges": "cpp",
 		"random": "cpp",
-		"string": "cpp"
+		"string": "cpp",
+		"cmath": "c",
+		"limits": "c",
+		"usb_descriptors.h": "c",
+		"reset_interface.h": "c",
+		"usb_reset_interface.h": "c",
+		"unique_id.h": "c",
+		"stdio_usb.h": "c",
+		"bootrom.h": "c"
 	}
 }
