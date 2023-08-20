@@ -19,11 +19,24 @@
 #include "protocol.pb.h"
 #include "comms/frame_manager.h"
 #include "tusb.h"
+#include "math.h"
+#include "vgps.h"
+
+static const RFM97_LoRa_config RFM97_CFG_DEFAULT{
+	.frf = 914.0,
+	.power = 20,
+	.sf = 12,
+	.cr = 5,
+	.bw_mode = SX1276_BANDWIDTH_125KHZ
+};
 
 RFM97_LoRa radio(spi0, RFM97CW_CS, RFM97CW_DIO0, RFM97CW_RST, RFM97CW_MOSI, RFM97CW_MISO, RFM97CW_SCK, true);
 FrameManager fmg;
+RFM97_LoRa_config radioconfig = RFM97_CFG_DEFAULT;
 
-uint8_t payload[] = "Hello World";
+absolute_time_t gps_last_update = at_the_end_of_time;
+bool gps_fresh = false;
+GPS_Info current_gps;
 
 float radio_snr = 0;
 int radio_rssi = 0;
@@ -41,7 +54,8 @@ void ISR_B() {
 
 #define MS_SEND 2000
 #define MS_LED 100
-#define MSG_TXT "Testing sending some data!"
+#define MS_VGPS_NMEA 1500 // 1.5 seconds
+#define GPS_STALE_US 10 * 1000 * 1000 // 10 seconds
 
 // Runs on core 2, display/UI
 void core2() {
@@ -79,11 +93,17 @@ void core2() {
 }
 
 void read_datum(int i, MessageTypeID id, int len, uint8_t* data) {
-	printf("\tDatum ID %d of length %d\n", (int)id, len);
-	printf("\t\t");
-	for (int i = 0; i < len; ++i)
-		printf("%.2x ", data[i]);
-	printf("\n");
+	if (id == MessageTypeID_TLM_GPS_Info) {
+		pb_istream_t stream = pb_istream_from_buffer(data, len);
+		pb_decode(&stream, GPS_Info_fields, &current_gps);
+		gps_fresh = true;
+	}
+
+	// printf("\tDatum ID %d of length %d\n", (int)id, len);
+	// printf("\t\t");
+	// for (int i = 0; i < len; ++i)
+	// 	printf("%.2x ", data[i]);
+	// printf("\n");
 }
 
 int main() {
@@ -98,10 +118,10 @@ int main() {
 	gpio_set_dir(PIN_LED_G, GPIO_OUT);
 	gpio_put(PIN_LED_G, 0);
 
-
 	radio.init();
 	radio.setISRA(ISR_A);
 	radio.setISRB(ISR_B);
+	// radio.applyConfig(radioconfig);
 	radio.setPower(20, true); // Low-er power for testing :)
 	radio.setFreq(914.0);
 	radio.startReceiving();
@@ -111,13 +131,13 @@ int main() {
 		tud_task();
 		absolute_time_t t = get_absolute_time();
 
-		if (absolute_time_diff_us(get_absolute_time(), send_d) < 0) {
+		if (absolute_time_diff_us(t, send_d) < 0) {
 			GPS_Info gpsinfo;
 			gpsinfo.alt = 200.0;
-			gpsinfo.fix_status = 123;
-			gpsinfo.utc_time = 112233444;
-			gpsinfo.lat = 10.0;
-			gpsinfo.lon = 20.0;
+			gpsinfo.fix_status = 1;
+			gpsinfo.utc_time = 161229487;
+			gpsinfo.lat = 46.24897362189417;
+			gpsinfo.lon = -92.43390039973657;
 			gpsinfo.has_fix_status = true;
 			gpsinfo.has_sats_used = false;
 
@@ -143,18 +163,13 @@ int main() {
 
 			int s = 0;
 			uint8_t* data = fmg.get_frame(&s);
-			// printf("Sending... %d ", s);
+			printf("Sending... %d ", s);
 
 			radio.transmit(data, s, true);
 
-			// printf("Sent!\n");
+			printf("Sent!\n");
 			send_d = make_timeout_time_ms(MS_SEND);
 			ledr_d = make_timeout_time_ms(MS_LED);
-
-			tud_cdc_n_write_str(0, "CDC0\r\n");
-			tud_cdc_n_write_flush(0);
-			tud_cdc_n_write_str(1, "CDC1\r\n");
-			tud_cdc_n_write_flush(1);
 		}
 
 		if (radio.messageAvailable()) {
@@ -165,18 +180,22 @@ int main() {
 			}
 			mutex_exit(&rdata_mutex);
 
+			fmg.reset();
+			fmg.load_frame((uint8_t*)radio.rxbuf, radio.lastRxLen);
+			fmg.decode_frame(read_datum);
+
 			// printf("Packet (%d) received, SNR: %f, RSSI: %d\n", radio.lastRxLen, radio.getSNR(), radio.getRSSI());
-			// fmg.reset();
-			// fmg.load_frame((uint8_t*)radio.rxbuf, radio.lastRxLen);
-			// fmg.decode_frame(read_datum);
 			// printf("Hex: ");
 			// for (int i = 0; i < radio.lastRxLen; ++i)
 			// 	printf("%02x ", radio.rxbuf[i]);
-			// printf("\n");
-			// printf("String: %.*s", radio.lastRxLen, radio.rxbuf);
 			// printf("\n\n");
 
 			ledg_d = make_timeout_time_ms(100);
+		}
+
+		if (gps_fresh) {
+			gps_fresh = false;
+			write_fake_gps(&current_gps);
 		}
 
 		t = get_absolute_time();

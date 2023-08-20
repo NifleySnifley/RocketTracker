@@ -189,6 +189,14 @@ enum class RFM97_RadioState {
 	STANDBY,
 };
 
+typedef struct RFM97_LoRa_config {
+	double frf;
+	int power;
+	uint8_t sf;
+	uint8_t cr;
+	uint8_t bw_mode;
+} RFM97_LoRa_config;
+
 class RFM97_LoRa {
 private:
 	// GPIO connections
@@ -362,6 +370,10 @@ public:
 
 	// Doesn't actually receive, but collects recently received data
 	void receive();
+
+	bool applyConfig(RFM97_LoRa_config cfg);
+
+	void wait_for_safe_state();
 };
 
 #endif

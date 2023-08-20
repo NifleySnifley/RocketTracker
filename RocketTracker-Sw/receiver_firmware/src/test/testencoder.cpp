@@ -4,10 +4,10 @@
 int main(int argc, char const* argv[]) {
 	GPS_Info gpsinfo;
 	gpsinfo.alt = 200.0;
-	gpsinfo.fix_status = 123;
-	gpsinfo.utc_time = 112233444;
-	gpsinfo.lat = 10.0;
-	gpsinfo.lon = 20.0;
+	gpsinfo.fix_status = 1;
+	gpsinfo.utc_time = 161229487;
+	gpsinfo.lat = 46.24897362189417;
+	gpsinfo.lon = -92.43390039973657;
 	gpsinfo.has_fix_status = true;
 	gpsinfo.has_sats_used = false;
 

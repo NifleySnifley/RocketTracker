@@ -36,4 +36,7 @@
 #define RFM97CW_DIO4 PIN_DIO4_DIO5
 #define RFM97CW_DIO5 PIN_DIO5_DIO2
 
+#define ITF_TELEM 0
+#define ITF_VGPS 1
+
 #endif

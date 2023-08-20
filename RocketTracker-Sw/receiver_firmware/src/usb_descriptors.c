@@ -119,12 +119,7 @@ uint8_t const desc_fs_configuration[] =
 uint8_t const* tud_descriptor_configuration_cb(uint8_t index) {
 	(void)index; // for multiple configurations
 
-#if TUD_OPT_HIGH_SPEED
-	// Although we are highspeed, host may be fullspeed.
-	return (tud_speed_get() == TUSB_SPEED_HIGH) ? desc_hs_configuration : desc_fs_configuration;
-#else
 	return desc_fs_configuration;
-#endif
 }
 
 //--------------------------------------------------------------------+
@@ -203,7 +198,7 @@ uint16_t const* tud_descriptor_string_cb(uint8_t index, uint16_t langid) {
 
 // Implement "magic baud" reset functionality for easier development
 void tud_cdc_line_coding_cb(uint8_t itf, cdc_line_coding_t const* p_line_coding) {
-	if (p_line_coding->bit_rate == 1200) {
+	if (p_line_coding->bit_rate == 110) {
 		reset_usb_boot(0, PICO_STDIO_USB_RESET_BOOTSEL_INTERFACE_DISABLE_MASK);
 	}
 }

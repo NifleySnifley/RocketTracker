@@ -108,7 +108,10 @@ bool RFM97_LoRa::writeFIFO_DMA(uint8_t* bytes, size_t n) {
 	ASSURE(n <= 256);
 	ASSURE(n > 0);
 
-	uint8_t w = SX1276_REG_FIFO & 0b01111111;
+	write(SX1276_REG_FIFO_TX_BASEADDR, 0x00);
+	write(SX1276_REG_FIFO_ADDR_PTR, 0x00);
+
+	uint8_t w = SX1276_REG_FIFO | 0b10000000;
 
 	SPI_AQUIRE;
 	gpio_put(cs, 0);
@@ -147,6 +150,8 @@ bool RFM97_LoRa::readFIFO_DMA(volatile uint8_t* bytes, size_t n) {
 
 	uint8_t w = SX1276_REG_FIFO & 0b01111111;
 
+	initFIFO();
+
 	SPI_AQUIRE;
 	gpio_put(cs, 0);
 	spi_write_blocking(spi_inst, &w, 1);
@@ -158,6 +163,7 @@ bool RFM97_LoRa::readFIFO_DMA(volatile uint8_t* bytes, size_t n) {
 	hw_clear_bits(&dma_hw->ch[dma_TX].al1_ctrl, DMA_CH0_CTRL_TRIG_INCR_READ_BITS);
 	hw_clear_bits(&dma_hw->ch[dma_TX].al1_ctrl, DMA_CH0_CTRL_TRIG_INCR_WRITE_BITS);
 
+	dma_dummy = 0xFF;
 	dma_channel_transfer_to_buffer_now(dma_RX, bytes, n);
 	dma_channel_transfer_from_buffer_now(dma_TX, &dma_dummy, n);
 
@@ -168,6 +174,7 @@ bool RFM97_LoRa::readFIFO_DMA(volatile uint8_t* bytes, size_t n) {
 void RFM97_LoRa::initFIFO() {
 	write(SX1276_REG_FIFO_RX_BASEADDR, 0x00);
 	write(SX1276_REG_FIFO_TX_BASEADDR, 0x00);
+	write(SX1276_REG_FIFO_ADDR_PTR, 0x00);
 }
 
 RFM97_LoRa::RFM97_LoRa(spi_inst_t* SPI, int CS, int DIO0, int RST, int STX, int SRX, int SCK, bool use_dma) : spi_inst(SPI), cs(CS), rst(RST), dio0(DIO0), sck(SCK), stx(STX), srx(SRX), use_dma(use_dma) {}
@@ -613,9 +620,7 @@ void RFM97_LoRa::ISR_B() {
 }
 
 void RFM97_LoRa::startReceiving() {
-	// while (!(state == RFM97_RadioState::RX_WAITING || state == RFM97_RadioState::STANDBY)) {
-	// 	__wfe();
-	// };
+	// wait_for_safe_state();
 
 	standby();
 	state = RFM97_RadioState::RX_WAITING;
@@ -628,9 +633,7 @@ bool RFM97_LoRa::transmit(uint8_t* data, size_t len, bool return_to_rx = true) {
 	tx_state_go_rx = return_to_rx;
 
 	// Wait for safe state to transmit, no way around it, maybe add a fail-poll mode?
-	while (!(state == RFM97_RadioState::RX_WAITING || state == RFM97_RadioState::STANDBY)) {
-		__wfe();
-	};
+	wait_for_safe_state();
 
 	standby();
 	ASSURE(configDIO(0, SX1276_DIO0_TX_DONE));
@@ -647,8 +650,6 @@ bool RFM97_LoRa::transmit(uint8_t* data, size_t len, bool return_to_rx = true) {
 		state = RFM97_RadioState::TX_WAITING;
 		setMode(SX1276_MODE_TX); // Transmit
 	}
-
-
 
 	// // Wait for the transmit done IRQ
 	// // TODO: improve for async receiving (start receive and prep IRQ state to cleanup when done)
@@ -678,19 +679,17 @@ void RFM97_LoRa::receive() {
 	}
 }
 
-/// @return true if a message was successfully received in the timeout period, false if timed out
-// TODO: Fix using the real-time modem status register and/or IRQ flags register and the symbol timeout
-// bool RFM97_LoRa::waitForRX(uint32_t timeout_ms = -1) {
-//     state = RFM97_RadioState::RX_WAITING;
-//     setMode(SX1276_MODE_RXSINGLE);
-//     configDIO(0, SX1276_DIO0_RX_DONE);
+bool RFM97_LoRa::applyConfig(RFM97_LoRa_config cfg) {
+	ASSURE(setFreq(cfg.frf));
+	ASSURE(setBandwidth(cfg.bw_mode));
+	ASSURE(setCodingRate(cfg.cr));
+	ASSURE(setSpreadingFactor(cfg.sf));
+	ASSURE(setPower(cfg.power, true));
+	return true;
+}
 
-//     uint32_t time_started = millis();
-//     while (state != RFM97_RadioState::RX_FINISHED) {
-//         // Timed out
-//         if ((millis() - time_started) >= timeout_ms) {
-//             standby();
-//             return false;
-//         }
-//     };
-// }
+void RFM97_LoRa::wait_for_safe_state() {
+	while (!(state == RFM97_RadioState::RX_WAITING || state == RFM97_RadioState::STANDBY)) {
+		__wfe();
+	};
+}

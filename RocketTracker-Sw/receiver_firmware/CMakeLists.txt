@@ -20,6 +20,7 @@ include_directories(${CMAKE_CURRENT_BINARY_DIR})
 
 add_executable(receiver_firmware
 	src/main.cpp
+	src/vgps.cpp
 	src/comms/radio.cpp
 	src/comms/frame_manager.cpp
 	src/display/ssd1306.cpp
