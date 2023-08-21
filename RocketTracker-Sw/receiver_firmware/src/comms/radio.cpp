@@ -150,7 +150,8 @@ bool RFM97_LoRa::readFIFO_DMA(volatile uint8_t* bytes, size_t n) {
 
 	uint8_t w = SX1276_REG_FIFO & 0b01111111;
 
-	initFIFO();
+	// write(SX1276_REG_FIFO_RX_BASEADDR, 0x00);
+	// write(SX1276_REG_FIFO_ADDR_PTR, 0x00);
 
 	SPI_AQUIRE;
 	gpio_put(cs, 0);

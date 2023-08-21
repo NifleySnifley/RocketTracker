@@ -44,6 +44,8 @@ float radio_snr = 0;
 int radio_rssi = 0;
 auto_init_mutex(rdata_mutex);
 
+absolute_time_t ledr_d = get_absolute_time(), ledg_d = get_absolute_time(), send_d = get_absolute_time();
+
 void ISR_A(uint gpio, uint32_t events) {
 	// gpio_put(PIN_LED_G, 1);
 	radio.ISR_A(gpio, events);
@@ -94,6 +96,46 @@ void core2() {
 	}
 }
 
+void write_frame_raw(uint8_t* frame_data, int len) {
+	uint8_t l = len;
+	tud_cdc_n_write(ITF_TELEM, &l, 1);
+	tud_cdc_n_write(ITF_TELEM, frame_data, len);
+	// for (int i = 0; i < 16; ++i)
+	// 	tud_cdc_n_write_char(ITF_TELEM, '\0');
+	tud_cdc_n_write_flush(ITF_TELEM);
+}
+
+uint8_t telem_txbuf[256];
+int telem_txsize = 0;
+void telem_rx_cb() {
+	static int telem_txidx = 0;
+	// 0 ready, 1 reading data, 2 ending zeros
+	static int telem_rawtx_state = 0;
+
+	switch (telem_rawtx_state) {
+		case 0:
+
+			telem_txsize = (uint8_t)tud_cdc_n_read_char(ITF_TELEM);
+			if (telem_txsize != 0) {
+				telem_txidx = 0;
+				telem_rawtx_state = 1;
+			}
+			break;
+		case 1:
+			telem_txbuf[telem_txidx++] = (uint8_t)tud_cdc_n_read_char(ITF_TELEM);
+			if (telem_txidx == (telem_txsize - 1)) {
+				telem_rawtx_state = 2;
+				telem_txidx = 0;
+			}
+			break;
+		case 2:
+			radio.transmit(telem_txbuf, telem_txsize, true);
+			ledr_d = make_timeout_time_ms(MS_LED);
+			telem_rawtx_state = 0;
+			break;
+	}
+}
+
 void read_datum(int i, MessageTypeID id, int len, uint8_t* data) {
 	if (id == MessageTypeID_TLM_GPS_Info) {
 		pb_istream_t stream = pb_istream_from_buffer(data, len);
@@ -123,12 +165,10 @@ int main() {
 	radio.init();
 	radio.setISRA(ISR_A);
 	radio.setISRB(ISR_B);
-	// radio.applyConfig(radioconfig);
 	radio.setPower(20, true); // Low-er power for testing :)
 	radio.setFreq(914.0);
 	radio.startReceiving();
 
-	absolute_time_t ledr_d = get_absolute_time(), ledg_d = get_absolute_time(), send_d = make_timeout_time_ms(MS_SEND);
 	while (true) {
 		tud_task();
 		absolute_time_t t = get_absolute_time();
@@ -138,66 +178,61 @@ int main() {
 			radio.applyConfig(radioconfig);
 		}
 
-		if (absolute_time_diff_us(t, send_d) < 0) {
-			GPS_Info gpsinfo;
-			gpsinfo.alt = 200.0;
-			gpsinfo.fix_status = 1;
-			gpsinfo.utc_time = 161229487;
-			gpsinfo.lat = 46.24897362189417;
-			gpsinfo.lon = -92.43390039973657;
-			gpsinfo.has_fix_status = true;
-			gpsinfo.has_sats_used = false;
+		// if (absolute_time_diff_us(t, send_d) < 0) {
+		// 	GPS_Info gpsinfo;
+		// 	gpsinfo.alt = 200.0;
+		// 	gpsinfo.fix_status = 1;
+		// 	gpsinfo.utc_time = 161229487;
+		// 	gpsinfo.lat = 46.24897362189417;
+		// 	gpsinfo.lon = -92.43390039973657;
+		// 	gpsinfo.has_fix_status = true;
+		// 	gpsinfo.has_sats_used = false;
 
-			Altitude_Info altinfo;
-			altinfo.alt_m = 500.65;
-			altinfo.v_speed = 1002.6;
-			altinfo.has_v_speed = true;
+		// 	Altitude_Info altinfo;
+		// 	altinfo.alt_m = 500.65;
+		// 	altinfo.v_speed = 1002.6;
+		// 	altinfo.has_v_speed = true;
 
-			Orientation_Info orientinfo;
-			orientinfo.orientation_x = 1.41;
-			orientinfo.orientation_y = 1.41;
-			orientinfo.orientation_z = 1.41;
+		// 	Orientation_Info orientinfo;
+		// 	orientinfo.orientation_x = 1.41;
+		// 	orientinfo.orientation_y = 1.41;
+		// 	orientinfo.orientation_z = 1.41;
 
-			Battery_Info battinfo;
-			battinfo.battery_voltage = 3.65;
-			battinfo.charging = false;
+		// 	Battery_Info battinfo;
+		// 	battinfo.battery_voltage = 3.65;
+		// 	battinfo.charging = false;
 
-			fmg.reset();
-			fmg.encode_datum(MessageTypeID_TLM_GPS_Info, GPS_Info_fields, &gpsinfo);
-			fmg.encode_datum(MessageTypeID_TLM_Altitude_Info, Altitude_Info_fields, &altinfo);
-			fmg.encode_datum(MessageTypeID_TLM_Orientation_Info, Orientation_Info_fields, &orientinfo);
-			fmg.encode_datum(MessageTypeID_TLM_Battery_Info, Battery_Info_fields, &battinfo);
+		// 	fmg.reset();
+		// 	fmg.encode_datum(MessageTypeID_TLM_GPS_Info, GPS_Info_fields, &gpsinfo);
+		// 	fmg.encode_datum(MessageTypeID_TLM_Altitude_Info, Altitude_Info_fields, &altinfo);
+		// 	fmg.encode_datum(MessageTypeID_TLM_Orientation_Info, Orientation_Info_fields, &orientinfo);
+		// 	fmg.encode_datum(MessageTypeID_TLM_Battery_Info, Battery_Info_fields, &battinfo);
 
-			int s = 0;
-			uint8_t* data = fmg.get_frame(&s);
-			printf("Sending... %d ", s);
+		// 	int s = 0;
+		// 	uint8_t* data = fmg.get_frame(&s);
 
-			radio.transmit(data, s, true);
+		// 	write_frame_raw(data, s);
+		// 	radio.transmit(data, s, true);
 
-			printf("Sent!\n");
-			send_d = make_timeout_time_ms(MS_SEND);
-			ledr_d = make_timeout_time_ms(MS_LED);
-		}
+		// 	send_d = make_timeout_time_ms(MS_SEND);
+		// 	ledr_d = make_timeout_time_ms(MS_LED);
+		// }
 
 		if (radio.messageAvailable()) {
-			mutex_enter_blocking(&rdata_mutex);
-			{
-				radio_snr = radio.getSNR();
-				radio_rssi = radio.getRSSI();
-			}
-			mutex_exit(&rdata_mutex);
+			// mutex_enter_blocking(&rdata_mutex);
+			// {
+			// 	radio_snr = radio.getSNR();
+			// 	radio_rssi = radio.getRSSI();
+			// }
+			// mutex_exit(&rdata_mutex);
+
+			write_frame_raw((uint8_t*)radio.rxbuf, radio.lastRxLen);
 
 			fmg.reset();
 			fmg.load_frame((uint8_t*)radio.rxbuf, radio.lastRxLen);
 			fmg.decode_frame(read_datum);
 
-			// printf("Packet (%d) received, SNR: %f, RSSI: %d\n", radio.lastRxLen, radio.getSNR(), radio.getRSSI());
-			// printf("Hex: ");
-			// for (int i = 0; i < radio.lastRxLen; ++i)
-			// 	printf("%02x ", radio.rxbuf[i]);
-			// printf("\n\n");
-
-			ledg_d = make_timeout_time_ms(100);
+			ledg_d = make_timeout_time_ms(MS_LED);
 		}
 
 		if (gps_fresh) {

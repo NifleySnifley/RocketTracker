@@ -30,6 +30,7 @@
 #include "pico/bootrom.h"
 #include "pinout.h"
 #include "vgps.h"
+#include "global.h"
 
  /* A combination of interfaces must have a unique product id, since PC will save device driver after the first plug.
   * Same VID/PID with different interface e.g MSC (first), then CDC (later) will possibly cause system error on PC.
@@ -210,6 +211,7 @@ void tud_cdc_rx_cb(uint8_t itf) {
 		while (tud_cdc_n_available(ITF_VGPS))
 			vgps_char_rx_cb(tud_cdc_n_read_char(ITF_VGPS));
 	} else if (itf == ITF_TELEM) {
-
+		while (tud_cdc_n_available(ITF_TELEM))
+			telem_rx_cb();
 	}
 }
