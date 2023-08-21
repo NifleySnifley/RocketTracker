@@ -21,11 +21,12 @@
 #include "tusb.h"
 #include "math.h"
 #include "vgps.h"
+#include "global.h"
 
 static const RFM97_LoRa_config RFM97_CFG_DEFAULT{
 	.frf = 914.0,
 	.power = 20,
-	.sf = 12,
+	.sf = 7,
 	.cr = 5,
 	.bw_mode = SX1276_BANDWIDTH_125KHZ
 };
@@ -33,6 +34,7 @@ static const RFM97_LoRa_config RFM97_CFG_DEFAULT{
 RFM97_LoRa radio(spi0, RFM97CW_CS, RFM97CW_DIO0, RFM97CW_RST, RFM97CW_MOSI, RFM97CW_MISO, RFM97CW_SCK, true);
 FrameManager fmg;
 RFM97_LoRa_config radioconfig = RFM97_CFG_DEFAULT;
+bool radioconfig_updated = false;
 
 absolute_time_t gps_last_update = at_the_end_of_time;
 bool gps_fresh = false;
@@ -130,6 +132,11 @@ int main() {
 	while (true) {
 		tud_task();
 		absolute_time_t t = get_absolute_time();
+
+		if (radioconfig_updated) {
+			radio.wait_for_safe_state();
+			radio.applyConfig(radioconfig);
+		}
 
 		if (absolute_time_diff_us(t, send_d) < 0) {
 			GPS_Info gpsinfo;

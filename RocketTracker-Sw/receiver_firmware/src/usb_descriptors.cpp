@@ -28,6 +28,8 @@
 #include "pico/usb_reset_interface.h"
 #include "pico/stdio_usb.h"
 #include "pico/bootrom.h"
+#include "pinout.h"
+#include "vgps.h"
 
  /* A combination of interfaces must have a unique product id, since PC will save device driver after the first plug.
   * Same VID/PID with different interface e.g MSC (first), then CDC (later) will possibly cause system error on PC.
@@ -200,5 +202,14 @@ uint16_t const* tud_descriptor_string_cb(uint8_t index, uint16_t langid) {
 void tud_cdc_line_coding_cb(uint8_t itf, cdc_line_coding_t const* p_line_coding) {
 	if (p_line_coding->bit_rate == 110) {
 		reset_usb_boot(0, PICO_STDIO_USB_RESET_BOOTSEL_INTERFACE_DISABLE_MASK);
+	}
+}
+
+void tud_cdc_rx_cb(uint8_t itf) {
+	if (itf == ITF_VGPS) {
+		while (tud_cdc_n_available(ITF_VGPS))
+			vgps_char_rx_cb(tud_cdc_n_read_char(ITF_VGPS));
+	} else if (itf == ITF_TELEM) {
+
 	}
 }

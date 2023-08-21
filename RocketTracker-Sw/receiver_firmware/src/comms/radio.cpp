@@ -327,7 +327,7 @@ void RFM97_LoRa::setMode(uint8_t modebits) {
 // Frf
 bool RFM97_LoRa::setFreq(double freq_mhz) {
 	// Make sure it's in the ISM band (RFM97CW can go outside!)
-	ASSURE(freq_mhz < 927.0 && freq_mhz > 903.0);
+	ASSURE(freq_mhz < SX1276_FRF_MAX && freq_mhz > SX1276_FRF_MIN);
 
 	uint32_t FRF = (freq_mhz * (uint32_t(1) << 19)) / 32.0;
 
@@ -419,7 +419,7 @@ void RFM97_LoRa::setHeaderMode(bool implicit = false) {
 
 // SpreadingFactor
 bool RFM97_LoRa::setSpreadingFactor(uint8_t spreading_factor = 7) {
-	ASSURE(spreading_factor > 6 && spreading_factor <= 12);
+	ASSURE(spreading_factor >= SX1276_SF_MIN && spreading_factor <= SX1276_SF_MAX);
 
 	/*
 		SF rate (expressed as a base-2 logarithm):
@@ -440,7 +440,7 @@ bool RFM97_LoRa::setSpreadingFactor(uint8_t spreading_factor = 7) {
 
 // CodingRate
 bool RFM97_LoRa::setCodingRate(uint8_t cr_denom = 5) {
-	ASSURE(cr_denom >= 5 && cr_denom <= 8);
+	ASSURE(cr_denom >= SX1276_CR_MIN && cr_denom <= SX1276_CR_MAX);
 
 	/*
 		Error coding rate:

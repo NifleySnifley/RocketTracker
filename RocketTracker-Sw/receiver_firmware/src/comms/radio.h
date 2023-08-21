@@ -4,6 +4,7 @@
 #include <hardware/spi.h>
 #include <hardware/dma.h>
 #include <hardware/irq.h>
+#include <hardware/gpio.h>
 
 #define SX1276_REG_FIFO 0x00
 #define SX1276_REG_OPMODE 0x01
@@ -177,6 +178,15 @@
 #define SX1276_DIO5_CLKOUT 0b01
 
 #define ASSURE(x) if (!(x)) return false;
+
+
+#define SX1276_FRF_MIN 903.0
+#define SX1276_FRF_MAX 927.0
+#define SX1276_CR_MIN 5
+#define SX1276_CR_MAX 8
+#define SX1276_SF_MIN 6
+#define SX1276_SF_MAX 12
+
 
 enum class RFM97_RadioState {
 	TX_WAITING,

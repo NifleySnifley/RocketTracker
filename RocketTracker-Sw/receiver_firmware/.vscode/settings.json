@@ -35,6 +35,7 @@
 		"usb_reset_interface.h": "c",
 		"unique_id.h": "c",
 		"stdio_usb.h": "c",
-		"bootrom.h": "c"
+		"bootrom.h": "c",
+		"numeric": "cpp"
 	}
 }

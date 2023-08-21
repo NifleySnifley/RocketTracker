@@ -1,8 +1,13 @@
 #include "vgps.h"
 #include "pinout.h"
+#include "global.h"
+#include <stdlib.h>
+#include "comms/radio.h"
 
 char nmea_buffer[256];
 char rx_buffer[256];
+int rx_num = 0;
+bool vgps_msg = false;
 
 int gps_deg_to_dmsint(double degrees, char* nwse_out) {
 	if (degrees < 0) {
@@ -109,4 +114,133 @@ void write_fake_gps(GPS_Info* gps) {
 
 	tud_cdc_n_write_str(ITF_VGPS, nmea_buffer);
 	tud_cdc_n_write_flush(ITF_VGPS);
+}
+
+void vgps_char_rx_cb(char c) {
+	if (rx_num == sizeof(rx_buffer)) {
+		rx_num == 0; // safety...
+	}
+
+	if (c == '$') {
+		// NMEA restart short-circuit
+		rx_num = 0;
+	} else if (c == '\n' || c == '\r') {
+		if (rx_num == 0) return;
+		// End of message
+		// rx_buffer[rx_num++] = '\r';
+		// rx_buffer[rx_num++] = '\n';
+		rx_buffer[rx_num++] = '\0';
+
+		printf("Parsing: %s\n", rx_buffer);
+
+		char* seg = strtok(rx_buffer, " ,");
+		int i = 0;
+
+		VGPS_CMDTYPE ctype;
+
+		while (seg != NULL) {
+			if (i == 0) {
+				if (strcmp(seg, "PFRF") == 0)
+					ctype = VGPS_SET_FRF;
+				else if (strcmp(seg, "PSF") == 0)
+					ctype = VGPS_SET_SF;
+				else if (strcmp(seg, "PCR") == 0)
+					ctype = VGPS_SET_CR;
+				else if (strcmp(seg, "PPOW") == 0)
+					ctype = VGPS_SET_POWER;
+				else if (strcmp(seg, "PBW") == 0)
+					ctype = VGPS_SET_BW;
+				else
+					goto lineread_done;
+				printf("Ctype = %d\n", ctype);
+			} else {
+				int iarg;
+				double farg;
+				switch (ctype) {
+					case VGPS_SET_FRF:
+						farg = strtod(seg, NULL);
+						printf("FRF = %f\n", farg);
+						if (farg < SX1276_FRF_MAX && farg > SX1276_FRF_MIN) {
+							radioconfig.frf = farg;
+							radioconfig_updated = true;
+						}
+						break;
+
+					case VGPS_SET_BW:
+						radioconfig_updated = true;
+						printf("BW\n");
+						// Oh boy 
+						// I'm so sorry...
+						if (strcmp(seg, "7.8") == 0) {
+							radioconfig.bw_mode = SX1276_BANDWIDTH_7_8_KHZ;
+						} else if (strcmp(seg, "10.4") == 0) {
+							radioconfig.bw_mode = SX1276_BANDWIDTH_10_4_KHZ;
+						} else if (strcmp(seg, "15.6") == 0) {
+							radioconfig.bw_mode = SX1276_BANDWIDTH_15_6_KHZ;
+						} else if (strcmp(seg, "20.8") == 0) {
+							radioconfig.bw_mode = SX1276_BANDWIDTH_20_8_KHZ;
+						} else if (strcmp(seg, "31.25") == 0) {
+							radioconfig.bw_mode = SX1276_BANDWIDTH_31_25_KHZ;
+						} else if (strcmp(seg, "41.7") == 0) {
+							radioconfig.bw_mode = SX1276_BANDWIDTH_41_7_KHZ;
+						} else if (strcmp(seg, "62.5") == 0) {
+							radioconfig.bw_mode = SX1276_BANDWIDTH_62_5_KHZ;
+						} else if (strcmp(seg, "125") == 0) {
+							radioconfig.bw_mode = SX1276_BANDWIDTH_125KHZ;
+						} else if (strcmp(seg, "250") == 0) {
+							radioconfig.bw_mode = SX1276_BANDWIDTH_250KHZ;
+						} else if (strcmp(seg, "500") == 0) {
+							radioconfig.bw_mode = SX1276_BANDWIDTH_500KHZ;
+						} else {
+							radioconfig_updated = false;
+						}
+						break;
+
+					case VGPS_SET_CR:
+						iarg = atoi(seg);
+						printf("CR = %d\n", iarg);
+						if (iarg < SX1276_CR_MAX && iarg > SX1276_CR_MIN) {
+							radioconfig.cr = iarg;
+							radioconfig_updated = true;
+						}
+						break;
+
+					case VGPS_SET_POWER:
+						iarg = atoi(seg);
+						printf("POW = %d\n", iarg);
+						if ((iarg < 2 && iarg <= 17) || iarg == 20) {
+							radioconfig.power = iarg;
+							radioconfig_updated = true;
+						}
+						break;
+
+					case VGPS_SET_SF:
+						iarg = atoi(seg);
+						printf("SF = %d\n", iarg);
+						if (iarg < SX1276_SF_MAX && iarg > SX1276_SF_MIN) {
+							radioconfig.sf = iarg;
+							radioconfig_updated = true;
+						}
+						break;
+
+					default:
+						break;
+				}
+
+				goto lineread_done;
+			}
+
+			++i;
+			seg = strtok(NULL, " ,");
+		}
+
+		// tud_cdc_n_write_str(ITF_TELEM, rx_buffer);
+		// tud_cdc_n_write_flush(ITF_TELEM);
+
+	lineread_done:
+		rx_num = 0;
+	} else {
+		// Add another character
+		rx_buffer[rx_num++] = c;
+	}
 }
