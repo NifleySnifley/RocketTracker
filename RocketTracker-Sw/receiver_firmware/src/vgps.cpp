@@ -131,7 +131,7 @@ void vgps_char_rx_cb(char c) {
 		// rx_buffer[rx_num++] = '\n';
 		rx_buffer[rx_num++] = '\0';
 
-		printf("Parsing: %s\n", rx_buffer);
+		// printf("Parsing: %s\n", rx_buffer);
 
 		char* seg = strtok(rx_buffer, " ,");
 		int i = 0;
@@ -152,14 +152,14 @@ void vgps_char_rx_cb(char c) {
 					ctype = VGPS_SET_BW;
 				else
 					goto lineread_done;
-				printf("Ctype = %d\n", ctype);
+				// printf("Ctype = %d\n", ctype);
 			} else {
 				int iarg;
 				double farg;
 				switch (ctype) {
 					case VGPS_SET_FRF:
 						farg = strtod(seg, NULL);
-						printf("FRF = %f\n", farg);
+						// printf("FRF = %f\n", farg);
 						if (farg < SX1276_FRF_MAX && farg > SX1276_FRF_MIN) {
 							radioconfig.frf = farg;
 							radioconfig_updated = true;
@@ -168,7 +168,7 @@ void vgps_char_rx_cb(char c) {
 
 					case VGPS_SET_BW:
 						radioconfig_updated = true;
-						printf("BW\n");
+						// printf("BW\n");
 						// Oh boy 
 						// I'm so sorry...
 						if (strcmp(seg, "7.8") == 0) {
@@ -198,7 +198,7 @@ void vgps_char_rx_cb(char c) {
 
 					case VGPS_SET_CR:
 						iarg = atoi(seg);
-						printf("CR = %d\n", iarg);
+						// printf("CR = %d\n", iarg);
 						if (iarg < SX1276_CR_MAX && iarg > SX1276_CR_MIN) {
 							radioconfig.cr = iarg;
 							radioconfig_updated = true;
@@ -207,7 +207,7 @@ void vgps_char_rx_cb(char c) {
 
 					case VGPS_SET_POWER:
 						iarg = atoi(seg);
-						printf("POW = %d\n", iarg);
+						// printf("POW = %d\n", iarg);
 						if ((iarg < 2 && iarg <= 17) || iarg == 20) {
 							radioconfig.power = iarg;
 							radioconfig_updated = true;
@@ -216,7 +216,7 @@ void vgps_char_rx_cb(char c) {
 
 					case VGPS_SET_SF:
 						iarg = atoi(seg);
-						printf("SF = %d\n", iarg);
+						// printf("SF = %d\n", iarg);
 						if (iarg < SX1276_SF_MAX && iarg > SX1276_SF_MIN) {
 							radioconfig.sf = iarg;
 							radioconfig_updated = true;
