@@ -17,7 +17,7 @@
 #include <pb_encode.h>
 #include <pb_decode.h>
 #include "protocol.pb.h"
-#include "comms/frame_manager.h"
+#include "comms/comms_lib/frame_manager.h"
 #include "tusb.h"
 #include "math.h"
 #include "vgps.h"
@@ -40,8 +40,7 @@ absolute_time_t gps_last_update = at_the_end_of_time;
 bool gps_fresh = false;
 GPS_Info current_gps;
 
-float radio_snr = 0;
-int radio_rssi = 0;
+Receiver_RadioStatus radio_stat;
 auto_init_mutex(rdata_mutex);
 
 absolute_time_t ledr_d = get_absolute_time(), ledg_d = get_absolute_time(), send_d = get_absolute_time();
@@ -86,8 +85,8 @@ void core2() {
 		ssd1306_clear(&display);
 		mutex_enter_blocking(&rdata_mutex);
 		{
-			snprintf(&textbuf[0], 64, "RSSI: %d", radio_rssi);
-			snprintf(&textbuf[64], 64, "SNR: %0.2f", radio_snr);
+			snprintf(&textbuf[0], 64, "RSSI: %d", radio_stat.RSSI);
+			snprintf(&textbuf[64], 64, "SNR: %0.2f", radio_stat.SNR);
 		}
 		mutex_exit(&rdata_mutex);
 		ssd1306_draw_string(&display, 0, 0, 1, &textbuf[0]);
@@ -219,18 +218,23 @@ int main() {
 		// }
 
 		if (radio.messageAvailable()) {
-			// mutex_enter_blocking(&rdata_mutex);
-			// {
-			// 	radio_snr = radio.getSNR();
-			// 	radio_rssi = radio.getRSSI();
-			// }
-			// mutex_exit(&rdata_mutex);
-
 			write_frame_raw((uint8_t*)radio.rxbuf, radio.lastRxLen);
 
 			fmg.reset();
 			fmg.load_frame((uint8_t*)radio.rxbuf, radio.lastRxLen);
 			fmg.decode_frame(read_datum);
+
+			mutex_enter_blocking(&rdata_mutex);
+			{
+				radio_stat.RSSI = radio.getRSSI();
+				radio_stat.SNR = radio.getSNR();
+			}
+			mutex_exit(&rdata_mutex);
+			fmg.reset();
+			fmg.encode_datum(MessageTypeID_RX_RadioStatus, Receiver_RadioStatus_fields, &radio_stat);
+			int len;
+			uint8_t* dat = fmg.get_frame(&len);
+			write_frame_raw(dat, len);
 
 			ledg_d = make_timeout_time_ms(MS_LED);
 		}

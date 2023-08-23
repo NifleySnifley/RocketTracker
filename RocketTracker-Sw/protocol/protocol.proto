@@ -46,6 +46,11 @@ message Alert {
 	optional uint32 data = 2;
 }
 
+message Receiver_RadioStatus {
+	required float RSSI = 1;
+	required float SNR = 2;
+}
+
 enum MessageTypeID {
 	// Telemetry
 	TLM_Blank = 0;
@@ -55,6 +60,9 @@ enum MessageTypeID {
 	TLM_Altitude_Info = 4;
 	TLM_Orientation_Info = 5;
 	TLM_Alert = 6;
+
+	// Receiver
+	RX_RadioStatus = 64;
 
 	// Commands
 	CMD_Ping = 128;
