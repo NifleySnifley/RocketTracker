@@ -1,0 +1,14 @@
+{
+	"name": "CommsLib",
+	"version": "10.2.1",
+	"keywords": "",
+	"description": "FrameManager and other utils",
+	"frameworks": "*",
+	"platforms": "*",
+	"build": {
+		"libArchive": false,
+		"flags": [
+			"-I./"
+		]
+	}
+}

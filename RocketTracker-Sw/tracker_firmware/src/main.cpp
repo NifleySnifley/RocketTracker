@@ -2,249 +2,158 @@
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
 #include "esp_system.h"
+#include "rtc_wdt.h"
 #include "esp_log.h"
 #include "driver/gpio.h"
-#include "Arduino.h"
-
+#include "esp_types.h"
+#include "esp_event.h"
+#include "esp_err.h"
+#include "driver/uart.h"
+// #include "Arduino.h"
 #include "pindefs.h"
+#include <pb_encode.h>
+#include "lwgps.h"
+#include "radio.h"
+#include "protocol.pb.h"
+#include "frame_manager.h"
 
-#include <NimBLEDevice.h>
+#define GSM_CFG_DOUBLE 1
+// #include "lwgps_opts.h"
 
-#define TAG_BT "BLE"
+#define DBG_TAG "DBG"
 
-static NimBLEServer* pServer;
-
-class ServerCallbacks : public NimBLEServerCallbacks {
-    void onConnect(NimBLEServer* pServer) {
-        ESP_LOGI(TAG_BT, "Client connected");
-        ESP_LOGI(TAG_BT, "Multi-connect support: start advertising");
-        NimBLEDevice::startAdvertising();
-    };
-    /** Alternative onConnect() method to extract details of the connection.
-     *  See: src/ble_gap.h for the details of the ble_gap_conn_desc struct.
-     */
-    void onConnect(NimBLEServer* pServer, ble_gap_conn_desc* desc) {
-        Serial.print("Client address: ");
-        ESP_LOGI(TAG_BT, "%s", NimBLEAddress(desc->peer_ota_addr).toString().c_str());
-        /** We can use the connection handle here to ask for different connection parameters.
-         *  Args: connection handle, min connection interval, max connection interval
-         *  latency, supervision timeout.
-         *  Units; Min/Max Intervals: 1.25 millisecond increments.
-         *  Latency: number of intervals allowed to skip.
-         *  Timeout: 10 millisecond increments, try for 5x interval time for best results.
-         */
-        pServer->updateConnParams(desc->conn_handle, 24, 48, 0, 60);
-    };
-    void onDisconnect(NimBLEServer* pServer) {
-        ESP_LOGI(TAG_BT, "Client disconnected - start advertising");
-        NimBLEDevice::startAdvertising();
-    };
-    void onMTUChange(uint16_t MTU, ble_gap_conn_desc* desc) {
-        Serial.printf("MTU updated: %u for connection ID: %u\n", MTU, desc->conn_handle);
-    };
-
-    /********************* Security handled here **********************
-    ****** Note: these are the same return values as defaults ********/
-    uint32_t onPassKeyRequest() {
-        ESP_LOGI(TAG_BT, "Server Passkey Request");
-        /** This should return a random 6 digit number for security
-         *  or make your own static passkey as done here.
-         */
-        return 123456;
-    };
-
-    bool onConfirmPIN(uint32_t pass_key) {
-        ESP_LOGI(TAG_BT, "Passkey: %d", pass_key);
-        /** Return false if passkeys don't match. */
-        return true;
-    };
-
-    void onAuthenticationComplete(ble_gap_conn_desc* desc) {
-        /** Check that encryption was successful, if not we disconnect the client */
-        if (!desc->sec_state.encrypted) {
-            NimBLEDevice::getServer()->disconnect(desc->conn_handle);
-            ESP_LOGI(TAG_BT, "Encrypt connection failed - disconnecting client");
-            return;
-        }
-        ESP_LOGI(TAG_BT, "Starting BLE work!");
-    };
-};
-
-class CharacteristicCallbacks : public NimBLECharacteristicCallbacks {
-    void onRead(NimBLECharacteristic* pCharacteristic) {
-        Serial.print(pCharacteristic->getUUID().toString().c_str());
-        Serial.print(": onRead(), value: ");
-        ESP_LOGI(TAG_BT, "%s", pCharacteristic->getValue().c_str());
-    };
-
-    void onWrite(NimBLECharacteristic* pCharacteristic) {
-        Serial.print(pCharacteristic->getUUID().toString().c_str());
-        Serial.print(": onWrite(), value: ");
-        ESP_LOGI(TAG_BT, "%s", pCharacteristic->getValue().c_str());
-    };
-    /** Called before notification or indication is sent,
-     *  the value can be changed here before sending if desired.
-     */
-    void onNotify(NimBLECharacteristic* pCharacteristic) {
-        ESP_LOGI(TAG_BT, "Sending notification to clients");
-    };
-
-
-    /** The status returned in status is defined in NimBLECharacteristic.h.
-     *  The value returned in code is the NimBLE host return code.
-     */
-    void onStatus(NimBLECharacteristic* pCharacteristic, Status status, int code) {
-        String str = ("Notification/Indication status code: ");
-        str += status;
-        str += ", return code: ";
-        str += code;
-        str += ", ";
-        str += NimBLEUtils::returnCodeToString(code);
-        ESP_LOGI(TAG_BT, "%s", str.c_str());
-    };
-
-    void onSubscribe(NimBLECharacteristic* pCharacteristic, ble_gap_conn_desc* desc, uint16_t subValue) {
-        String str = "Client ID: ";
-        str += desc->conn_handle;
-        str += " Address: ";
-        str += std::string(NimBLEAddress(desc->peer_ota_addr)).c_str();
-        if (subValue == 0) {
-            str += " Unsubscribed to ";
-        } else if (subValue == 1) {
-            str += " Subscribed to notfications for ";
-        } else if (subValue == 2) {
-            str += " Subscribed to indications for ";
-        } else if (subValue == 3) {
-            str += " Subscribed to notifications and indications for ";
-        }
-        str += std::string(pCharacteristic->getUUID()).c_str();
-
-        ESP_LOGI(TAG_BT, "%s", str.c_str());
-    };
-};
-
-/** Handler class for descriptor actions */
-class DescriptorCallbacks : public NimBLEDescriptorCallbacks {
-    void onWrite(NimBLEDescriptor* pDescriptor) {
-        std::string dscVal = pDescriptor->getValue();
-        Serial.print("Descriptor witten value:");
-        ESP_LOGI(TAG_BT, "%s", dscVal.c_str());
-    };
-
-    void onRead(NimBLEDescriptor* pDescriptor) {
-        Serial.print(pDescriptor->getUUID().toString().c_str());
-        ESP_LOGI(TAG_BT, " Descriptor read");
-    };
-};
-
-
-/** Define callback instances globally to use for multiple Charateristics \ Descriptors */
-static DescriptorCallbacks dscCallbacks;
-static CharacteristicCallbacks chrCallbacks;
-
-#define DBG_TAG "DEBUG"
-#define GATTS_TAG "GATT"
-
-// Bluetooth configuration
-#define NUM_BLE_APPS 1
-#define CONFIG_APP_ID 0
-
-static NimBLECharacteristic* pLEDchar;
+#define GPS_UART_BUFSIZE 512
 
 // Idle LED blinking...
-void led_task(void* args) {
-    while (1) {
-        // gpio_set_level(TRACKER_LED_RED, 1);
-        // gpio_set_level(TRACKER_LED_GRN, 1);
-        // vTaskDelay(500);
-        // gpio_set_level(TRACKER_LED_RED, 0);
-        // gpio_set_level(TRACKER_LED_GRN, 1);
-        // vTaskDelay(500);
-        // gpio_set_level(TRACKER_LED_RED, 0);
-        // gpio_set_level(TRACKER_LED_GRN, 0);
-        // vTaskDelay(500);
-        // gpio_set_level(TRACKER_LED_RED, 1);
-        // gpio_set_level(TRACKER_LED_GRN, 0);
-        // vTaskDelay(500);
+// void led_task(void* args) {
+//     while (1) {
+//         gpio_set_level(TRACKER_LED_RED, 1);
+//         gpio_set_level(TRACKER_LED_GRN, 1);
+//         vTaskDelay(500);
+//         gpio_set_level(TRACKER_LED_RED, 0);
+//         gpio_set_level(TRACKER_LED_GRN, 1);
+//         vTaskDelay(500);
+//         gpio_set_level(TRACKER_LED_RED, 0);
+//         gpio_set_level(TRACKER_LED_GRN, 0);
+//         vTaskDelay(500);
+//         gpio_set_level(TRACKER_LED_RED, 1);
+//         gpio_set_level(TRACKER_LED_GRN, 0);
+//         vTaskDelay(500);
 
-        if (pLEDchar != NULL && pLEDchar->getValue().length() >= 2) {
-            gpio_set_level(TRACKER_LED_RED, pLEDchar->getValue()[0] != '0');
-            gpio_set_level(TRACKER_LED_GRN, pLEDchar->getValue()[1] != '0');
+//         ESP_LOGI(DBG_TAG, "Cycle!");
+//     }
+// }
+RFM97_LoRa radio(SPI2_HOST, TRACKER_RFM_CS, TRACKER_DIO0, TRACKER_RFM_RST, TRACKER_COPI, TRACKER_CIPO, TRACKER_SCK, false);
+FrameManager fmg;
+
+lwgps_t gps;
+QueueHandle_t gps_uart_q;
+
+void gps_uart_task(void* args) {
+    static uint8_t* readbuf = (uint8_t*)malloc(GPS_UART_BUFSIZE + 1);
+    uart_event_t event;
+
+    while (1) {
+        if (xQueueReceive(gps_uart_q, &event, pdMS_TO_TICKS(20))) {
+            if (event.type == UART_PATTERN_DET) {
+                int pos = uart_pattern_pop_pos(TRACKER_GPS_UART);
+
+                while (pos > 0) {
+                    int len = uart_read_bytes(TRACKER_GPS_UART, readbuf, pos, 1000 / portTICK_PERIOD_MS);
+                    if (len > 0) {
+                        lwgps_process(&gps, &readbuf[1], len - 1);
+                        readbuf[len] = '\0';
+
+                        // printf("%02x %02x %02x %02x\n", readbuf[0], readbuf[1], readbuf[2], readbuf[3]);
+                        // GPS Fresh
+                        if (strncmp((char*)&readbuf[1], "$GPGGA", strlen("$GPGGA")) == 0) {
+                            printf("Fix: %d, Lat: %f, Lon: %f\n", gps.fix, gps.latitude, gps.longitude);
+                        }
+                    }
+
+                    pos = uart_pattern_pop_pos(TRACKER_GPS_UART);
+                }
+
+            }
         }
+    }
+
+    free(readbuf);
+}
+
+void radio_task(void* args) {
+    while (1) {
+        vTaskDelay(1000);
+
+        GPS_Info gi;
+        gi.lat = gps.latitude;
+        gi.lon = gps.longitude;
+        gi.has_fix_status = true;
+        gi.fix_status = gps.fix;
+        gi.has_sats_used = true;
+        gi.sats_used = gps.sats_in_use;
+        gi.utc_time = gps.seconds * 1000 + gps.minutes * 100000 + gps.hours * 10000000;
+        gi.alt = gps.altitude;
+
+        fmg.reset();
+        fmg.encode_datum(MessageTypeID_TLM_GPS_Info, GPS_Info_fields, &gi);
+        int size;
+        uint8_t* frame = fmg.get_frame(&size);
+
+        radio.transmit(frame, size, true);
+
+        gpio_set_level(TRACKER_LED_RED, 1);
         vTaskDelay(100);
-        // ESP_LOGI(DBG_TAG, "Cycle!");
+        gpio_set_level(TRACKER_LED_RED, 0);
     }
 }
 
+// TODO: NEED dma or at least use a queue for receive in an event loop because reading the FIFO in ISR is REALLY BAD
+void IRAM_ATTR radio_isr_a(void* arg) {
+    static int data;
+    xQueueSendFromISR(radio.intq, &data, NULL);
+}
+
 extern "C" void app_main() {
-    initArduino();
+    // initArduino();
+    esp_log_level_set("*", ESP_LOG_ERROR);
 
     gpio_reset_pin(TRACKER_LED_RED);
     gpio_reset_pin(TRACKER_LED_GRN);
     gpio_set_direction(TRACKER_LED_RED, GPIO_MODE_OUTPUT);
     gpio_set_direction(TRACKER_LED_GRN, GPIO_MODE_OUTPUT);
 
-    esp_log_level_set("*", ESP_LOG_VERBOSE);
+    uart_config_t uart_config = {
+        .baud_rate = 9600 ,
+        .data_bits = UART_DATA_8_BITS,
+        .parity = UART_PARITY_DISABLE,
+        .stop_bits = UART_STOP_BITS_1,
+        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
+        .source_clk = UART_SCLK_DEFAULT,
+    };
 
-    xTaskCreate(led_task, "led_blinky_task", 1024 * 2, NULL, configMAX_PRIORITIES, NULL);
-
-    ESP_LOGI(TAG_BT, "Starting NimBLE Server");
-
-    /** sets device name */
-    NimBLEDevice::init("ESP32 RocketTracker");
-
-    /** Optional: set the transmit power, default is 3db */
-    NimBLEDevice::setPower(ESP_PWR_LVL_P9); /** +9db */
-
-    NimBLEDevice::setSecurityAuth(BLE_SM_PAIR_AUTHREQ_SC);
-
-    pServer = NimBLEDevice::createServer();
-    pServer->setCallbacks(new ServerCallbacks());
-
-    NimBLEService* pLEDService = pServer->createService("FE01");
-    pLEDchar = pLEDService->createCharacteristic(
-        "FF01",
-        NIMBLE_PROPERTY::READ |
-        NIMBLE_PROPERTY::WRITE
-    );
-
-    pLEDchar->setValue("00");
-    pLEDchar->setCallbacks(&chrCallbacks);
-
-    /** 2904 descriptors are a special case, when createDescriptor is called with
-     *  0x2904 a NimBLE2904 class is created with the correct properties and sizes.
-     *  However we must cast the returned reference to the correct type as the method
-     *  only returns a pointer to the base NimBLEDescriptor class.
-     */
-    NimBLE2904* pLED2904 = (NimBLE2904*)pLEDchar->createDescriptor("2904");
-    pLED2904->setFormat(NimBLE2904::FORMAT_UTF8);
-    pLED2904->setCallbacks(&dscCallbacks);
-
-
-    /** Start the services when finished creating all Characteristics and Descriptors */
-    pLEDService->start();
-
-    NimBLEAdvertising* pAdvertising = NimBLEDevice::getAdvertising();
-    /** Add the services to the advertisment data **/
-    pAdvertising->addServiceUUID(pLEDService->getUUID());
-    /** If your device is battery powered you may consider setting scan response
-     *  to false as it will extend battery life at the expense of less data sent.
-     */
-    pAdvertising->setScanResponse(true);
-    pAdvertising->start();
-
-    ESP_LOGI(TAG_BT, "Advertising Started");
-
-    while (1) {
-        if (pServer->getConnectedCount()) {
-            NimBLEService* pSvc = pServer->getServiceByUUID("BAAD");
-            if (pSvc) {
-                NimBLECharacteristic* pChr = pSvc->getCharacteristic("F00D");
-                if (pChr) {
-                    pChr->notify(true);
-                }
-            }
-        }
-        vTaskDelay(500);
+    if (uart_driver_install(TRACKER_GPS_UART, GPS_UART_BUFSIZE * 2, 0, 16, &gps_uart_q, 0) != ESP_OK) {
+        ESP_LOGE(DBG_TAG, "Driver installation failed");
     }
+    if (uart_param_config(TRACKER_GPS_UART, &uart_config) != ESP_OK) {
+        ESP_LOGE(DBG_TAG, "Uart config failed");
+    };
+    uart_set_pin(TRACKER_GPS_UART, TRACKER_GPS_TX, TRACKER_GPS_RX, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+    uart_enable_pattern_det_baud_intr(TRACKER_GPS_UART, '\n', 1, 1, 0, 0);
+    uart_pattern_queue_reset(TRACKER_GPS_UART, 16);
+    uart_flush(TRACKER_GPS_UART);
+
+    lwgps_init(&gps);
+
+    if (!radio.init())
+        ESP_LOGE(DBG_TAG, "Radio is broke :(");
+
+    radio.setPower(20, true);
+    radio.setFreq(914.0);
+    radio.setISRA(radio_isr_a);
+    radio.startReceiving();
+
+    // xTaskCreate(led_task, "led_blinky_task", 1024 * 2, NULL, 1, NULL);
+    xTaskCreate(gps_uart_task, "gps_uart_task", 1024 * 2, NULL, configMAX_PRIORITIES, NULL);
+    xTaskCreate(radio_task, "radio_task", 1024 * 2, NULL, configMAX_PRIORITIES, NULL);
 }

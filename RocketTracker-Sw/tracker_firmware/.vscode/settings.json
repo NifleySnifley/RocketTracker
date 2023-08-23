@@ -10,6 +10,13 @@
 		"bleserver.h": "c",
 		"task.h": "c",
 		"freertos.h": "c",
-		"esp_gatt_defs.h": "c"
+		"esp_gatt_defs.h": "c",
+		"*.tcc": "cpp",
+		"system_error": "cpp",
+		"array": "cpp",
+		"functional": "cpp",
+		"tuple": "cpp",
+		"type_traits": "cpp",
+		"utility": "cpp"
 	}
 }
