@@ -1,129 +1,120 @@
-import asyncio
-import bleak
-import customtkinter
+import sys
+from qtpy.QtWidgets import *
+from qtpy.QtCore import *
+from pyqtlet2 import L, MapWidget
+from qtpy.QtSerialPort import QSerialPort, QSerialPortInfo
+from mainwindow import Ui_MainWindow
+from receiver import Receiver
 
-customtkinter.set_appearance_mode("dark")
-customtkinter.set_default_color_theme("green")
-
-LED_UUID = "0000ff01-0000-1000-8000-00805f9b34fb"
+CONSOLE_SCROLLBACK = 256
 
 
-class App(customtkinter.CTk):
-    def __init__(self, loop, interval=1/120):
-        super().__init__()
-        self.loop: asyncio.AbstractEventLoop = loop
-        self.protocol("WM_DELETE_WINDOW", self.close)
-        self.connected = False
-        self.connecting = False
-        self.interval = interval
-        self.tasks = []
-        self.tasks.append(loop.create_task(self.ble_updater(interval)))
-        self.tasks.append(loop.create_task(self.updater(interval)))
+class MainWindow(QMainWindow, Ui_MainWindow):
+    def __init__(self, *args, obj=None, **kwargs):
+        super(MainWindow, self).__init__(*args, **kwargs)
+        self.map_tab: QWidget
+        self.port_selector: QComboBox
+        self.connect_btn: QPushButton
+        self.console: QPlainTextEdit
+        self.port_rfsh_btn: QToolButton
+        self.avail_ports: list[QSerialPortInfo] = []
+        self.setupUi(self)
 
-        self.geometry("150x300")
-        self.title("CustomTkinter simple_example.py")
+        self.tlm_port = QSerialPort()
+        self.vgps_port = QSerialPort()
 
-        self.frame_1 = customtkinter.CTkFrame(master=self)
-        self.frame_1.pack(pady=0, padx=0, fill="both", expand=True)
+        # TODO: This class handles decoding, make signal for messages!
+        self.receiver = Receiver(
+            self.tlm_port, self.vgps_port, self.rx_cfg_frf, self.rx_cfg_bw, self.rx_cfg_pow)
 
-        self.connect_btn = customtkinter.CTkButton(
-            master=self.frame_1, text="Connect", command=self.connect_btn)
-        self.connect_btn.pack(pady=10, padx=10)
+        self.mapWidget = MapWidget()
+        self.maplayout = QVBoxLayout()
+        self.maplayout.addWidget(self.mapWidget)
+        self.maplayout.setContentsMargins(0, 0, 0, 0)
 
-        self.connect_status = customtkinter.CTkLabel(
-            master=self.frame_1, text="disconnected")
-        self.connect_status.pack(padx=10, pady=10)
+        # Working with the maps with pyqtlet
+        self.map = L.map(self.mapWidget)
+        self.map.setView([0, 0], 10)
+        L.tileLayer(
+            'https://mt0.google.com/vt/lyrs=s&hl=en&x={x}&y={y}&z={z}&s=Gt').addTo(self.map)
+        self.marker = L.circleMarker(
+            [0, 0], options={"fillOpacity": 1.0, "color": "#ff0000"})
+        self.marker.bindPopup('Maps are a treasure.')
+        self.map.addLayer(self.marker)
 
-        self.led_a = customtkinter.CTkCheckBox(
-            master=self.frame_1, text="Red LED")
-        self.led_a.pack(pady=10, padx=10)
+        self.map_tab.setLayout(self.maplayout)
 
-        self.led_b = customtkinter.CTkCheckBox(
-            master=self.frame_1, text="Green LED")
-        self.led_b.pack(pady=10, padx=10)
+        # Refresh button
+        self.refreshports()
+        self.port_rfsh_btn.clicked.connect(self.refreshports)
+        self.connect_btn.clicked.connect(self.connectports)
 
-        self.button_1 = customtkinter.CTkButton(
-            master=self.frame_1, command=self.update_btn, text="Update")
-        self.button_1.pack(pady=10, padx=10)
+    def print(self, *items, sep=' '):
+        ls = self.console.toPlainText().splitlines()
+        if (len(ls) > CONSOLE_SCROLLBACK):
+            del ls[0]
+        ls.append(sep.join([str(e) for e in items]))
+        self.console.setPlainText("\n".join(ls))
 
-    def update_btn(self):
-        mstr = f"{self.led_a.get()}{self.led_b.get()}"
-        print("Button click:", mstr)
-        if (self.connected):
-            asyncio.ensure_future(self.client.write_gatt_char(
-                LED_UUID, bytearray(mstr, 'utf-8')), loop=self.loop)
+    def find_vgps_port(self):
+        tlm = self.port_selector.currentIndex()
+        if (tlm < len(self.avail_ports) - 1):
+            print(self.avail_ports[tlm+1].portName())
+            return self.avail_ports[tlm+1]
+        else:
+            self.print(
+                "Error: Could not connect to VGPS port\n    Be sure to select the lower numbered port")
+            return None
 
-    async def connect_task(self):
-        self.connected = False
-        self.connecting = True
-        scanned_devices = await bleak.BleakScanner.discover(1)
-        print("scanned", True)
-
-        if len(scanned_devices) == 0:
-            raise bleak.exc.BleakError("no devices found")
-
-        for device in scanned_devices:
-            print(f"{device.name} ({device.address})")
-
-        for device in scanned_devices:
-            if (device.name == "ESP32 RocketTracker"):
-                print("Found RocketTracker")
-                try:
-                    self.client = bleak.BleakClient(device)
-                    await self.client.connect()
-                    self.connected = True
-                    for service in self.client.services:
-                        print(f"  service {service.uuid}")
-                        for characteristic in service.characteristics:
-                            print(
-                                f"  characteristic {characteristic.uuid} {hex(characteristic.handle)} ({len(characteristic.descriptors)} descriptors)"
-                            )
-                    self.connected
-                except bleak.exc.BleakError as e:
-                    print(f"  error {e}")
-
-        self.connecting = False
-        self.connect_status.configure(
-            text="connected!" if self.connected else "disconnected")
-
-    def disconnect(self):
-        future = asyncio.ensure_future(
-            self.client.disconnect(), loop=self.loop)
-
-        print("disconnected")
-
-        self.connected = False
-        self.connect_status.configure(
-            text="connected!" if self.connected else "disconnected")
-
-    def connect_btn(self):
-        print("connect!")
-        if (not self.connecting):
-            if (not self.connected):
-                loop.create_task(self.connect_task())
+    def connectports(self):
+        if (self.tlm_port.isOpen()):
+            self.tlm_port.close()
+            self.vgps_port.close()
+            self.connect_btn.setText("Connect")
+        else:
+            self.tlm_port.setPort(
+                self.avail_ports[self.port_selector.currentData()])
+            gpp = self.find_vgps_port()
+            if (gpp != None):
+                self.vgps_port.setPort(gpp)
             else:
-                self.disconnect()
+                self.tlm_port.close()
+                self.vgps_port.close()
+                return
 
-    async def updater(self, interval):
-        while True:
-            self.update()
-            await asyncio.sleep(interval)
+            for p in [self.vgps_port, self.tlm_port]:
+                p.setBaudRate(QSerialPort.BaudRate.Baud115200)
+                p.setParity(QSerialPort.Parity.NoParity)
+                p.setDataBits(QSerialPort.DataBits.Data8)
+                p.setFlowControl(QSerialPort.FlowControl.NoFlowControl)
+                p.setStopBits(QSerialPort.StopBits.OneStop)
 
-    async def ble_updater(self, interval):
-        while True:
-            await asyncio.sleep(interval)
+            if (self.tlm_port.open(QIODevice.ReadWrite) and self.vgps_port.open(QIODevice.ReadWrite)):
+                self.connect_btn.setText("Disconnect")
+                self.print(
+                    f"Connected to {self.tlm_port.portName()} and {self.vgps_port.portName()}")
 
-    def close(self):
-        # TODO: Ensure disconnect finishes
-        if self.connected:
-            self.disconnect()
-        for task in self.tasks:
-            task.cancel()
-        self.loop.stop()
-        self.destroy()
+                # self.tlm_port.write(bytes([0x02, 0x00, 0x00]))
+            else:
+                self.tlm_port.disconnect()
+                self.vgps_port.disconnect()
+
+    def tlm_read(self):
+        print(self.tlm_port.readAll())
+
+    def refreshports(self):
+        self.avail_ports = (sorted(
+            QSerialPortInfo.availablePorts(), key=lambda p: p.portName()))
+        self.port_selector.clear()
+        for i, port in enumerate(self.avail_ports):
+            self.port_selector.addItem(
+                f"{port.portName()} - {port.description()}", userData=i)
+            # self.print(port.portName(), port.productIdentifier(),
+            #            port.description())
 
 
-loop = asyncio.get_event_loop()
-app = App(loop)
-loop.run_forever()
-loop.close()
+app = QApplication(['', '--no-sandbox'])
+
+window = MainWindow()
+window.show()
+app.exec()

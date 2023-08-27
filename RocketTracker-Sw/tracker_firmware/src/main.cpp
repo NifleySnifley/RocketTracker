@@ -54,7 +54,7 @@ void gps_uart_task(void* args) {
     uart_event_t event;
 
     while (1) {
-        if (xQueueReceive(gps_uart_q, &event, pdMS_TO_TICKS(20))) {
+        if (xQueueReceive(gps_uart_q, &event, portMAX_DELAY)) {
             if (event.type == UART_PATTERN_DET) {
                 int pos = uart_pattern_pop_pos(TRACKER_GPS_UART);
 
@@ -64,10 +64,10 @@ void gps_uart_task(void* args) {
                         lwgps_process(&gps, &readbuf[1], len - 1);
                         readbuf[len] = '\0';
 
-                        // printf("%02x %02x %02x %02x\n", readbuf[0], readbuf[1], readbuf[2], readbuf[3]);
+                        // printf("L %s\r\n", &readbuf[1]);
                         // GPS Fresh
                         if (strncmp((char*)&readbuf[1], "$GPGGA", strlen("$GPGGA")) == 0) {
-                            printf("Fix: %d, Lat: %f, Lon: %f\n", gps.fix, gps.latitude, gps.longitude);
+                            // printf("%f,%f,%f\n", gps.latitude, gps.longitude, gps.);
                         }
                     }
 
@@ -96,12 +96,16 @@ void radio_task(void* args) {
         gi.alt = gps.altitude;
 
         fmg.reset();
-        fmg.encode_datum(MessageTypeID_TLM_GPS_Info, GPS_Info_fields, &gi);
+
+        if (lwgps_is_valid(&gps) && gps.altitude > 0)
+            fmg.encode_datum(MessageTypeID_TLM_GPS_Info, GPS_Info_fields, &gi);
+
         int size;
         uint8_t* frame = fmg.get_frame(&size);
 
         radio.transmit(frame, size, true);
 
+        // TODO: Better tx LED?
         gpio_set_level(TRACKER_LED_RED, 1);
         vTaskDelay(100);
         gpio_set_level(TRACKER_LED_RED, 0);
@@ -139,7 +143,7 @@ extern "C" void app_main() {
         ESP_LOGE(DBG_TAG, "Uart config failed");
     };
     uart_set_pin(TRACKER_GPS_UART, TRACKER_GPS_TX, TRACKER_GPS_RX, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
-    uart_enable_pattern_det_baud_intr(TRACKER_GPS_UART, '\n', 1, 1, 0, 0);
+    uart_enable_pattern_det_baud_intr(TRACKER_GPS_UART, '\n', 1, 9, 0, 0);
     uart_pattern_queue_reset(TRACKER_GPS_UART, 16);
     uart_flush(TRACKER_GPS_UART);
 

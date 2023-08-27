@@ -4,6 +4,3 @@
 [submodule "RocketTracker-Sw/nanopb"]
 	path = RocketTracker-Sw/nanopb
 	url = https://github.com/nanopb/nanopb
-[submodule "RocketTracker-Sw/tracker_firmware/lib/lwgps"]
-	path = RocketTracker-Sw/tracker_firmware/lib/lwgps
-	url = https://github.com/MaJerle/lwgps
