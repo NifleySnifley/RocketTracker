@@ -22,7 +22,7 @@ add_executable(receiver_firmware
 	src/main.cpp
 	src/vgps.cpp
 	src/comms/radio.cpp
-	src/comms/frame_manager.cpp
+	src/comms/comms_lib/frame_manager.cpp
 	src/display/ssd1306.cpp
 	src/usb_descriptors.cpp
 	${PROTO_SRCS} ${PROTO_HDRS}
