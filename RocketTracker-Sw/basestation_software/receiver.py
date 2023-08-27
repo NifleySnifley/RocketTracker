@@ -1,7 +1,9 @@
 from qtpy.QtWidgets import *
 from qtpy.QtCore import *
+from typing import Deque
 from pyqtlet2 import L, MapWidget
 from qtpy.QtSerialPort import QSerialPort, QSerialPortInfo
+from gen import protocol_pb2
 
 RADIOCFG_DEFAULT = {
     "FRF": 915,
@@ -21,9 +23,31 @@ class Receiver(QWidget):
         self.bw_inp = bw
         self.pow_inp = pow
 
+        self.frf_inp.setDisabled(True)
+        self.bw_inp.setDisabled(True)
+        self.pow_inp.setDisabled(True)
+
+        self.msg_queue = Deque()
+        self.rx_buf = []
+        self.rx_len = 0
+
         self.frf_inp.valueChanged.connect(self.set_frf)
         self.bw_inp.currentTextChanged.connect(self.set_bw)
         self.pow_inp.valueChanged.connect(self.set_pow)
+
+        self.port_tlm.readyRead.connect(self.tlm_rx)
+
+    def onconnect(self):
+        self.frf_inp.setDisabled(False)
+        self.bw_inp.setDisabled(False)
+        self.pow_inp.setDisabled(False)
+        pass
+
+    def ondisconnect(self):
+        self.frf_inp.setDisabled(True)
+        self.bw_inp.setDisabled(True)
+        self.pow_inp.setDisabled(True)
+        pass
 
     def send_config(self, param: str, value: str):
         txt = f"$P{param.upper()},{value}\r\n"
@@ -39,3 +63,18 @@ class Receiver(QWidget):
 
     def set_pow(self):
         self.send_config("POW", str(self.pow_inp.value()))
+
+    def tlm_rx(self):
+        bs = self.port_tlm.readAll().data()
+        for b in bs:
+            if (self.rx_len == 0):
+                if (len(self.rx_buf) > 0):
+                    # self.msg_queue.appendleft(self.rx_buf.copy())
+                    print([hex(e) for e in self.rx_buf])
+                    print("msgrx")
+                self.rx_len = int(b)
+                self.rx_buf.clear()
+            else:
+                self.rx_buf.append(b)
+                self.rx_len -= 1
+        pass

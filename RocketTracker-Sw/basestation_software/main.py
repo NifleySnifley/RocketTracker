@@ -3,7 +3,8 @@ from qtpy.QtWidgets import *
 from qtpy.QtCore import *
 from pyqtlet2 import L, MapWidget
 from qtpy.QtSerialPort import QSerialPort, QSerialPortInfo
-from mainwindow import Ui_MainWindow
+from gen.mainwindow import Ui_MainWindow
+import gen.protocol_pb2
 from receiver import Receiver
 
 CONSOLE_SCROLLBACK = 256
@@ -71,6 +72,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             self.tlm_port.close()
             self.vgps_port.close()
             self.connect_btn.setText("Connect")
+            self.receiver.ondisconnect()
         else:
             self.tlm_port.setPort(
                 self.avail_ports[self.port_selector.currentData()])
@@ -93,6 +95,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 self.connect_btn.setText("Disconnect")
                 self.print(
                     f"Connected to {self.tlm_port.portName()} and {self.vgps_port.portName()}")
+                self.receiver.onconnect()
 
                 # self.tlm_port.write(bytes([0x02, 0x00, 0x00]))
             else:

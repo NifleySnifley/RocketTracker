@@ -1,63 +1,61 @@
 syntax = "proto2";
-import "nanopb.proto";
 
 message GPS_Info {
-	required double lat = 1; 								// Latitude in degrees North
-	required double lon = 2; 								// Longitude in degrees West
-	required double alt = 3;								// Altitude in meters above SEA LEVEL
-	required uint32 utc_time = 4; 	// UTC time in NMEA hhmmsssss as an int
-	optional uint32 sats_used = 5; // Satellites used for fix
-	optional uint32 fix_status = 6; // NMEA fix status (0-6)
+  required double lat = 1;        // Latitude in degrees North
+  required double lon = 2;        // Longitude in degrees West
+  required double alt = 3;        // Altitude in meters above SEA LEVEL
+  required uint32 utc_time = 4;   // UTC time in NMEA hhmmsssss as an int
+  optional uint32 sats_used = 5;  // Satellites used for fix
+  optional uint32 fix_status = 6; // NMEA fix status (0-6)
 }
 
 message Battery_Info {
-	required float battery_voltage = 1;
-	required bool charging = 2;
+  required float battery_voltage = 1;
+  required bool charging = 2;
 }
 
-message Raw {
-	required bytes data = 1 [(nanopb).max_size = 252];
-}
+message Raw { required bytes data = 1; }
 
 message Altitude_Info {
-	required float alt_m = 1;
-	optional float v_speed = 2;
+  required float alt_m = 1;
+  optional float v_speed = 2;
 }
 
 message Orientation_Info {
-	required float orientation_x = 1;
-	required float orientation_y = 2;
-	required float orientation_z = 3;
+  required float orientation_x = 1;
+  required float orientation_y = 2;
+  required float orientation_z = 3;
 }
 
 enum AlertType {
-	ALT_Apogee = 0;		// Reached apogee
-	ALT_LowBatt = 1;	// Battery < 50%
-	ALT_Landed = 2;		// No major movement for 30 secs
-	ALT_Liftoff = 3;	// Large forward accel detected
-	ALT_Log50 = 4;		// Log memory 50% full warning (IDEA: Maybe have it reduce logging speed as it fills? inversely slower?)
-	ALT_LogFull = 5;	// Log full, logging stopped!
+  ALT_Apogee = 0;  // Reached apogee
+  ALT_LowBatt = 1; // Battery < 50%
+  ALT_Landed = 2;  // No major movement for 30 secs
+  ALT_Liftoff = 3; // Large forward accel detected
+  ALT_Log50 = 4;   // Log memory 50% full warning (IDEA: Maybe have it reduce
+                   // logging speed as it fills? inversely slower?)
+  ALT_LogFull = 5; // Log full, logging stopped!
 
-	ALT_Error = 128;	// Internal tracker error, error code specified in data
+  ALT_Error = 128; // Internal tracker error, error code specified in data
 }
 
 message Alert {
-	required AlertType type = 1;
-	optional uint32 data = 2;
+  required AlertType type = 1;
+  optional uint32 data = 2;
 }
 
 enum MessageTypeID {
-	// Telemetry
-	TLM_Blank = 0;
-	TLM_Raw = 1;
-	TLM_Battery_Info = 2;
-	TLM_GPS_Info = 3;
-	TLM_Altitude_Info = 4;
-	TLM_Orientation_Info = 5;
-	TLM_Alert = 6;
+  // Telemetry
+  TLM_Blank = 0;
+  TLM_Raw = 1;
+  TLM_Battery_Info = 2;
+  TLM_GPS_Info = 3;
+  TLM_Altitude_Info = 4;
+  TLM_Orientation_Info = 5;
+  TLM_Alert = 6;
 
-	// Commands
-	CMD_Ping = 128;
-	CMD_StartLog = 129;
-	CMD_StopLog = 130;
+  // Commands
+  CMD_Ping = 128;
+  CMD_StartLog = 129;
+  CMD_StopLog = 130;
 }
