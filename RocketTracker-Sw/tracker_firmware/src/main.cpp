@@ -9,7 +9,7 @@
 #include "esp_event.h"
 #include "esp_err.h"
 #include "driver/uart.h"
-// #include "Arduino.h"
+#include "driver/adc.h"
 #include "pindefs.h"
 #include <pb_encode.h>
 #include "lwgps.h"
@@ -95,7 +95,13 @@ void radio_task(void* args) {
         gi.utc_time = gps.seconds * 1000 + gps.minutes * 100000 + gps.hours * 10000000;
         gi.alt = gps.altitude;
 
+        // THIS IS FAKE!!!
+        Battery_Info bi;
+        bi.battery_voltage = 5.0f;
+
         fmg.reset();
+
+        fmg.encode_datum(MessageTypeID_TLM_Battery_Info, Battery_Info_fields, &bi);
 
         if (lwgps_is_valid(&gps) && gps.altitude > 0)
             fmg.encode_datum(MessageTypeID_TLM_GPS_Info, GPS_Info_fields, &gi);
@@ -120,7 +126,7 @@ void IRAM_ATTR radio_isr_a(void* arg) {
 
 extern "C" void app_main() {
     // initArduino();
-    esp_log_level_set("*", ESP_LOG_ERROR);
+    esp_log_level_set("*", ESP_LOG_VERBOSE);
 
     gpio_reset_pin(TRACKER_LED_RED);
     gpio_reset_pin(TRACKER_LED_GRN);
