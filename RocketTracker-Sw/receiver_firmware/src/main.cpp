@@ -175,11 +175,6 @@ void read_datum(int i, MessageTypeID id, int len, uint8_t* data) {
 		gps_fresh = true;
 	}
 
-	// printf("\tDatum ID %d of length %d\n", (int)id, len);
-	// printf("\t\t");
-	// for (int i = 0; i < len; ++i)
-	// 	printf("%.2x ", data[i]);
-	// printf("\n");
 }
 
 int main() {
@@ -198,7 +193,10 @@ int main() {
 	radio.setISRA(ISR_A);
 	radio.setISRB(ISR_B);
 	radio.setPower(20, true); // Low-er power for testing :)
-	radio.setFreq(914.0);
+	// radio.setFreq(914.0);
+
+	radio.applyConfig(radioconfig);
+
 	radio.startReceiving();
 
 	while (true) {
@@ -206,8 +204,17 @@ int main() {
 		absolute_time_t t = get_absolute_time();
 
 		if (radioconfig_updated) {
+			radioconfig_updated = false;
+			// char dbuf[128];
+			// snprintf(dbuf, sizeof(dbuf), "%f, %d, %d\r\n", radioconfig.frf, radioconfig.sf, radioconfig.cr);
+			// tud_cdc_n_write_str(ITF_VGPS, dbuf);
+			// tud_cdc_n_write_flush(ITF_VGPS);
+
 			radio.wait_for_safe_state();
+			radio.standby();
 			radio.applyConfig(radioconfig);
+			radio.initFIFO();
+			radio.startReceiving();
 		}
 
 		// if (absolute_time_diff_us(t, send_d) < 0) {
@@ -251,6 +258,7 @@ int main() {
 		// }
 
 		if (radio.messageAvailable()) {
+
 			write_frame_raw((uint8_t*)radio.rxbuf, radio.lastRxLen);
 
 			fmg.reset();
@@ -263,6 +271,7 @@ int main() {
 				radio_stat.SNR = radio.getSNR();
 			}
 			mutex_exit(&rdata_mutex);
+
 			fmg.reset();
 			fmg.encode_datum(MessageTypeID_RX_RadioStatus, Receiver_RadioStatus_fields, &radio_stat);
 			int len;
