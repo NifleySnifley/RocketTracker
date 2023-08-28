@@ -95,12 +95,31 @@ void core2() {
 	}
 }
 
+#define ESC 0xFF
+#define ESC_ESC 0x01
+#define ESC_NULL 0x02
+
+void write_b_esc(uint8_t b) {
+	if (b == 0) {
+		tud_cdc_n_write_char(ITF_TELEM, ESC);
+		tud_cdc_n_write_char(ITF_TELEM, ESC_NULL);
+	} else if (b == ESC) {
+		tud_cdc_n_write_char(ITF_TELEM, ESC);
+		tud_cdc_n_write_char(ITF_TELEM, ESC_ESC);
+	} else {
+		tud_cdc_n_write_char(ITF_TELEM, b);
+	}
+}
+
 void write_frame_raw(uint8_t* frame_data, int len) {
 	uint8_t l = len;
-	tud_cdc_n_write(ITF_TELEM, &l, 1);
-	tud_cdc_n_write(ITF_TELEM, frame_data, len);
-	// for (int i = 0; i < 16; ++i)
-	// 	tud_cdc_n_write_char(ITF_TELEM, '\0');
+	write_b_esc(l);
+
+	for (int i = 0; i < len; ++i)
+		write_b_esc(frame_data[i]);
+
+	tud_cdc_n_write_char(ITF_TELEM, '\0');
+
 	tud_cdc_n_write_flush(ITF_TELEM);
 }
 
@@ -108,26 +127,40 @@ uint8_t telem_txbuf[256];
 int telem_txsize = 0;
 void telem_rx_cb() {
 	static int telem_txidx = 0;
-	// 0 ready, 1 reading data, 2 ending zeros
+	// 0 ready, 1 reading data, 2 esc, 3 done
 	static int telem_rawtx_state = 0;
+	static int telem_rawtx_state_ret = 0;
+	static uint8_t val_unesc;
+
+	uint8_t byte = (uint8_t)tud_cdc_n_read_char(ITF_TELEM);
+
+	if (byte == 0) {
+		telem_txidx = 0;
+		telem_rawtx_state = 1;
+	}
+
+	if (byte == ESC) {
+		telem_rawtx_state_ret = telem_rawtx_state;
+		telem_rawtx_state = 2;
+	} else {
+		val_unesc = byte;
+	}
 
 	switch (telem_rawtx_state) {
 		case 0:
-
-			telem_txsize = (uint8_t)tud_cdc_n_read_char(ITF_TELEM);
-			if (telem_txsize != 0) {
-				telem_txidx = 0;
-				telem_rawtx_state = 1;
-			}
+			telem_txsize = val_unesc;
 			break;
 		case 1:
-			telem_txbuf[telem_txidx++] = (uint8_t)tud_cdc_n_read_char(ITF_TELEM);
+			telem_txbuf[telem_txidx++] = val_unesc;
 			if (telem_txidx == (telem_txsize - 1)) {
-				telem_rawtx_state = 2;
+				telem_rawtx_state = 3;
 				telem_txidx = 0;
 			}
 			break;
 		case 2:
+			val_unesc = byte == ESC_ESC ? ESC : 0;
+			telem_rawtx_state = telem_rawtx_state_ret; // Pop state
+		case 3:
 			radio.transmit(telem_txbuf, telem_txsize, true);
 			ledr_d = make_timeout_time_ms(MS_LED);
 			telem_rawtx_state = 0;
@@ -142,11 +175,6 @@ void read_datum(int i, MessageTypeID id, int len, uint8_t* data) {
 		gps_fresh = true;
 	}
 
-	// printf("\tDatum ID %d of length %d\n", (int)id, len);
-	// printf("\t\t");
-	// for (int i = 0; i < len; ++i)
-	// 	printf("%.2x ", data[i]);
-	// printf("\n");
 }
 
 int main() {
@@ -165,7 +193,10 @@ int main() {
 	radio.setISRA(ISR_A);
 	radio.setISRB(ISR_B);
 	radio.setPower(20, true); // Low-er power for testing :)
-	radio.setFreq(914.0);
+	// radio.setFreq(914.0);
+
+	radio.applyConfig(radioconfig);
+
 	radio.startReceiving();
 
 	while (true) {
@@ -173,8 +204,17 @@ int main() {
 		absolute_time_t t = get_absolute_time();
 
 		if (radioconfig_updated) {
+			radioconfig_updated = false;
+			// char dbuf[128];
+			// snprintf(dbuf, sizeof(dbuf), "%f, %d, %d\r\n", radioconfig.frf, radioconfig.sf, radioconfig.cr);
+			// tud_cdc_n_write_str(ITF_VGPS, dbuf);
+			// tud_cdc_n_write_flush(ITF_VGPS);
+
 			radio.wait_for_safe_state();
+			radio.standby();
 			radio.applyConfig(radioconfig);
+			radio.initFIFO();
+			radio.startReceiving();
 		}
 
 		// if (absolute_time_diff_us(t, send_d) < 0) {
@@ -218,6 +258,7 @@ int main() {
 		// }
 
 		if (radio.messageAvailable()) {
+
 			write_frame_raw((uint8_t*)radio.rxbuf, radio.lastRxLen);
 
 			fmg.reset();
@@ -230,6 +271,7 @@ int main() {
 				radio_stat.SNR = radio.getSNR();
 			}
 			mutex_exit(&rdata_mutex);
+
 			fmg.reset();
 			fmg.encode_datum(MessageTypeID_RX_RadioStatus, Receiver_RadioStatus_fields, &radio_stat);
 			int len;

@@ -683,7 +683,7 @@ void RFM97_LoRa::receive() {
 bool RFM97_LoRa::applyConfig(RFM97_LoRa_config cfg) {
 	ASSURE(setFreq(cfg.frf));
 	ASSURE(setBandwidth(cfg.bw_mode));
-	ASSURE(setCodingRate(cfg.cr));
+	// ASSURE(setCodingRate(cfg.cr));
 	ASSURE(setSpreadingFactor(cfg.sf));
 	ASSURE(setPower(cfg.power, true));
 	return true;
