@@ -1,11 +1,13 @@
 import sys
 from qtpy.QtWidgets import *
+from qtpy.QtGui import QPalette, QColor
 from qtpy.QtCore import *
 from pyqtlet2 import L, MapWidget
 from qtpy.QtSerialPort import QSerialPort, QSerialPortInfo
 from gen.mainwindow import Ui_MainWindow
-import gen.protocol_pb2
-from receiver import Receiver
+from gen.protocol_pb2 import *
+from receiver import Receiver, msgtype_str
+from typing import Deque
 
 CONSOLE_SCROLLBACK = 256
 
@@ -13,6 +15,8 @@ CONSOLE_SCROLLBACK = 256
 class MainWindow(QMainWindow, Ui_MainWindow):
     def __init__(self, *args, obj=None, **kwargs):
         super(MainWindow, self).__init__(*args, **kwargs)
+        self.rssi_disp: QLCDNumber
+        self.snr_disp: QLCDNumber
         self.map_tab: QWidget
         self.port_selector: QComboBox
         self.connect_btn: QPushButton
@@ -28,6 +32,8 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.receiver = Receiver(
             self.tlm_port, self.vgps_port, self.rx_cfg_frf, self.rx_cfg_bw, self.rx_cfg_pow)
 
+        self.gps_track = Deque()
+
         self.mapWidget = MapWidget()
         self.maplayout = QVBoxLayout()
         self.maplayout.addWidget(self.mapWidget)
@@ -38,10 +44,10 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.map.setView([0, 0], 10)
         L.tileLayer(
             'https://mt0.google.com/vt/lyrs=s&hl=en&x={x}&y={y}&z={z}&s=Gt').addTo(self.map)
-        self.marker = L.circleMarker(
-            [0, 0], options={"fillOpacity": 1.0, "color": "#ff0000"})
-        self.marker.bindPopup('Maps are a treasure.')
-        self.map.addLayer(self.marker)
+        self.marker = L.marker(
+            [0, 0])
+        self.map_track_line = L.polyline(
+            [], {"color": 'lightblue'}).addTo(self.map)
 
         self.map_tab.setLayout(self.maplayout)
 
@@ -49,6 +55,31 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.refreshports()
         self.port_rfsh_btn.clicked.connect(self.refreshports)
         self.connect_btn.clicked.connect(self.connectports)
+        self.receiver.datumProcessed.connect(self.datum_cb)
+
+    def datum_cb(self, t: MessageTypeID, datum: object):
+        # print(f"Type: {msgtype_str(t)}")
+        if (t == TLM_GPS_Info):
+            datum: GPS_Info = datum
+
+            self.gps_track.append((datum.lat, datum.lon))
+            if (len(self.gps_track) > 4096):
+                self.gps_track.popLeft()
+
+            self.map_track_line.latLngs = [[a, b] for a, b in self.gps_track]
+            self.map_track_line.removeFrom(self.map).addTo(self.map)
+
+            self.marker.latLng = [datum.lat, datum.lon]
+            self.marker.removeFrom(self.map).addTo(self.map)
+
+            # if ()
+            self.map.flyTo([datum.lat, datum.lon])
+
+        if (t == RX_RadioStatus):
+            datum: Receiver_RadioStatus
+
+            self.rssi_disp.display(datum.RSSI)
+            self.snr_disp.display(datum.SNR)
 
     def print(self, *items, sep=' '):
         ls = self.console.toPlainText().splitlines()
@@ -95,6 +126,9 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 self.connect_btn.setText("Disconnect")
                 self.print(
                     f"Connected to {self.tlm_port.portName()} and {self.vgps_port.portName()}")
+                self.tlm_port.clear()
+                self.vgps_port.clear()
+
                 self.receiver.onconnect()
 
                 # self.tlm_port.write(bytes([0x02, 0x00, 0x00]))
