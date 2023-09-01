@@ -177,6 +177,8 @@
 #define SX1276_DIO5_MODEREADY 0b00
 #define SX1276_DIO5_CLKOUT 0b01
 
+#define SX1276_IRQ_CRC_MASK 0b00100000
+
 #define ASSURE(x) if (!(x)) return false;
 
 

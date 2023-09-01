@@ -98,6 +98,8 @@ bool RFM97_LoRa::writeFIFO(uint8_t* bytes, size_t n) {
 	ASSURE(n <= 256);
 	ASSURE(n > 0);
 
+	// write(SX1276_REG_FIFO_TX_BASEADDR, 0x00);
+	write(SX1276_REG_FIFO_ADDR_PTR, 0x00);
 	write(SX1276_REG_FIFO, bytes, n);
 
 	return true;
@@ -108,7 +110,7 @@ bool RFM97_LoRa::writeFIFO_DMA(uint8_t* bytes, size_t n) {
 	ASSURE(n <= 256);
 	ASSURE(n > 0);
 
-	write(SX1276_REG_FIFO_TX_BASEADDR, 0x00);
+	// write(SX1276_REG_FIFO_TX_BASEADDR, 0x00);
 	write(SX1276_REG_FIFO_ADDR_PTR, 0x00);
 
 	uint8_t w = SX1276_REG_FIFO | 0b10000000;
@@ -138,7 +140,8 @@ bool RFM97_LoRa::readFIFO(uint8_t* bytes, size_t n) {
 	ASSURE(n <= 256);
 	ASSURE(n > 0);
 
-	// write(SX1276_REG_FIFO_ADDR_PTR, offset);
+	// write(SX1276_REG_FIFO_RX_BASEADDR, 0x00);
+	write(SX1276_REG_FIFO_ADDR_PTR, read(SX1276_REG_FIFO_RX_CURRENTADDR));
 	read(SX1276_REG_FIFO, bytes, n);
 
 	return true;
@@ -152,6 +155,8 @@ bool RFM97_LoRa::readFIFO_DMA(volatile uint8_t* bytes, size_t n) {
 
 	// write(SX1276_REG_FIFO_RX_BASEADDR, 0x00);
 	// write(SX1276_REG_FIFO_ADDR_PTR, 0x00);
+
+	write(SX1276_REG_FIFO_ADDR_PTR, read(SX1276_REG_FIFO_RX_CURRENTADDR));
 
 	SPI_AQUIRE;
 	gpio_put(cs, 0);

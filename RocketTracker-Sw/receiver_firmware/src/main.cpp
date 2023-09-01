@@ -118,7 +118,8 @@ void write_frame_raw(uint8_t* frame_data, int len) {
 	for (int i = 0; i < len; ++i)
 		write_b_esc(frame_data[i]);
 
-	tud_cdc_n_write_char(ITF_TELEM, '\0');
+	for (int i = 0; i < 10; ++i)
+		tud_cdc_n_write_char(ITF_TELEM, '\0');
 
 	tud_cdc_n_write_flush(ITF_TELEM);
 }
@@ -127,43 +128,59 @@ uint8_t telem_txbuf[256];
 int telem_txsize = 0;
 void telem_rx_cb() {
 	static int telem_txidx = 0;
-	// 0 ready, 1 reading data, 2 esc, 3 done
+	// 0 ready, 1 reading data, 2 esc, 3 done UNUSED
 	static int telem_rawtx_state = 0;
 	static int telem_rawtx_state_ret = 0;
 	static uint8_t val_unesc;
 
 	uint8_t byte = (uint8_t)tud_cdc_n_read_char(ITF_TELEM);
 
+	// Reset FSM on zero byte!
 	if (byte == 0) {
 		telem_txidx = 0;
-		telem_rawtx_state = 1;
+		telem_rawtx_state = 0;
+		// printf("Zero rst\r\n");
+		return;
 	}
 
+	// On esc, save state and go to escape state
 	if (byte == ESC) {
 		telem_rawtx_state_ret = telem_rawtx_state;
 		telem_rawtx_state = 2;
+		// printf("ESC\n");
+		return;
+		// If in esc state, set val unesc to the unescaped!
+	} else if (telem_rawtx_state == 2) {
+		val_unesc = (byte == ESC_ESC) ? ESC : 0;
+		telem_rawtx_state = telem_rawtx_state_ret; // Pop state
+		// printf("UNESC: %d\n", val_unesc);
 	} else {
+		// Otherwise the value is just the byte
 		val_unesc = byte;
 	}
 
 	switch (telem_rawtx_state) {
 		case 0:
 			telem_txsize = val_unesc;
+			telem_rawtx_state = 1;
+			telem_txidx = 0;
+			// printf("Got len %d\n", telem_txsize);
 			break;
 		case 1:
+			// printf("Read byte %d to idx %d\n", val_unesc, telem_txidx);
 			telem_txbuf[telem_txidx++] = val_unesc;
-			if (telem_txidx == (telem_txsize - 1)) {
-				telem_rawtx_state = 3;
+			if (telem_txidx >= telem_txsize) {
+				// telem_rawtx_state = 3;
+
+				radio.transmit(telem_txbuf, telem_txsize, true);
+				// printf("Send %d bytes\n", telem_txsize);
+				// write_frame_raw(telem_txbuf, telem_txsize);
+				ledr_d = make_timeout_time_ms(MS_LED);
+				telem_rawtx_state = 0;
+
 				telem_txidx = 0;
+				// printf("Message full!\n");
 			}
-			break;
-		case 2:
-			val_unesc = byte == ESC_ESC ? ESC : 0;
-			telem_rawtx_state = telem_rawtx_state_ret; // Pop state
-		case 3:
-			radio.transmit(telem_txbuf, telem_txsize, true);
-			ledr_d = make_timeout_time_ms(MS_LED);
-			telem_rawtx_state = 0;
 			break;
 	}
 }

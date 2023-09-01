@@ -1,0 +1,8 @@
+if (read(SX1276_REG_IRQFLAGS) != 0b01010000 && (read(SX1276_REG_HOPCHANNEL) & (1 << 6))) {
+				clearIRQ();
+				// CRC error!! TODO: temporarily makes red
+				gpio_put(PIN_LED_R, 1);
+			} else {
+				clearIRQ();
+				receive();
+			}
