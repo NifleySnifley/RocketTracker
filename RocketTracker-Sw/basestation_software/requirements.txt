@@ -1,9 +1,9 @@
-aiohttp_client_cache==0.8.2
 bleak==0.20.2
 cacheproxy==0.1.0
 customtkinter==5.2.0
-protobuf==3.12.4
+protobuf<5.0dev,>=4.21.6
 PyQt5==5.15.9
+pyqt5_tools==5.15.9
 PyQt5_sip==12.12.2
 pyqtlet2==0.9.3
 QtPy==2.4.0
