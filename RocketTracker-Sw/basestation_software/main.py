@@ -5,22 +5,80 @@ from io import TextIOWrapper
 from qtpy.QtWidgets import *
 from qtpy.QtGui import QPalette, QColor
 from qtpy.QtCore import *
+from qtpy import QtWidgets
 from pyqtlet2 import L, MapWidget
 from qtpy.QtSerialPort import QSerialPort, QSerialPortInfo
 from gen.mainwindow import Ui_MainWindow
+from gen import logdialog
 from gen.protocol_pb2 import *
 from google.protobuf.json_format import MessageToJson
-from util import battery_percent, MTID_TO_TYPE
-from receiver import Receiver, msgtype_str
+from util import battery_percent, MTID_TO_TYPE, msgtype_str
+from receiver import Receiver
 from typing import Deque
 import json
+from threading import Thread
+from cacheserver import proxy_main
 
-CONSOLE_SCROLLBACK = 256
+TILESTACHE_CFG = {
+	"layers":{
+		"osm":{
+			"provider":{
+                "name":"proxy",
+                "url": "http://tile.openstreetmap.org/{Z}/{X}/{Y}.png"
+			}
+		}
+	},
+	"cache": {
+		"name": "test_cache"
+	}
+}
+
+CONSOLE_SCROLLBACK = 64
+
+# Dialog for configuring logging to a file
+class LogDialog(QDialog):
+    """Employee dialog."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.ui = logdialog.Ui_Dialog()
+        self.ui.setupUi(self)
+        self.filedialog = QFileDialog(self)
+        
+        self.log_new = False
+        self.log_cancel = False
+        self.log_filename = ""
+        
+        self.ui.buttonBox.button(QDialogButtonBox.StandardButton.Open).clicked.connect(self.open_btn)
+        self.ui.buttonBox.button(QDialogButtonBox.StandardButton.Ok).clicked.connect(self.ok_btn)
+        self.ui.buttonBox.button(QDialogButtonBox.StandardButton.Cancel).clicked.connect(self.cancel_btn)
+        self.ui.currentLogFileLineEdit.textChanged.connect(self.fname_edit)
+
+        
+        self.filedialog.setFileMode(QFileDialog.FileMode.AnyFile)
+        # self.filedialog.setNameFilter("Log files (*.txt *.log)")
+        self.filedialog.setViewMode(QFileDialog.Detail)
+        
+    def fname_edit(self):
+        self.log_filename = self.ui.currentLogFileLineEdit.text()
+        
+    def open_btn(self):
+        self.log_filename, tp = self.filedialog.getSaveFileName(self, "Log File", "./tracker.log", "Log files (*.txt *.log)")
+        self.ui.currentLogFileLineEdit.setText(self.log_filename)
+        
+    def cancel_btn(self):
+        self.log_cancel = True
+        self.accept()
+    
+    def ok_btn(self):
+        self.log_new = len(self.log_filename) != 0
+        self.accept()
 
 
 class MainWindow(QMainWindow, Ui_MainWindow):
     def __init__(self, *args, obj=None, **kwargs):
         super(MainWindow, self).__init__(*args, **kwargs)
+        
+        # Type definitions... annoying
         self.battery_bar: QProgressBar
         self.battery_voltage: QLabel
         self.rssi_disp: QLCDNumber
@@ -30,10 +88,17 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.connect_btn: QPushButton
         self.console: QPlainTextEdit
         self.port_rfsh_btn: QToolButton
+        
         self.avail_ports: list[QSerialPortInfo] = []
+        
         self.setupUi(self)
+        
+        self.actionLog_file: QtWidgets.QWidgetAction
+        self.actionClear_Track: QtWidgets.QWidgetAction
+        self.actionFollow: QtWidgets.QWidgetAction
 
-        self.logfile: TextIOWrapper = open("tracker.log", 'w')
+        self.logfile: TextIOWrapper = None #open("tracker.log", 'w')
+        
 
         self.tlm_port = QSerialPort()
         self.vgps_port = QSerialPort()
@@ -68,7 +133,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.map = L.map(self.mapWidget)
         self.map.setView([0, 0], 10)
         L.tileLayer(
-            'https://mt0.google.com/vt/lyrs=s&hl=en&x={x}&y={y}&z={z}&s=Gt').addTo(self.map)
+            'http://127.0.0.1:8080/mt0.google.com/vt/lyrs=s&hl=en&x={x}&y={y}&z={z}&s=Gt').addTo(self.map)
         self.marker = L.marker(
             [0, 0])
         self.map_track_line = L.polyline(
@@ -81,6 +146,23 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.port_rfsh_btn.clicked.connect(self.refreshports)
         self.connect_btn.clicked.connect(self.connectports)
         self.receiver.datumProcessed.connect(self.datum_cb)
+        
+        self.actionLog_file.triggered.connect(self.logfile_menu_act)
+        self.actionClear_Track.triggered.connect(self.cleartrack_menu_act)
+        
+    def logfile_menu_act(self):
+        dlg = LogDialog(self)
+        dlg.exec()     
+           
+        if (dlg.log_new):
+            self.logfile = open(dlg.log_filename, 'w')
+        elif (dlg.log_cancel and self.logfile != None and not self.logfile.closed):
+            self.logfile.close()
+            
+    def cleartrack_menu_act(self):
+        self.gps_track.clear()
+        self.map_track_line.latLngs = [[a, b] for a, b in self.gps_track]
+        self.map_track_line.removeFrom(self.map).addTo(self.map)
 
     def datum_cb(self, t: MessageTypeID, datum: object):
         if (self.logfile != None and not self.logfile.closed):
@@ -96,11 +178,11 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             except Exception:
                 self.print("Logging error!")
 
-        print(f"Type: {msgtype_str(t)}")
+        # print(f"Type: {msgtype_str(t)}")
 
         if (t == TLM_GPS_Info):
-            datum: GPS_Info = datum
-
+            datum: GPS_Info = datum            
+    
             self.gps_track.append((datum.lat, datum.lon))
             if (len(self.gps_track) > 4096):
                 self.gps_track.popLeft()
@@ -111,8 +193,8 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             self.marker.latLng = [datum.lat, datum.lon]
             self.marker.removeFrom(self.map).addTo(self.map)
 
-            # if ()
-            self.map.flyTo([datum.lat, datum.lon], 18)
+            if (self.actionFollow.isChecked()):
+                self.map.flyTo([datum.lat, datum.lon], 18)
 
         if (t == RX_RadioStatus):
             datum: Receiver_RadioStatus
@@ -192,17 +274,21 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             #            port.description())
 
     def closeEvent(self, event):
-        if (self.logfile != None):
+        if (self.logfile != None and not self.logfile.closed):
             self.logfile.flush()
             self.logfile.close()
         event.accept()  # let the window close
 
+proxy = Thread(target=proxy_main)
+proxy.start()
 
+# Make it big
 os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "1"
-# os.environ["QT_AUTO_SCREEN_SCALE_FACTOR"] = "2"
 os.environ["QT_SCALE_FACTOR"] = "1.25"
 app = QApplication(['', '--no-sandbox'])
-# app.setAttribute(Qt.AA_EnableHighDpiScaling)
 window = MainWindow()
 window.show()
 app.exec()
+
+PROXY_QUIT = True
+proxy.join()

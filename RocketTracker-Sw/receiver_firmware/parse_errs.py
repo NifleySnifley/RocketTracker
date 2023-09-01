@@ -55,4 +55,4 @@ for m in messages:
 
 	print('\n')
  
-print(f"{(bads/len(messages)) * 100.0}% bad")
+print(f"{(bads/len(messages)) * 100.0}% bad out of {len(messages)}")

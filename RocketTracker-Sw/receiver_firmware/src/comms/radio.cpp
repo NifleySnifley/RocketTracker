@@ -604,7 +604,13 @@ void RFM97_LoRa::ISR_A(uint gpio, uint32_t events) {
 			break;
 			// case RFM97_RadioState::RX_FINISHED:
 		case RFM97_RadioState::RX_WAITING:
-			receive();
+			if (read(SX1276_REG_IRQFLAGS) & (1 << 5)) {
+				clearIRQ();
+				// CRC error!!!
+			} else {
+				clearIRQ();
+				receive();
+			}
 			break;
 		default:
 			return;
