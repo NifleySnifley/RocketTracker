@@ -11,7 +11,7 @@
    </rect>
   </property>
   <property name="windowTitle">
-   <string>MainWindow</string>
+   <string>RocketTracker Basestation</string>
   </property>
   <widget class="QWidget" name="centralwidget">
    <layout class="QGridLayout" name="gridLayout">
@@ -596,15 +596,16 @@
      <x>0</x>
      <y>0</y>
      <width>942</width>
-     <height>20</height>
+     <height>26</height>
     </rect>
    </property>
    <widget class="QMenu" name="menuFile">
     <property name="title">
      <string>File</string>
     </property>
-    <addaction name="actionClear_Track"/>
-    <addaction name="actionLog_file"/>
+    <addaction name="actionClear_Session"/>
+    <addaction name="actionLog_Config"/>
+    <addaction name="actionLoad_Log"/>
    </widget>
    <widget class="QMenu" name="menuView">
     <property name="title">
@@ -616,14 +617,14 @@
    <addaction name="menuView"/>
   </widget>
   <widget class="QStatusBar" name="statusbar"/>
-  <action name="actionClear_Track">
+  <action name="actionClear_Session">
    <property name="text">
-    <string>Clear Track</string>
+    <string>Clear Session</string>
    </property>
   </action>
-  <action name="actionLog_file">
+  <action name="actionLog_Config">
    <property name="text">
-    <string>File Logging</string>
+    <string>Configure File Logging</string>
    </property>
   </action>
   <action name="actionFollow">
@@ -635,6 +636,11 @@
    </property>
    <property name="text">
     <string>Follow Tracker</string>
+   </property>
+  </action>
+  <action name="actionLoad_Log">
+   <property name="text">
+    <string>Load Log</string>
    </property>
   </action>
  </widget>

@@ -153,7 +153,7 @@ bool RFM97_LoRa::writeFIFO(uint8_t* bytes, size_t n) {
 	ASSURE(n <= 256);
 	ASSURE(n > 0);
 
-	HAL_spiwrite(SX1276_REG_FIFO_TX_BASEADDR, 0x00);
+	// HAL_spiwrite(SX1276_REG_FIFO_TX_BASEADDR, 0x00);
 	HAL_spiwrite(SX1276_REG_FIFO_ADDR_PTR, 0x00);
 
 	HAL_spiwrite(SX1276_REG_FIFO, bytes, n);
@@ -188,7 +188,7 @@ bool RFM97_LoRa::readFIFO(uint8_t* bytes, size_t n) {
 	ASSURE(n <= 256);
 	ASSURE(n > 0);
 
-	// write(SX1276_REG_FIFO_ADDR_PTR, offset);
+	HAL_spiwrite(SX1276_REG_FIFO_ADDR_PTR, HAL_spiread(SX1276_REG_FIFO_RX_CURRENTADDR));
 	HAL_spiread(SX1276_REG_FIFO, bytes, n);
 
 	return true;

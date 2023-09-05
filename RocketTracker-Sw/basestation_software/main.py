@@ -1,9 +1,9 @@
-
+import asyncio
 import os
 import sys
 from io import TextIOWrapper
 from qtpy.QtWidgets import *
-from qtpy.QtGui import QPalette, QColor
+from qtpy.QtGui import QPalette, QColor, QIcon
 from qtpy.QtCore import *
 from qtpy import QtWidgets
 from pyqtlet2 import L, MapWidget
@@ -11,34 +11,23 @@ from qtpy.QtSerialPort import QSerialPort, QSerialPortInfo
 from gen.mainwindow import Ui_MainWindow
 from gen import logdialog
 from gen.protocol_pb2 import *
-from google.protobuf.json_format import MessageToJson
-from util import battery_percent, MTID_TO_TYPE, msgtype_str
+from google.protobuf.json_format import MessageToJson, ParseDict
+from util import battery_percent, MTID_TO_TYPE, msgtype_str, msgtype_fromstr
 from receiver import Receiver
 from typing import Deque
 import json
 from threading import Thread
 from cacheserver import proxy_main
-import asyncio
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+import matplotlib
+matplotlib.use('QTAgg')
 
-TILESTACHE_CFG = {
-    "layers": {
-        "osm": {
-            "provider": {
-                "name": "proxy",
-                "url": "http://tile.openstreetmap.org/{Z}/{X}/{Y}.png"
-            }
-        }
-    },
-    "cache": {
-        "name": "test_cache"
-    }
-}
 
 CONSOLE_SCROLLBACK = 64
 
+
 # Dialog for configuring logging to a file
-
-
 class LogDialog(QDialog):
     """Employee dialog."""
 
@@ -59,6 +48,8 @@ class LogDialog(QDialog):
         self.ui.buttonBox.button(
             QDialogButtonBox.StandardButton.Cancel).clicked.connect(self.cancel_btn)
         self.ui.currentLogFileLineEdit.textChanged.connect(self.fname_edit)
+
+        # self.ui.currentLogFileLabel.setText(self.log_filename)
 
         self.filedialog.setFileMode(QFileDialog.FileMode.AnyFile)
         # self.filedialog.setNameFilter("Log files (*.txt *.log)")
@@ -83,7 +74,9 @@ class LogDialog(QDialog):
 
 class MainWindow(QMainWindow, Ui_MainWindow):
     def __init__(self, *args, obj=None, **kwargs):
+        # Window setup
         super(MainWindow, self).__init__(*args, **kwargs)
+        self.setWindowIcon(QIcon('icon.svg'))
 
         # Type definitions... annoying
         self.battery_bar: QProgressBar
@@ -91,38 +84,45 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.rssi_disp: QLCDNumber
         self.snr_disp: QLCDNumber
         self.map_tab: QWidget
+        self.graph_tab: QWidget
         self.port_selector: QComboBox
         self.connect_btn: QPushButton
         self.console: QPlainTextEdit
         self.port_rfsh_btn: QToolButton
-
-        self.avail_ports: list[QSerialPortInfo] = []
+        self.stats_frame: QFrame
 
         self.setupUi(self)
 
-        self.actionLog_file: QtWidgets.QWidgetAction
-        self.actionClear_Track: QtWidgets.QWidgetAction
+        # Set default UI states, disabled, etc.
+        self.stats_frame.setDisabled(True)
+
+        # Action (menu) buttons
+        self.actionLog_Config: QtWidgets.QWidgetAction
+        self.actionClear_Session: QtWidgets.QWidgetAction
+        self.actionLoad_Log: QtWidgets.QWidgetAction
         self.actionFollow: QtWidgets.QWidgetAction
 
+        # Logging
         self.logfile: TextIOWrapper = None  # open("tracker.log", 'w')
 
+        # Ports
+        self.avail_ports: list[QSerialPortInfo] = []
         self.tlm_port = QSerialPort()
         self.vgps_port = QSerialPort()
 
+        # Colors of stats 7seg displays
         palette = self.rssi_disp.palette()
-
-        # foreground color
         palette.setColor(palette.WindowText, QColor(85, 85, 255))
-
         self.rssi_disp.setPalette(palette)
         self.snr_disp.setPalette(palette)
 
-        # TODO: This class handles decoding, make signal for messages!
+        # Message parsing, etc.
         self.receiver = Receiver(
             self.tlm_port, self.vgps_port, self.rx_cfg_frf, self.rx_cfg_bw, self.rx_cfg_pow, self.print)
 
         self.gps_track = Deque()
 
+        # Map setup
         if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
             # self.print('running in a PyInstaller bundle')
             self.mapWidget = MapWidget(
@@ -147,14 +147,52 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
         self.map_tab.setLayout(self.maplayout)
 
+        # Graph setup!
+        self.graphlayout = QVBoxLayout()
+
+        # TODO: Matplotlib interface buttons, etc.
+        self.graphfig = Figure()
+        self.graphax = self.graphfig.add_subplot(111)
+        self.graphcanvas = FigureCanvasQTAgg(self.graphfig)
+        self.graphcanvas.setSizePolicy(
+            QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+        self.graphcanvas.updateGeometry()
+
+        self.graphlayout.addWidget(self.graphcanvas)
+        self.graph_tab.setLayout(self.graphlayout)
+
         # Refresh button
         self.refreshports()
         self.port_rfsh_btn.clicked.connect(self.refreshports)
         self.connect_btn.clicked.connect(self.connectports)
         self.receiver.datumProcessed.connect(self.datum_cb)
 
-        self.actionLog_file.triggered.connect(self.logfile_menu_act)
-        self.actionClear_Track.triggered.connect(self.cleartrack_menu_act)
+        # Action (menu) buttons
+        self.actionLog_Config.triggered.connect(self.logfile_menu_act)
+        self.actionClear_Session.triggered.connect(self.clearsession_menu_act)
+        self.actionLoad_Log.triggered.connect(self.loadlog_menu_act)
+
+    def loadlog_menu_act(self):
+        fsel = QFileDialog(self)
+        loadfname, tp = fsel.getOpenFileName(
+            self, "Log File", "./tracker.log", "Log files (*.txt *.log)")
+
+        if (len(loadfname) > 0 and os.path.isfile(loadfname)):
+            if (self.logfile is not None):
+                self.logfile.close()
+
+            # Clear current session
+            self.clearsession_menu_act()
+
+            with open(loadfname, 'r') as f:
+                for line in f.readlines():
+                    fjson = json.loads(line)
+                    dtype = msgtype_fromstr(fjson['type'])
+                    ddata = fjson['datum']
+
+                    if (dtype is not None and ddata is not None):
+                        self.datum_cb(dtype, ParseDict(
+                            ddata, MTID_TO_TYPE[msgtype_str(dtype)]))
 
     def logfile_menu_act(self):
         dlg = LogDialog(self)
@@ -165,12 +203,15 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         elif (dlg.log_cancel and self.logfile != None and not self.logfile.closed):
             self.logfile.close()
 
-    def cleartrack_menu_act(self):
+    def clearsession_menu_act(self):
+        self.stats_frame.setDisabled(True)
         self.gps_track.clear()
         self.map_track_line.latLngs = [[a, b] for a, b in self.gps_track]
         self.map_track_line.removeFrom(self.map).addTo(self.map)
 
     def datum_cb(self, t: MessageTypeID, datum: object):
+        self.stats_frame.setDisabled(False)  # We're getting messages!
+
         if (self.logfile != None and not self.logfile.closed):
             try:
                 vtype = (MTID_TO_TYPE[msgtype_str(t)])
@@ -189,9 +230,17 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         if (t == TLM_GPS_Info):
             datum: GPS_Info = datum
 
+            # TODO: Use CRC and more tracker testing to remove the need for this!!!
+            if (len(self.gps_track) > 0 and False):
+                if ((abs(self.gps_track[-1][0] - datum.lat) + abs(self.gps_track[-1][1] - datum.lon) > 0.1)):
+                    return  # Reject ridiculous gps errors
+
             self.gps_track.append((datum.lat, datum.lon))
             if (len(self.gps_track) > 4096):
                 self.gps_track.popLeft()
+
+            if (datum.fix_status == 0):
+                return  # Nothing to do with invalid GPS fix
 
             self.map_track_line.latLngs = [[a, b] for a, b in self.gps_track]
             self.map_track_line.removeFrom(self.map).addTo(self.map)
@@ -210,6 +259,10 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
         if (t == TLM_Battery_Info):
             datum: Battery_Info
+            # Reject obviously wrong values
+            if (datum.battery_voltage > 24.0 or datum.battery_voltage < 0.0):
+                return
+
             self.battery_voltage.setText(f"({datum.battery_voltage})")
             self.battery_bar.setValue(
                 int(battery_percent(datum.battery_voltage)))
@@ -238,6 +291,10 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             self.connect_btn.setText("Connect")
             self.receiver.ondisconnect()
         else:
+            if (self.port_selector.currentData() is None):
+                self.print("Error, no ports available!")
+                return
+
             self.tlm_port.setPort(
                 self.avail_ports[self.port_selector.currentData()])
             gpp = self.find_vgps_port()
@@ -305,13 +362,14 @@ def proxy_proc():
 proxy = Thread(target=proxy_proc)
 proxy.start()
 
-# Make it big
-os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "1"
-os.environ["QT_SCALE_FACTOR"] = "1.25"
-app = QApplication(['', '--no-sandbox'])
-window = MainWindow()
-window.show()
-app.exec()
-
-app_stop = True
-proxy.join()
+try:
+    # Make it big
+    os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "1"
+    os.environ["QT_SCALE_FACTOR"] = "1.25"
+    app = QApplication(['', '--no-sandbox'])
+    window = MainWindow()
+    window.show()
+    app.exec()
+finally:
+    app_stop = True
+    proxy.join()
