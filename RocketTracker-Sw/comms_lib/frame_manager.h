@@ -6,9 +6,12 @@
 #include <pb_encode.h>
 #include <pb_decode.h>
 
+#define CRC_POLY 0x8d95
+
 typedef struct Frame {
 	uint16_t id;
-	uint8_t data[256 - sizeof(uint16_t)];
+	uint16_t crc;
+	uint8_t data[256 - sizeof(uint16_t) * 2];
 } Frame;
 
 typedef struct Datum_Info {
@@ -36,6 +39,10 @@ public:
 
 	// Clear the buffer and reset state
 	void reset();
+
+	uint16_t calculate_crc();
+
+	bool check_crc();
 
 	// Returns a pointer to the current serialized data buffer of the frame and writes its length to `buflen`
 	uint8_t* get_frame(int* buflen);

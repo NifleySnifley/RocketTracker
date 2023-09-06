@@ -47,6 +47,7 @@ message Alert {
 message Receiver_RadioStatus {
   required float RSSI = 1;
   required float SNR = 2;
+  required bool crc_valid = 3;
 }
 
 enum MessageTypeID {

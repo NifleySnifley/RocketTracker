@@ -275,13 +275,22 @@ int main() {
 		// }
 
 		if (radio.messageAvailable()) {
-
-			write_frame_raw((uint8_t*)radio.rxbuf, radio.lastRxLen);
-
 			fmg.reset();
 			fmg.load_frame((uint8_t*)radio.rxbuf, radio.lastRxLen);
-			fmg.decode_frame(read_datum);
 
+			radio_stat.crc_valid = true;
+			if (!fmg.check_crc()) {
+				radio_stat.crc_valid = false;
+				goto rxstatus;
+			}
+
+			// Valid CRC
+			fmg.decode_frame(read_datum);
+			ledg_d = make_timeout_time_ms(MS_LED);
+			write_frame_raw((uint8_t*)radio.rxbuf, radio.lastRxLen);
+
+		rxstatus:
+			// RX Stuff, CRC or not
 			mutex_enter_blocking(&rdata_mutex);
 			{
 				radio_stat.RSSI = radio.getRSSI();
@@ -294,8 +303,6 @@ int main() {
 			int len;
 			uint8_t* dat = fmg.get_frame(&len);
 			write_frame_raw(dat, len);
-
-			ledg_d = make_timeout_time_ms(MS_LED);
 		}
 
 		if (gps_fresh) {
