@@ -45,10 +45,10 @@ void gps_uart_task(void* args) {
                         lwgps_process(&gps, &readbuf[1], len - 1);
                         readbuf[len] = '\0';
 
-                        printf("# %s\r\n", &readbuf[1]);
+                        // printf("# %s\r\n", &readbuf[1]);
                         // GPS Fresh
                         // if (strncmp((char*)&readbuf[1], "$GPGGA", strlen("$GPGGA")) == 0) {
-                        printf("G %f,%f,%f,%d,%d\n", gps.latitude, gps.longitude, gps.altitude, gps.fix, gps.is_valid);
+                        // printf("G %f,%f,%f,%d,%d\n", gps.latitude, gps.longitude, gps.altitude, gps.fix, gps.is_valid);
                         // }
                     }
 
