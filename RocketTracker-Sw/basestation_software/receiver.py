@@ -120,10 +120,12 @@ class Receiver(QWidget):
 
                     # Get ID and sort
                     id = int.from_bytes(self.rx_buf[:2], 'little')
+                    i = 2
+                    crc = int.from_bytes(self.rx_buf[:2], 'little')
+                    i += 2
                     # TODO: handle ID
 
                     # Parse Datums
-                    i = 2
                     while (i < len(self.rx_buf)):
                         dtype = self.rx_buf[i]
                         i += 1
@@ -153,6 +155,7 @@ class Receiver(QWidget):
 
     def parse_datum(self, t: MessageTypeID, data):
         if (msgtype_str(t) == None):
+            # self.printfn(t)
             self.printfn("Error, malformed datum type!")
             return
         parsed: object = None

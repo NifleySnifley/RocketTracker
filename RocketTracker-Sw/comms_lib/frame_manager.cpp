@@ -14,7 +14,7 @@ void FrameManager::reset() {
 
 uint8_t* FrameManager::get_frame(int* len) {
 	this->frame.crc = calculate_crc();
-	*len = this->cur_frame_len + sizeof(Frame::id);
+	*len = this->cur_frame_len + sizeof(Frame::id) + sizeof(Frame::crc);
 	return (uint8_t*)&this->frame;
 }
 
@@ -49,7 +49,7 @@ bool FrameManager::load_frame(uint8_t* data, int length) {
 	if (length < (sizeof(Frame::id) + sizeof(Frame::crc)) || length > sizeof(Frame))
 		return false;
 
-	this->cur_frame_len = length;
+	this->cur_frame_len = length - (sizeof(Frame::crc) + sizeof(Frame::id));
 
 	memcpy(&this->frame, data, length);
 	return true;

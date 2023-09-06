@@ -278,31 +278,29 @@ int main() {
 			fmg.reset();
 			fmg.load_frame((uint8_t*)radio.rxbuf, radio.lastRxLen);
 
-			radio_stat.crc_valid = true;
-			if (!fmg.check_crc()) {
-				radio_stat.crc_valid = false;
-				goto rxstatus;
+			// radio_stat.crc_valid = true;
+			if (fmg.check_crc()) {
+				// radio_stat.crc_valid = false;
+
+				// Valid CRC
+				fmg.decode_frame(read_datum);
+				ledg_d = make_timeout_time_ms(MS_LED);
+				write_frame_raw((uint8_t*)radio.rxbuf, radio.lastRxLen);
+
+				// RX Stuff, CRC or not
+				mutex_enter_blocking(&rdata_mutex);
+				{
+					radio_stat.RSSI = radio.getRSSI();
+					radio_stat.SNR = radio.getSNR();
+				}
+				mutex_exit(&rdata_mutex);
+
+				fmg.reset();
+				fmg.encode_datum(MessageTypeID_RX_RadioStatus, Receiver_RadioStatus_fields, &radio_stat);
+				int len;
+				uint8_t* dat = fmg.get_frame(&len);
+				write_frame_raw(dat, len);
 			}
-
-			// Valid CRC
-			fmg.decode_frame(read_datum);
-			ledg_d = make_timeout_time_ms(MS_LED);
-			write_frame_raw((uint8_t*)radio.rxbuf, radio.lastRxLen);
-
-		rxstatus:
-			// RX Stuff, CRC or not
-			mutex_enter_blocking(&rdata_mutex);
-			{
-				radio_stat.RSSI = radio.getRSSI();
-				radio_stat.SNR = radio.getSNR();
-			}
-			mutex_exit(&rdata_mutex);
-
-			fmg.reset();
-			fmg.encode_datum(MessageTypeID_RX_RadioStatus, Receiver_RadioStatus_fields, &radio_stat);
-			int len;
-			uint8_t* dat = fmg.get_frame(&len);
-			write_frame_raw(dat, len);
 		}
 
 		if (gps_fresh) {
