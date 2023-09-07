@@ -68,13 +68,11 @@ class Receiver(QWidget):
         self.pow_inp.setDisabled(True)
         pass
 
-    # TODO: Check the thing
     def send_config(self, param: str, value: str):
         txt = f"$P{param.upper()},{value}\n"
         if (self.port_vgps.isOpen()):
             self.port_vgps.write(
                 bytes(txt, 'ascii'))
-            print(txt)
 
     def set_frf(self):
         self.send_config("FRF", "{:.2f}".format(self.frf_inp.value()))
