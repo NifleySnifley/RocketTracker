@@ -4,6 +4,7 @@
 #include "driver/gpio.h"
 #include "driver/adc.h"
 #include "driver/uart.h"
+#include "driver/i2c.h"
 
 #define TRACKER_LED_RED (gpio_num_t)32
 #define TRACKER_LED_GRN (gpio_num_t)33 
@@ -17,6 +18,7 @@
 // I2C (Qwiic)
 #define TRACKER_SDA (gpio_num_t)21
 #define TRACKER_SCL (gpio_num_t)22
+#define TRACKER_I2C_PORT I2C_NUM_0
 
 // SPI (RFM97)
 #define TRACKER_CIPO (gpio_num_t)19

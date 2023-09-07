@@ -16,6 +16,7 @@
 #include "radio.h"
 #include "protocol.pb.h"
 #include "frame_manager.h"
+#include "lps25.h"
 
 #define GSM_CFG_DOUBLE 1
 // #include "lwgps_opts.h"
@@ -26,6 +27,8 @@
 
 RFM97_LoRa radio(SPI2_HOST, TRACKER_RFM_CS, TRACKER_DIO0, TRACKER_RFM_RST, TRACKER_COPI, TRACKER_CIPO, TRACKER_SCK, false);
 FrameManager fmg;
+
+LPS25 barometer(TRACKER_I2C_PORT);
 
 lwgps_t gps;
 QueueHandle_t gps_uart_q;
@@ -78,14 +81,20 @@ void radio_task(void* args) {
         gi.has_sats_used = true;
         gi.sats_used = gps.sats_in_use;
         gi.utc_time = gps.seconds * 1000 + gps.minutes * 100000 + gps.hours * 10000000;
-        gi.alt = gps.altitude;
+        gi.alt = gps.altitude + gps.geo_sep;
 
         // THIS IS FAKE!!!
         Battery_Info bi;
         bi.battery_voltage = 5.0f;
 
+        Altitude_Info ai;
+        ai.alt_m = barometer.get_altitude_m();
+        ai.has_v_speed = false;
+        ESP_LOGI("EEE", "%f", barometer.get_pressure_hpa());
+
         fmg.reset();
 
+        fmg.encode_datum(MessageTypeID_TLM_Altitude_Info, Altitude_Info_fields, &ai);
         fmg.encode_datum(MessageTypeID_TLM_Battery_Info, Battery_Info_fields, &bi);
 
         if (lwgps_is_valid(&gps) && gps.altitude > 0)
@@ -118,6 +127,7 @@ extern "C" void app_main() {
     gpio_set_direction(TRACKER_LED_RED, GPIO_MODE_OUTPUT);
     gpio_set_direction(TRACKER_LED_GRN, GPIO_MODE_OUTPUT);
 
+    // GPS and UART
     uart_config_t uart_config = {
         .baud_rate = 9600 ,
         .data_bits = UART_DATA_8_BITS,
@@ -139,6 +149,27 @@ extern "C" void app_main() {
     uart_flush(TRACKER_GPS_UART);
 
     lwgps_init(&gps);
+
+    // LPS25 and I2C init
+    i2c_config_t conf = {
+        .mode = I2C_MODE_MASTER,
+        .sda_io_num = TRACKER_SDA,
+        .scl_io_num = TRACKER_SCL,
+        .sda_pullup_en = GPIO_PULLUP_ENABLE,
+        .scl_pullup_en = GPIO_PULLUP_ENABLE,
+        .master {
+            .clk_speed = 400000
+        },
+    };
+
+    i2c_param_config(TRACKER_I2C_PORT, &conf);
+
+    if (i2c_driver_install(TRACKER_I2C_PORT, conf.mode, 0, 0, 0) != ESP_OK) {
+        ESP_LOGE(DBG_TAG, "Error installing driver for I2C0");
+    }
+
+    barometer.init();
+
 
     if (!radio.init())
         ESP_LOGE(DBG_TAG, "Radio is broke :(");
