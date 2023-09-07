@@ -19,9 +19,10 @@ import json
 from threading import Thread
 from cacheserver import proxy_main
 from matplotlib.figure import Figure
-from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
 import matplotlib
 matplotlib.use('QTAgg')
+import time
 
 
 CONSOLE_SCROLLBACK = 64
@@ -92,6 +93,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.stats_frame: QFrame
 
         self.setupUi(self)
+        self.session_start_t = time.time()
 
         # Set default UI states, disabled, etc.
         self.stats_frame.setDisabled(True)
@@ -120,7 +122,10 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.receiver = Receiver(
             self.tlm_port, self.vgps_port, self.rx_cfg_frf, self.rx_cfg_bw, self.rx_cfg_pow, self.print)
 
+
+        # Logs for visualization
         self.gps_track = Deque()
+        self.alt_log = []
 
         # Map setup
         if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
@@ -150,17 +155,20 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         # Graph setup!
         self.graphlayout = QVBoxLayout()
 
-        # TODO: Matplotlib interface buttons, etc.
-        self.graphfig = Figure()
+        self.graphfig = Figure()        
         self.graphax = self.graphfig.add_subplot(111)
-        self.graphcanvas = FigureCanvasQTAgg(self.graphfig)
+        self.graphcanvas = FigureCanvasQTAgg(self.graphfig, )
         self.graphcanvas.setSizePolicy(
             QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
         self.graphcanvas.updateGeometry()
+        
+        self.graphfig.tight_layout()
 
+        self.graphlayout.setContentsMargins(0,0,0,0)
         self.graphlayout.addWidget(self.graphcanvas)
+        self.graphlayout.addWidget(NavigationToolbar2QT(self.graphcanvas, self))
         self.graph_tab.setLayout(self.graphlayout)
-
+        
         # Refresh button
         self.refreshports()
         self.port_rfsh_btn.clicked.connect(self.refreshports)
@@ -205,9 +213,18 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
     def clearsession_menu_act(self):
         self.stats_frame.setDisabled(True)
+        
+        self.alt_log.clear()
+        self.update_alt_plot()
+        
+        self.session_start_t = time.time()
+        
         self.gps_track.clear()
-        self.map_track_line.latLngs = [[a, b] for a, b in self.gps_track]
+        self.map_track_line.latLngs = [[g[1],g[2]] for g in self.gps_track]
         self.map_track_line.removeFrom(self.map).addTo(self.map)
+        
+    def session_time(self):
+        return time.time() - self.session_start_t
 
     def datum_cb(self, t: MessageTypeID, datum: object):
         self.stats_frame.setDisabled(False)  # We're getting messages!
@@ -219,7 +236,8 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                     cls: vtype = datum
                     self.logfile.write(json.dumps({
                         "type": msgtype_str(t),
-                        "datum": json.loads(MessageToJson(cls, preserving_proto_field_name=True))
+                        "datum": json.loads(MessageToJson(cls, preserving_proto_field_name=True)),
+                        "timestamp": self.session_time()
                     }) + '\n')
                     self.logfile.flush()
             except Exception:
@@ -235,14 +253,14 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 if ((abs(self.gps_track[-1][0] - datum.lat) + abs(self.gps_track[-1][1] - datum.lon) > 0.1)):
                     return  # Reject ridiculous gps errors
 
-            self.gps_track.append((datum.lat, datum.lon))
-            if (len(self.gps_track) > 4096):
+            self.gps_track.append((self.session_time(), datum.lat, datum.lon, datum.alt))
+            if (len(self.gps_track) > 86400): # OK I hope this never happens
                 self.gps_track.popLeft()
 
             if (datum.fix_status == 0):
                 return  # Nothing to do with invalid GPS fix
 
-            self.map_track_line.latLngs = [[a, b] for a, b in self.gps_track]
+            self.map_track_line.latLngs = [[g[1],g[2]] for g in self.gps_track]
             self.map_track_line.removeFrom(self.map).addTo(self.map)
 
             self.marker.latLng = [datum.lat, datum.lon]
@@ -250,6 +268,8 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
             if (self.actionFollow.isChecked()):
                 self.map.flyTo([datum.lat, datum.lon], 18)
+                
+            self.update_alt_plot()
 
         if (t == RX_RadioStatus):
             datum: Receiver_RadioStatus
@@ -266,6 +286,22 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             self.battery_voltage.setText(f"({datum.battery_voltage})")
             self.battery_bar.setValue(
                 int(battery_percent(datum.battery_voltage)))
+            
+        if (t == TLM_Altitude_Info):
+            datum: Altitude_Info
+            self.alt_log.append((self.session_time(), datum.alt_m))
+            self.update_alt_plot()
+            
+    def update_alt_plot(self):
+        # print("EEE")
+        self.graphax.clear()
+        self.graphax.plot([l[0] for l in self.alt_log], [l[1] for l in self.alt_log], label="Barometric Altitude (m)")
+        self.graphax.plot([g[0] for g in self.gps_track], [g[3] for g in self.gps_track], label="GPS Altitude (m)")
+        # self.graphax.set_ylabel('Altitude (m)')
+        self.graphax.legend()
+        
+        self.graphcanvas.draw() 
+        pass
 
     def print(self, *items, sep=' '):
         ls = self.console.toPlainText().splitlines()

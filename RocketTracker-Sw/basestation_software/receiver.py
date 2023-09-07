@@ -192,8 +192,8 @@ class Receiver(QWidget):
             self.printfn("Unknown datum type! (None)")
             return
         
-        if (not has_all_fields(parsed)):
-            self.printfn("Missing field!")
-            return 
+        # if (not has_all_fields(parsed)):
+        #     self.printfn(f"Missing field! {msgtype_str(t)}")
+        #     return 
 
         self.datumProcessed.emit(t, parsed)
