@@ -32,6 +32,7 @@ LPS25 barometer(TRACKER_I2C_PORT);
 
 lwgps_t gps;
 QueueHandle_t gps_uart_q;
+bool gps_fresh;
 
 void gps_uart_task(void* args) {
     static uint8_t* readbuf = (uint8_t*)malloc(GPS_UART_BUFSIZE + 1);
@@ -50,9 +51,10 @@ void gps_uart_task(void* args) {
 
                         // printf("# %s\r\n", &readbuf[1]);
                         // GPS Fresh
-                        // if (strncmp((char*)&readbuf[1], "$GPGGA", strlen("$GPGGA")) == 0) {
-                        // printf("G %f,%f,%f,%d,%d\n", gps.latitude, gps.longitude, gps.altitude, gps.fix, gps.is_valid);
-                        // }
+                        if (strncmp((char*)&readbuf[1], "$GPGGA", strlen("$GPGGA")) == 0) {
+                            gps_fresh = true;
+                            // printf("G %f,%f,%f,%d,%d\n", gps.latitude, gps.longitude, gps.altitude, gps.fix, gps.is_valid);
+                        }
                     }
 
                     pos = uart_pattern_pop_pos(TRACKER_GPS_UART);
@@ -71,7 +73,7 @@ void gps_uart_task(void* args) {
 
 void radio_task(void* args) {
     while (1) {
-        vTaskDelay(1000);
+        vTaskDelay(50);
 
         GPS_Info gi;
         gi.lat = gps.latitude;
@@ -83,31 +85,33 @@ void radio_task(void* args) {
         gi.utc_time = gps.seconds * 1000 + gps.minutes * 100000 + gps.hours * 10000000;
         gi.alt = gps.altitude + gps.geo_sep;
 
-        // THIS IS FAKE!!!
-        Battery_Info bi;
-        bi.battery_voltage = 5.0f;
+        // // THIS IS FAKE!!!
+        // Battery_Info bi;
+        // bi.battery_voltage = 5.0f;
 
         Altitude_Info ai;
+        // TODO: Collect data in a different task from the radio task... sensor task
         ai.alt_m = barometer.get_altitude_m();
         ai.has_v_speed = false;
-        ESP_LOGI("EEE", "%f", barometer.get_pressure_hpa());
 
         fmg.reset();
 
         fmg.encode_datum(MessageTypeID_TLM_Altitude_Info, Altitude_Info_fields, &ai);
-        fmg.encode_datum(MessageTypeID_TLM_Battery_Info, Battery_Info_fields, &bi);
+        // fmg.encode_datum(MessageTypeID_TLM_Battery_Info, Battery_Info_fields, &bi);
 
-        if (lwgps_is_valid(&gps) && gps.altitude > 0)
+        if (lwgps_is_valid(&gps) && gps.altitude > 0 && gps_fresh) {
+            gps_fresh = false;
             fmg.encode_datum(MessageTypeID_TLM_GPS_Info, GPS_Info_fields, &gi);
+        }
 
         int size;
         uint8_t* frame = fmg.get_frame(&size);
 
-        radio.transmit(frame, size, true);
+        radio.transmit(frame, size, true); // Waits for TX done!!! (with freertos though)
 
         // TODO: Better tx LED?
         gpio_set_level(TRACKER_LED_RED, 1);
-        vTaskDelay(100);
+        // vTaskDelay(100);
         gpio_set_level(TRACKER_LED_RED, 0);
     }
 }
@@ -175,7 +179,7 @@ extern "C" void app_main() {
         ESP_LOGE(DBG_TAG, "Radio is broke :(");
 
     radio.setPower(20, true);
-    radio.setFreq(914.0);
+    radio.setFreq(910.5);
     radio.setISRA(radio_isr_a);
     radio.startReceiving();
 

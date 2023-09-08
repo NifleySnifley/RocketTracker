@@ -234,7 +234,7 @@ private:
 	gpio_isr_handle_t isra_hdl, isrb_hdl;
 
 public:
-	QueueHandle_t intq;
+	QueueHandle_t intq, txdone_q;
 	volatile RFM97_RadioState state;
 
 

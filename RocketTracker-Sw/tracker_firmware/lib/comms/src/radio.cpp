@@ -329,6 +329,7 @@ bool RFM97_LoRa::init() {
 	state = RFM97_RadioState::STANDBY;
 
 	intq = xQueueCreate(10, sizeof(int));
+	txdone_q = xQueueCreate(10, sizeof(int));
 	xTaskCreate(radio_service, "radio_service", 1024 * 2, (void*)this, configMAX_PRIORITIES, NULL);
 
 	return true;
@@ -645,6 +646,8 @@ void RFM97_LoRa::ISR_A() {
 	// printf("ISR_A\n");
 	switch (state) {
 		case RFM97_RadioState::TX_WAITING:
+			static int data;
+			xQueueSend(this->txdone_q, &data, 100 * portTICK_PERIOD_MS);
 			clearIRQ();
 			if (tx_state_go_rx) startReceiving();
 			else {
@@ -723,6 +726,9 @@ bool RFM97_LoRa::transmit(uint8_t* data, size_t len, bool return_to_rx = true) {
 	// clearIRQ();
 	// standby();
 	// state = RFM97_RadioState::STANDBY;
+
+	int res;
+	xQueueReceive(this->txdone_q, &res, portTICK_PERIOD_MS * 1000);
 
 	return true;
 }
