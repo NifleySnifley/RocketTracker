@@ -34,3 +34,8 @@
 
 #define SENSORS_SPI SPI2_HOST
 #define SENSORS_SPI_FREQ 5 * 1000 * 1000 // 2 Mhz
+
+#define TL_SPI SPI3_HOST
+#define TL_SPI_FREQ 3E6
+
+#define UART_GPS UART_NUM_1

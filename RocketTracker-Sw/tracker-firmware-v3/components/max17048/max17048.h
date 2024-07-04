@@ -45,149 +45,152 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-	typedef void (*MAX17048_Write_Fcn_t)(void*, void*, uint8_t);
-	typedef void (*MAX17048_Read_Fcn_t)(void*, void*, uint8_t, uint8_t);
-	/**
-	 *@brief structure containing all data
-	 */
-	typedef struct {
-		MAX17048_Write_Fcn_t Write;
-		MAX17048_Read_Fcn_t  Read;
-		i2c_master_dev_handle_t dev_handle;
-		bool timed_out;
-	}MAX17048_t;
+    typedef void (*MAX17048_Write_Fcn_t)(void*, void*, uint8_t);
+    typedef void (*MAX17048_Read_Fcn_t)(void*, void*, uint8_t, uint8_t);
+    /**
+     *@brief structure containing all data
+     */
+    typedef struct {
+        MAX17048_Write_Fcn_t Write;
+        MAX17048_Read_Fcn_t  Read;
+        i2c_master_dev_handle_t dev_handle;
+        i2c_master_bus_handle_t bus;
+        bool timed_out;
+    }MAX17048_t;
 
-	/**
-	 * @brief Initialize max17048 module to work
-	 * @param Obj Obj Structure containing all data from the max17048 module.
-	 * @param Write pointer to function i2c write
-	 * @param Read  pointer to function i2c read
-	 * @param Addres_Device slave addres device
-	 */
-	void MAX17048_Init(MAX17048_t* Obj, i2c_master_bus_handle_t handle);
+    /**
+     * @brief Initialize max17048 module to work
+     * @param Obj Obj Structure containing all data from the max17048 module.
+     * @param Write pointer to function i2c write
+     * @param Read  pointer to function i2c read
+     * @param Addres_Device slave addres device
+     */
+    void MAX17048_Init(MAX17048_t* Obj, i2c_master_bus_handle_t handle);
 
-	/**
-	 * @brief this function read register
-	 * @param Obj     Obj Structure containing all data from the max17048 module.
-	 * @param Reg     address register to write
-	 * @param data    data to write
-	 * @param amount  length bytes to write
-	 */
-	void MAX17048_Write(MAX17048_t* Obj, uint8_t Reg, uint16_t data, uint8_t amount);
+    bool MAX17048_Exists(MAX17048_t* obj);
 
-	/**
-	 * @brief this function read register
-	 * @param Obj     Obj Structure containing all data from the max17048 module.
-	 * @param Reg     address register to read
-	 * @param amount  length bytes to read
-	 * @return        data received in 2 bytes
-	 */
-	uint16_t MAX17048_Read(MAX17048_t* Obj, uint8_t Reg, uint8_t amount);
+    /**
+     * @brief this function read register
+     * @param Obj     Obj Structure containing all data from the max17048 module.
+     * @param Reg     address register to write
+     * @param data    data to write
+     * @param amount  length bytes to write
+     */
+    void MAX17048_Write(MAX17048_t* Obj, uint8_t Reg, uint16_t data, uint8_t amount);
 
-	/**
-	 * @brief This function request version
-	 * @param Obj Obj Structure containing all data from the max17048 module.
-	 * @return version module
-	 */
-	uint16_t MAX17048_Version(MAX17048_t* Obj);
+    /**
+     * @brief this function read register
+     * @param Obj     Obj Structure containing all data from the max17048 module.
+     * @param Reg     address register to read
+     * @param amount  length bytes to read
+     * @return        data received in 2 bytes
+     */
+    uint16_t MAX17048_Read(MAX17048_t* Obj, uint8_t Reg, uint8_t amount);
 
-	/**
-	 * @param this function read voltage from battery
-	 * @param Obj Obj Structure containing all data from the max17048 module.
-	 * @return Voltage read on battery in mV
-	 */
-	uint16_t MAX17048_Voltage(MAX17048_t* Obj);
+    /**
+     * @brief This function request version
+     * @param Obj Obj Structure containing all data from the max17048 module.
+     * @return version module
+     */
+    uint16_t MAX17048_Version(MAX17048_t* Obj);
 
-	/**
-	 * @brief this function read soc in float
-	 * @param Obj Obj Structure containing all data from the max17048 module.
-	 * @return state of charge [0-100%]
-	 */
-	uint16_t MAX1708_SOC_Int(MAX17048_t* Obj);
+    /**
+     * @param this function read voltage from battery
+     * @param Obj Obj Structure containing all data from the max17048 module.
+     * @return Voltage read on battery in mV
+     */
+    uint16_t MAX17048_Voltage(MAX17048_t* Obj);
 
-	/**
-	 * @brief this function read soc in float
-	 * @param Obj Obj Structure containing all data from the max17048 module.
-	 * @return state of charge float
-	 */
-	float MAX1708_SOC(MAX17048_t* Obj);
+    /**
+     * @brief this function read soc in float
+     * @param Obj Obj Structure containing all data from the max17048 module.
+     * @return state of charge [0-100%]
+     */
+    uint16_t MAX1708_SOC_Int(MAX17048_t* Obj);
 
-	/**
-	 * @brief
-	 * @param Obj Obj Structure containing all data from the max17048 module.
-	 * @param RComp   compensation resistance
-	 */
-	void MAX17048_Compensation(MAX17048_t* Obj, uint8_t RComp);
+    /**
+     * @brief this function read soc in float
+     * @param Obj Obj Structure containing all data from the max17048 module.
+     * @return state of charge float
+     */
+    float MAX1708_SOC(MAX17048_t* Obj);
 
-	/**
-	 * @brief reset by software module
-	 * @param Obj Obj Structure containing all data from the max17048 module.
-	 */
-	void MAX17048_Reset(MAX17048_t* Obj);
+    /**
+     * @brief
+     * @param Obj Obj Structure containing all data from the max17048 module.
+     * @param RComp   compensation resistance
+     */
+    void MAX17048_Compensation(MAX17048_t* Obj, uint8_t RComp);
 
-	/**
-	 * @brief enable device for entry in mode sleep
-	 * @param Obj Obj Structure containing all data from the max17048 module.
-	 */
-	void MAX17048_SleepEnable(MAX17048_t* Obj);
+    /**
+     * @brief reset by software module
+     * @param Obj Obj Structure containing all data from the max17048 module.
+     */
+    void MAX17048_Reset(MAX17048_t* Obj);
 
-	/**
-	 * @brief device runnig
-	 * @param Obj Obj Structure containing all data from the max17048 module.
-	 */
-	void MAX17048_QStart(MAX17048_t* Obj);
+    /**
+     * @brief enable device for entry in mode sleep
+     * @param Obj Obj Structure containing all data from the max17048 module.
+     */
+    void MAX17048_SleepEnable(MAX17048_t* Obj);
 
-	/**
-	 * @brief device entry in mode sleep
-	 * @param Obj Obj Structure containing all data from the max17048 module.
-	 * @param On_Off turn on or turn off device
-	 */
-	void MAX17048_Sleep(MAX17048_t* Obj, uint8_t On_Off);
+    /**
+     * @brief device runnig
+     * @param Obj Obj Structure containing all data from the max17048 module.
+     */
+    void MAX17048_QStart(MAX17048_t* Obj);
+
+    /**
+     * @brief device entry in mode sleep
+     * @param Obj Obj Structure containing all data from the max17048 module.
+     * @param On_Off turn on or turn off device
+     */
+    void MAX17048_Sleep(MAX17048_t* Obj, uint8_t On_Off);
 
 
-	/*=======================================================================
-				  EXAMPLE FOR I2C READ/WRITE wrappers
-	 ========================================================================*/
+    /*=======================================================================
+                  EXAMPLE FOR I2C READ/WRITE wrappers
+     ========================================================================*/
 
-	 /*
-	 void Write_I2C(uint8_t Address, void *data, uint8_t amount){
-	   uint8_t *DatatoSend = (uint8_t *)data;
-	   HAL_I2C_Master_Transmit(&hi2c1,Address,DatatoSend,amount,10);
-	 }
+     /*
+     void Write_I2C(uint8_t Address, void *data, uint8_t amount){
+       uint8_t *DatatoSend = (uint8_t *)data;
+       HAL_I2C_Master_Transmit(&hi2c1,Address,DatatoSend,amount,10);
+     }
 
-	 void Read_I2C(uint8_t Address, void *Register, uint8_t amount, uint8_t Sizereg){
-	   uint8_t *DatatoSend = (uint8_t *)Register;
-	   HAL_I2C_Master_Transmit(&hi2c1,Address,DatatoSend, Sizereg, 10);
-	   HAL_I2C_Master_Receive(&hi2c1,Address,DatatoSend, amount, 10);
-	 }
+     void Read_I2C(uint8_t Address, void *Register, uint8_t amount, uint8_t Sizereg){
+       uint8_t *DatatoSend = (uint8_t *)Register;
+       HAL_I2C_Master_Transmit(&hi2c1,Address,DatatoSend, Sizereg, 10);
+       HAL_I2C_Master_Receive(&hi2c1,Address,DatatoSend, amount, 10);
+     }
 
-	=======================================================================
-						   Kinetes (Processor Expert)
-	=======================================================================
+    =======================================================================
+                           Kinetes (Processor Expert)
+    =======================================================================
 
-		void Write_I2C(uint8_t Address, void *data, uint8_t amount) {
-		  uint8_t *DatatoSend = (uint8_t *)data;
-		  uint16_t Bytes;
+        void Write_I2C(uint8_t Address, void *data, uint8_t amount) {
+          uint8_t *DatatoSend = (uint8_t *)data;
+          uint16_t Bytes;
 
-		  I2C_SelectSlave(Address);                   // Send address device
-		  I2C_SendBlock(DatatoSend, amount, &Bytes);  // Register to read
-		  I2C_SendStop();                             // send Stop bit
-	  }
+          I2C_SelectSlave(Address);                   // Send address device
+          I2C_SendBlock(DatatoSend, amount, &Bytes);  // Register to read
+          I2C_SendStop();                             // send Stop bit
+      }
 
-	  void Read_I2C(uint8_t Address, void *Data, uint8_t amount, uint8_t Sizereg) {
-		  uint8_t *DatatoSend = (uint8_t *)Data;
-		  uint16_t Bytes;
+      void Read_I2C(uint8_t Address, void *Data, uint8_t amount, uint8_t Sizereg) {
+          uint8_t *DatatoSend = (uint8_t *)Data;
+          uint16_t Bytes;
 
-		  I2C_SelectSlave(Address);                     // Send address device
-		  I2C_SendBlock(DatatoSend, Sizereg, &Bytes);   // Register to read
-		  I2C_RecvBlock(DatatoSend, amount, &Bytes);    // Read data
-		  I2C_SendStop();                               // send Stop bit
-	  }
-	  */
+          I2C_SelectSlave(Address);                     // Send address device
+          I2C_SendBlock(DatatoSend, Sizereg, &Bytes);   // Register to read
+          I2C_RecvBlock(DatatoSend, amount, &Bytes);    // Read data
+          I2C_SendStop();                               // send Stop bit
+      }
+      */
 
-	void max17048_write_i2c(void* dev, void* data, uint8_t amount);
+    void max17048_write_i2c(void* dev, void* data, uint8_t amount);
 
-	void max17048_read_i2c(void* dev, void* Register, uint8_t amount, uint8_t Sizereg);
+    void max17048_read_i2c(void* dev, void* Register, uint8_t amount, uint8_t Sizereg);
 
 #ifdef __cplusplus
 }

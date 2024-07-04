@@ -4,6 +4,7 @@
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
 #include "driver/spi_master.h"
+#include "driver/uart.h"
 #include "pindefs.h"
 #include "tracker_config.h"
 #include "esp_log.h"
@@ -15,14 +16,24 @@
 #include "lis3mdl_reg.h"
 #include "lsm6dsm_reg.h"
 
+#include "nmea.h"
+#include "gpgll.h"
+#include "gpgga.h"
+#include "gprmc.h"
+#include "gpgsa.h"
+#include "gpvtg.h"
+#include "gptxt.h"
+#include "gpgsv.h"
+
+#include <sx127x.h>
+
 ////////////////// GLOBALS //////////////////
 // Peripherals
 i2c_master_bus_handle_t i2c_main_bus_handle;
 
-
 // ICs
 MAX17048_t battery_monitor;
-
+sx127x* radio = NULL;
 
 // Sensors
 stmdev_ctx_t lps22;
@@ -94,6 +105,106 @@ static void init_sensor_spi() {
     // gpio_set_level(PIN_LPS_CS, 1);
     // gpio_set_level(PIN_LSM6DSM_CS, 1);
     // gpio_set_level(PIN_LIS3MDL_CS, 1);
+}
+
+static void init_tl_spi() {
+    ESP_LOGI("SYS", "Initializing Telemetry/Logging SPI...");
+    spi_bus_config_t buscfg = {
+        .miso_io_num = PIN_TL_MISO,
+        .mosi_io_num = PIN_TL_MOSI,
+        .sclk_io_num = PIN_TL_SCK,
+        .quadwp_io_num = -1,
+        .quadhd_io_num = -1,
+        .max_transfer_sz = 0,
+    };
+    //Initialize the SPI bus
+    esp_err_t e = spi_bus_initialize(TL_SPI, &buscfg, SPI_DMA_CH_AUTO);
+    ESP_ERROR_CHECK(e);
+
+    gpio_reset_pin(PIN_FLASH_CS);
+    gpio_reset_pin(PIN_RFM_CS);
+}
+
+TaskHandle_t radio_handle_interrupt;
+void IRAM_ATTR radio_handle_interrupt_fromisr(void* arg) {
+    xTaskResumeFromISR(radio_handle_interrupt);
+}
+
+void radio_handle_interrupt_task(void* arg) {
+    while (1) {
+        vTaskSuspend(NULL);
+        sx127x_handle_interrupt((sx127x*)arg);
+    }
+}
+
+static void radio_txcomplete_callback(sx127x* arg) {
+    ESP_LOGI("RADIO", "TX Completed.");
+}
+
+static void init_radio() {
+    spi_device_interface_config_t dev_cfg = {
+        .clock_speed_hz = TL_SPI_FREQ,
+        .spics_io_num = PIN_RFM_CS,
+        .queue_size = 16,
+        .command_bits = 0,
+        .address_bits = 8,
+        .dummy_bits = 0,
+        .mode = 0
+    };
+    spi_device_handle_t spi_device;
+    ESP_ERROR_CHECK(spi_bus_add_device(TL_SPI, &dev_cfg, &spi_device));
+
+    gpio_reset_pin(PIN_RFM_RST);
+    gpio_set_direction(PIN_RFM_RST, GPIO_MODE_OUTPUT);
+    gpio_set_level(PIN_RFM_RST, 0);
+    vTaskDelay(pdMS_TO_TICKS(1));
+    gpio_set_level(PIN_RFM_RST, 1);
+    vTaskDelay(pdMS_TO_TICKS(10));
+
+    ESP_ERROR_CHECK(sx127x_create(spi_device, &radio));
+    ESP_ERROR_CHECK(sx127x_set_opmod(SX127x_MODE_SLEEP, SX127x_MODULATION_LORA, radio));
+    ESP_ERROR_CHECK(sx127x_set_frequency(9.14e+8, radio)); // 915MHz
+    ESP_ERROR_CHECK(sx127x_lora_reset_fifo(radio));
+    ESP_ERROR_CHECK(sx127x_set_opmod(SX127x_MODE_STANDBY, SX127x_MODULATION_LORA, radio));
+    ESP_ERROR_CHECK(sx127x_lora_set_bandwidth(SX127x_BW_125000, radio));
+    ESP_ERROR_CHECK(sx127x_lora_set_implicit_header(NULL, radio));
+    ESP_ERROR_CHECK(sx127x_lora_set_modem_config_2(SX127x_SF_7, radio));
+    // ESP_ERROR_CHECK(sx127x_lora_set_modem_config_1(SX127x_CR_4_5, radio));
+    ESP_ERROR_CHECK(sx127x_lora_set_syncword(0x18, radio));
+    ESP_ERROR_CHECK(sx127x_set_preamble_length(8, radio));
+    sx127x_tx_set_callback(radio_txcomplete_callback, radio);
+
+    BaseType_t task_code = xTaskCreatePinnedToCore(radio_handle_interrupt_task, "handle interrupt", 8196, radio, 2, &radio_handle_interrupt, xPortGetCoreID());
+    if (task_code != pdPASS) {
+        ESP_LOGE("RADIO", "Can't create task: %d", task_code);
+        sx127x_destroy(radio);
+        return;
+    }
+
+
+    gpio_reset_pin(PIN_RFM_D0);
+    gpio_set_direction((gpio_num_t)PIN_RFM_D0, GPIO_MODE_INPUT);
+    gpio_pulldown_en((gpio_num_t)PIN_RFM_D0);
+    gpio_pullup_dis((gpio_num_t)PIN_RFM_D0);
+    gpio_set_intr_type((gpio_num_t)PIN_RFM_D0, GPIO_INTR_POSEDGE);
+    gpio_install_isr_service(0);
+    gpio_isr_handler_add((gpio_num_t)PIN_RFM_D0, radio_handle_interrupt_fromisr, (void*)radio);
+
+    ESP_ERROR_CHECK(sx127x_tx_set_pa_config(SX127x_PA_PIN_BOOST, 20, radio));
+
+    ESP_LOGI("RADIO", "Successfully initialized radio.");
+}
+
+static void radio_test_tx() {
+    sx127x_tx_header_t header = {
+        .enable_crc = true,
+        .coding_rate = SX127x_CR_4_5 };
+    ESP_ERROR_CHECK(sx127x_lora_tx_set_explicit_header(&header, radio));
+    uint8_t data[] = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 172, 173, 174, 175, 176, 177, 178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 188, 189, 190, 191, 192, 193, 194, 195, 196, 197, 198, 199 };
+    ESP_ERROR_CHECK(sx127x_lora_tx_set_for_transmission(data, sizeof(data), radio));
+    ESP_ERROR_CHECK(sx127x_set_opmod(SX127x_MODE_TX, SX127x_MODULATION_LORA, radio));
+    ESP_LOGI("RADIO", "Starting TX");
+
 }
 
 static int32_t sensor_platform_write(void* handle, uint8_t Reg, const uint8_t* Bufp, uint16_t len) {
@@ -289,15 +400,130 @@ static void init_lsm6dsm() {
     lsm6dsm_gy_band_pass_set(&lsm6dsm, LSM6DSM_HP_260mHz_LP1_STRONG);
 }
 
+#define GPS_UART_RX_BUF_SIZE        (1024)
+static char gps_buf[GPS_UART_RX_BUF_SIZE + 1];
+// static size_t gps_total_bytes;
+// static char* gps_last_buf_end;
+static QueueHandle_t gps_uart_q;
+
+// const char GPS_INIT_SEQUENCE[] = 
+// "$PUBX,40,GLL,1,1,1,1,1,0*5D\r\n"; // Set rate of GLL to 10Hz
+
+void gps_uart_task(void* args) {
+    uart_event_t event;
+    nmea_s* data;
+
+    while (1) {
+        if (xQueueReceive(gps_uart_q, &event, portMAX_DELAY)) {
+            if (event.type == UART_PATTERN_DET) {
+                int pos = uart_pattern_pop_pos(UART_GPS);
+
+                while (pos > 0) {
+                    int len = uart_read_bytes(UART_GPS, gps_buf, pos, 1000 / portTICK_PERIOD_MS);
+                    if (len > 0 && (len + 2 < GPS_UART_RX_BUF_SIZE)) {
+
+                        // PROCESS GPS IN HERE!!!!!
+
+                        // // lwgps_process(&gps, &readbuf[1], len - 1);
+                        // gps_buf[len] = '\0';
+
+                        // printf("%.*s", len, &gps_buf[0]);
+
+                        // Convert GNSS message to GPS so it can be parsed
+                        if (gps_buf[1 + 2] == 'N') {
+                            gps_buf[1 + 2] = 'P';
+
+                            gps_buf[len] = '\n';
+                            data = nmea_parse(&gps_buf[1], len, 0);
+                            if (data == NULL) {
+                                printf("Failed to parse the sentence!\n");
+                                printf("\n\n%.*s\n\n", len, &gps_buf[1]);
+                                printf("  Type: %.5s (%d)\n", &gps_buf[1] + 1, nmea_get_type(&gps_buf[1]));
+                            } else {
+                                if (data->errors != 0) {
+                                    printf("WARN: The sentence struct contains parse errors!\n");
+                                }
+
+                                if (NMEA_GPGLL == data->type) {
+                                    printf("\n\nGPGLL sentence\n");
+                                    nmea_gpgll_s* pos = (nmea_gpgll_s*)data;
+                                    printf("Longitude:\n");
+                                    printf("  Degrees: %d\n", pos->longitude.degrees);
+                                    printf("  Minutes: %f\n", pos->longitude.minutes);
+                                    printf("  Cardinal: %c\n", (char)pos->longitude.cardinal);
+                                    printf("Latitude:\n");
+                                    printf("  Degrees: %d\n", pos->latitude.degrees);
+                                    printf("  Minutes: %f\n", pos->latitude.minutes);
+                                    printf("  Cardinal: %c\n", (char)pos->latitude.cardinal);
+                                    // strftime(fmt_buf, sizeof(fmt_buf), "%H:%M:%S", &pos->time);
+                                    // printf("Time: %s\n", fmt_buf);
+                                }
+                                if (NMEA_GPGSA == data->type) {
+                                    nmea_gpgsa_s* gpgsa = (nmea_gpgsa_s*)data;
+
+                                    printf("GPGSA Sentence:\n");
+                                    printf("  Mode: %c\n", gpgsa->mode);
+                                    printf("  Fix:  %d\n", gpgsa->fixtype);
+                                    printf("  PDOP: %.2lf\n", gpgsa->pdop);
+                                    printf("  HDOP: %.2lf\n", gpgsa->hdop);
+                                    printf("  VDOP: %.2lf\n", gpgsa->vdop);
+                                }
+                                if (NMEA_GPGGA == data->type) {
+                                    printf("GPGGA sentence\n");
+                                    nmea_gpgga_s* gpgga = (nmea_gpgga_s*)data;
+                                    printf("Number of satellites: %d\n", gpgga->n_satellites);
+                                    printf("Altitude: %f %c\n", gpgga->altitude,
+                                        gpgga->altitude_unit);
+                                }
+                            }
+                        }
+                    }
+
+                    pos = uart_pattern_pop_pos(UART_GPS);
+                }
+
+            }
+        }
+    }
+}
+
+static void init_gps() {
+    uart_config_t uart_config = {
+        .baud_rate = 9600,
+        .data_bits = UART_DATA_8_BITS,
+        .parity = UART_PARITY_DISABLE,
+        .stop_bits = UART_STOP_BITS_1,
+        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
+        .source_clk = UART_SCLK_DEFAULT,
+    };
+    ESP_ERROR_CHECK(uart_param_config(UART_GPS, &uart_config));
+    ESP_ERROR_CHECK(uart_set_pin(UART_GPS,
+        PIN_GPS_SDI, PIN_GPS_SDO,
+        UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
+    ESP_ERROR_CHECK(uart_driver_install(UART_GPS, GPS_UART_RX_BUF_SIZE * 2, 0, 16, &gps_uart_q, 0));
+
+    ESP_ERROR_CHECK(uart_enable_pattern_det_baud_intr(UART_GPS, '\n', 1, 9, 0, 0));
+    ESP_ERROR_CHECK(uart_pattern_queue_reset(UART_GPS, 16));
+
+    // TODO: Figure out how to configure the GPS to go at 10Hz
+    // uart_write_bytes(UART_GPS, GPS_INIT_SEQUENCE, sizeof(GPS_INIT_SEQUENCE));
+    ESP_ERROR_CHECK(uart_flush(UART_GPS));
+
+    xTaskCreate(&gps_uart_task, "gps_uart_task", 1024 * 4, NULL, 10, NULL);
+}
+
 static void battmon_task(void* arg) {
     int battmon_delay_ticks = pdMS_TO_TICKS(1000.0f / BATT_MON_HZ);
     while (true) {
-        float soc = MAX1708_SOC(&battery_monitor);
-        bool on_battery = !battery_monitor.timed_out;
-        if (on_battery) {
-            ESP_LOGI("BATT", "Battery SOC: %f", soc);
+        if (MAX17048_Exists(&battery_monitor)) {
+            float soc = MAX1708_SOC(&battery_monitor);
+            float vbatt = MAX17048_Voltage(&battery_monitor);
+            bool on_battery = (!battery_monitor.timed_out) && (vbatt > 3.2f);
+            if (on_battery) {
+                ESP_LOGI("BATT", "Battery SOC: %f", soc);
+            }
+            vTaskDelay(battmon_delay_ticks);
         }
-        vTaskDelay(battmon_delay_ticks);
     }
 }
 
@@ -381,17 +607,24 @@ void sensors_routine(void* arg) {
 void debug_output_task(void* arg) {
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(1000.0f / DEBUG_MON_HZ));
+
+#if DEBUG_MON_LPS22
         ESP_LOGI("DEBUG-LPS22", "hPa:  %f", pressure_hPa);
+#endif
+#if DEBUG_MON_LSM6DSM
         ESP_LOGI("DEBUG-LSM6DSM",
             "Acceleration [g]:  %4.2f  %4.2f  %4.2f",
             acceleration_g[0], acceleration_g[1], acceleration_g[2]);
         ESP_LOGI("DEBUG-LSM6DSM",
             "Angular rate [dps]:  %4.2f  %4.2f  %4.2f",
             angular_rate_dps[0], angular_rate_dps[1], angular_rate_dps[2]);
+#endif
+#if DEBUG_MON_LIS3MDL
         ESP_LOGI("DEBUG-LIS3MDL",
             "Magnetic Field [mG]:  %4.2f  %4.2f  %4.2f",
             magnetic_mG[0], magnetic_mG[1], magnetic_mG[2]);
         ESP_LOGI("DEBUG-LIS3MDL", "Temperature [C]:  %4.2f\n", temperature_degC);
+#endif
     }
 }
 
@@ -402,6 +635,9 @@ void app_main(void) {
 
     init_i2c();
     init_sensor_spi();
+    init_tl_spi();
+
+    init_radio();
 
     init_battmon();
 
@@ -414,8 +650,12 @@ void app_main(void) {
     ESP_LOGI("SYS", "Initializing LPS22");
     init_lps22();
 
+    // TODO: ADXL375
+
+    init_gps();
+
     // Stack overflowing... when no battery...
-    // xTaskCreate(battmon_task, "battmon_task", 2048, NULL, 10, NULL);
+    xTaskCreate(battmon_task, "battmon_task", 4 * 1024, NULL, 10, NULL);
 
 #if DEBUG_MON_ENABLED
     xTaskCreate(debug_output_task, "debug_task", 4 * 1024, NULL, 10, NULL);
@@ -427,8 +667,6 @@ void app_main(void) {
     };
 
     ESP_ERROR_CHECK(esp_timer_create(&sensor_timer_args, &sensor_timer));
-
-    /* Start the timer */
     ESP_ERROR_CHECK(esp_timer_start_periodic(sensor_timer, 1000000 / SENSOR_HZ));
 
     while (1) {
@@ -436,6 +674,7 @@ void app_main(void) {
         s_led_state = !s_led_state;
         gpio_set_level(PIN_LED_G, s_led_state);
         gpio_set_level(PIN_LED_R, !s_led_state);
-        vTaskDelay(pdMS_TO_TICKS(500));
+        vTaskDelay(pdMS_TO_TICKS(1500));
+        radio_test_tx();
     }
 }

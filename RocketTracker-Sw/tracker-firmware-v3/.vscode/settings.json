@@ -21,7 +21,11 @@
         "*.html": "html",
         "*.ipynb": "python",
         "max17048.h": "c",
-        "format": "c"
+        "format": "c",
+        "parser.h": "c",
+        "nmea.h": "c",
+        "parser_types.h": "c",
+        "i2c_master.h": "c"
     },
     "editor.tabSize": 4,
     "editor.insertSpaces": true,

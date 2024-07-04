@@ -15,14 +15,19 @@ void MAX17048_Init(MAX17048_t* Obj, i2c_master_bus_handle_t bus) {
     i2c_device_config_t max17048_dev_config = {
             .dev_addr_length = I2C_ADDR_BIT_LEN_7,
             .device_address = MAX17048_ADDR_SLAVE >> 1,
-            .scl_speed_hz = 400000,
+            .scl_speed_hz = 400000
     };
 
     ESP_ERROR_CHECK(i2c_master_bus_add_device(bus, &max17048_dev_config, &Obj->dev_handle));
 
+    Obj->bus = bus;
     Obj->Write = max17048_write_i2c;
     Obj->Read = max17048_read_i2c;
     Obj->timed_out = false;
+}
+
+bool MAX17048_Exists(MAX17048_t* obj) {
+    return i2c_master_probe((obj->bus), MAX17048_ADDR_SLAVE >> 1, 10) == ESP_OK;
 }
 
 /*============================================================================*/

@@ -1,4 +1,9 @@
 dependencies:
+  dernasherbrezon/sx127x:
+    component_hash: 98fa3fd80e015566ff47ecb4bf5d0d096fb25958f2345e1d440adb1ce8351349
+    source:
+      type: service
+    version: 3.1.2
   idf:
     component_hash: null
     source:
@@ -9,6 +14,6 @@ dependencies:
     source:
       type: service
     version: 0.1.1
-manifest_hash: 2a9450a33d6affcdfb28a30ee9c9548122e0abec9821a77e50ed3159813c465a
+manifest_hash: 81648ce12b752e4aa763c4b285029049d62f75b7ccc8c6f2a2f898755678b67f
 target: esp32s3
 version: 1.0.0

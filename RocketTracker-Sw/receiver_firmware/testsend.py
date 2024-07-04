@@ -1,5 +1,5 @@
 import serial, time
-dvc = serial.Serial('/dev/ttyACM0', 115200)
+dvc = serial.Serial('COM15', 115200)
 
 # dvc.write(bytes([0,1,2,0]))
 
