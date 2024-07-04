@@ -1,0 +1,9 @@
+{
+	"files.associations": {
+		"CMakeLists.txt": "cmake",
+		"*.fs": "fsharp",
+		"*.html": "html",
+		"*.ipynb": "python",
+		"numbers": "cpp"
+	}
+}

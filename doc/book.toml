@@ -1,0 +1,6 @@
+[book]
+authors = ["NifleySnifley"]
+language = "en"
+multilingual = false
+src = "src"
+title = "Rocket Tracker Documentation"

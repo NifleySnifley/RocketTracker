@@ -1,0 +1,14 @@
+dependencies:
+  idf:
+    component_hash: null
+    source:
+      type: idf
+    version: 5.2.2
+  igrr/libnmea:
+    component_hash: 25ea527f892761c4311831ecadfa0cb1a3a323501c43b4a8263639beec01ae57
+    source:
+      type: service
+    version: 0.1.1
+manifest_hash: 2a9450a33d6affcdfb28a30ee9c9548122e0abec9821a77e50ed3159813c465a
+target: esp32s3
+version: 1.0.0
