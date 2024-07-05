@@ -25,7 +25,14 @@
         "parser.h": "c",
         "nmea.h": "c",
         "parser_types.h": "c",
-        "i2c_master.h": "c"
+        "i2c_master.h": "c",
+        "cstdint": "cpp",
+        "sx127x.h": "c",
+        "fmgr.h": "c",
+        "array": "c",
+        "string": "c",
+        "string_view": "c",
+        "span": "c"
     },
     "editor.tabSize": 4,
     "editor.insertSpaces": true,

@@ -26,6 +26,8 @@
 #include "gpgsv.h"
 
 #include <sx127x.h>
+#include "sx127x_spi.h"
+#include "fmgr.h"
 
 ////////////////// GLOBALS //////////////////
 // Peripherals
@@ -48,6 +50,11 @@ spi_device_handle_t lsm6dsm_device;
 // TODO: ADXL driver
 spi_device_handle_t adxl_device;
 
+
+////////////////// GLOBAL HANDLES //////////////////
+fmgr_t fmgr;
+
+static TaskHandle_t telemetry_task;
 
 ////////////////// INIT FUNCTIONS //////////////////
 static void init_leds(void) {
@@ -191,6 +198,13 @@ static void init_radio() {
     gpio_isr_handler_add((gpio_num_t)PIN_RFM_D0, radio_handle_interrupt_fromisr, (void*)radio);
 
     ESP_ERROR_CHECK(sx127x_tx_set_pa_config(SX127x_PA_PIN_BOOST, 20, radio));
+    // uint8_t paconfig_value = SX127x_PA_PIN_BOOST | 0b00001111 | 0b01110000;
+    // sx127x_spi_write_register(0x09, &paconfig_value, 1, spi_device);
+    ESP_ERROR_CHECK(sx127x_tx_set_ocp(true, 120, radio));
+
+    // uint8_t data[1] = { 0 };
+    // data[0] = 0b10000000 | 15;
+    // sx127x_spi_write_register(REG_PA_DAC, data, 1, radio->spi_device);
 
     ESP_LOGI("RADIO", "Successfully initialized radio.");
 }
@@ -205,6 +219,18 @@ static void radio_test_tx() {
     ESP_ERROR_CHECK(sx127x_set_opmod(SX127x_MODE_TX, SX127x_MODULATION_LORA, radio));
     ESP_LOGI("RADIO", "Starting TX");
 
+}
+
+static void radio_tx(uint8_t* data, int len) {
+    sx127x_tx_header_t header = {
+       .enable_crc = true,
+       .coding_rate = SX127x_CR_4_5 };
+    ESP_ERROR_CHECK(sx127x_lora_tx_set_explicit_header(&header, radio));
+    if (len > 255) {
+        ESP_LOGE("RADIO", "Message length overrun!");
+    }
+    ESP_ERROR_CHECK(sx127x_lora_tx_set_for_transmission(data, (uint8_t)len, radio));
+    ESP_ERROR_CHECK(sx127x_set_opmod(SX127x_MODE_TX, SX127x_MODULATION_LORA, radio));
 }
 
 static int32_t sensor_platform_write(void* handle, uint8_t Reg, const uint8_t* Bufp, uint16_t len) {
@@ -409,79 +435,121 @@ static QueueHandle_t gps_uart_q;
 // const char GPS_INIT_SEQUENCE[] = 
 // "$PUBX,40,GLL,1,1,1,1,1,0*5D\r\n"; // Set rate of GLL to 10Hz
 
+GPS_Info current_gps;
 void gps_uart_task(void* args) {
     uart_event_t event;
     nmea_s* data;
 
     while (1) {
         if (xQueueReceive(gps_uart_q, &event, portMAX_DELAY)) {
-            if (event.type == UART_PATTERN_DET) {
-                int pos = uart_pattern_pop_pos(UART_GPS);
-
-                while (pos > 0) {
-                    int len = uart_read_bytes(UART_GPS, gps_buf, pos, 1000 / portTICK_PERIOD_MS);
-                    if (len > 0 && (len + 2 < GPS_UART_RX_BUF_SIZE)) {
-
-                        // PROCESS GPS IN HERE!!!!!
-
-                        // // lwgps_process(&gps, &readbuf[1], len - 1);
-                        // gps_buf[len] = '\0';
-
-                        // printf("%.*s", len, &gps_buf[0]);
-
-                        // Convert GNSS message to GPS so it can be parsed
-                        if (gps_buf[1 + 2] == 'N') {
-                            gps_buf[1 + 2] = 'P';
-
-                            gps_buf[len] = '\n';
-                            data = nmea_parse(&gps_buf[1], len, 0);
-                            if (data == NULL) {
-                                printf("Failed to parse the sentence!\n");
-                                printf("\n\n%.*s\n\n", len, &gps_buf[1]);
-                                printf("  Type: %.5s (%d)\n", &gps_buf[1] + 1, nmea_get_type(&gps_buf[1]));
-                            } else {
-                                if (data->errors != 0) {
-                                    printf("WARN: The sentence struct contains parse errors!\n");
-                                }
-
-                                if (NMEA_GPGLL == data->type) {
-                                    printf("\n\nGPGLL sentence\n");
-                                    nmea_gpgll_s* pos = (nmea_gpgll_s*)data;
-                                    printf("Longitude:\n");
-                                    printf("  Degrees: %d\n", pos->longitude.degrees);
-                                    printf("  Minutes: %f\n", pos->longitude.minutes);
-                                    printf("  Cardinal: %c\n", (char)pos->longitude.cardinal);
-                                    printf("Latitude:\n");
-                                    printf("  Degrees: %d\n", pos->latitude.degrees);
-                                    printf("  Minutes: %f\n", pos->latitude.minutes);
-                                    printf("  Cardinal: %c\n", (char)pos->latitude.cardinal);
-                                    // strftime(fmt_buf, sizeof(fmt_buf), "%H:%M:%S", &pos->time);
-                                    // printf("Time: %s\n", fmt_buf);
-                                }
-                                if (NMEA_GPGSA == data->type) {
-                                    nmea_gpgsa_s* gpgsa = (nmea_gpgsa_s*)data;
-
-                                    printf("GPGSA Sentence:\n");
-                                    printf("  Mode: %c\n", gpgsa->mode);
-                                    printf("  Fix:  %d\n", gpgsa->fixtype);
-                                    printf("  PDOP: %.2lf\n", gpgsa->pdop);
-                                    printf("  HDOP: %.2lf\n", gpgsa->hdop);
-                                    printf("  VDOP: %.2lf\n", gpgsa->vdop);
-                                }
-                                if (NMEA_GPGGA == data->type) {
-                                    printf("GPGGA sentence\n");
-                                    nmea_gpgga_s* gpgga = (nmea_gpgga_s*)data;
-                                    printf("Number of satellites: %d\n", gpgga->n_satellites);
-                                    printf("Altitude: %f %c\n", gpgga->altitude,
-                                        gpgga->altitude_unit);
-                                }
-                            }
-                        }
+            switch (event.type) {
+                case UART_PATTERN_DET:
+                {
+                    int pos = uart_pattern_pop_pos(UART_GPS);
+                    if (pos == -1) {
+                        uart_flush_input(pos);
                     }
 
-                    pos = uart_pattern_pop_pos(UART_GPS);
-                }
+                    while (pos != -1) {
+                        int len = uart_read_bytes(UART_GPS, gps_buf, pos, 1000 / portTICK_PERIOD_MS);
+                        if (len > 0) {
+                            // Convert GNSS message to GPS so it can be parsed
+                            if (gps_buf[1 + 2] == 'N') {
+                                gps_buf[1 + 2] = 'P';
 
+                                gps_buf[len] = '\n';
+                                data = nmea_parse(&gps_buf[1], len, 0);
+                                if (data == NULL) {
+                                    printf("Failed to parse the sentence!\n");
+                                    printf("Hex data:\n");
+                                    for (int i = 0; i < len; ++i) {
+                                        printf("%x, ", gps_buf[1 + i]);
+                                    }
+                                    printf("\n");
+                                    printf("  Type: %.5s (%d)\n", &gps_buf[1] + 1, nmea_get_type(&gps_buf[1]));
+                                    size_t buffered;
+                                    uart_get_buffered_data_len(UART_GPS, &buffered);
+                                    ESP_LOGE("GPS", "Error information: buflen=%d, len=%d, pos=%d", buffered, len, pos);
+                                    uart_flush_input(UART_GPS);
+                                } else {
+                                    if (data->errors != 0) {
+                                        printf("WARN: The sentence struct contains parse errors!\n");
+                                    }
+
+                                    if (NMEA_GPGLL == data->type) {
+                                        printf("\n\nGPGLL sentence\n");
+                                        nmea_gpgll_s* pos = (nmea_gpgll_s*)data;
+                                        printf("Longitude:\n");
+                                        printf("  Degrees: %d\n", pos->longitude.degrees);
+                                        printf("  Minutes: %f\n", pos->longitude.minutes);
+                                        printf("  Cardinal: %c\n", (char)pos->longitude.cardinal);
+                                        printf("Latitude:\n");
+                                        printf("  Degrees: %d\n", pos->latitude.degrees);
+                                        printf("  Minutes: %f\n", pos->latitude.minutes);
+                                        printf("  Cardinal: %c\n", (char)pos->latitude.cardinal);
+                                        // strftime(fmt_buf, sizeof(fmt_buf), "%H:%M:%S", &pos->time);
+                                        // printf("Time: %s\n", fmt_buf);
+                                        current_gps.lat = (pos->latitude.degrees + pos->latitude.minutes / 60.0f) * (pos->latitude.cardinal == 'S' ? -1.f : 1.f);
+                                        current_gps.lon = (pos->longitude.degrees + pos->longitude.minutes / 60.0f) * (pos->longitude.cardinal == 'W' ? -1.f : 1.f);
+
+                                        // Notify telemetry task that GPS data is ready.
+                                        xTaskNotify(telemetry_task, 0, eNoAction);
+                                    }
+                                    if (NMEA_GPGSA == data->type) {
+                                        nmea_gpgsa_s* gpgsa = (nmea_gpgsa_s*)data;
+
+                                        printf("GPGSA Sentence:\n");
+                                        printf("  Mode: %c\n", gpgsa->mode);
+                                        printf("  Fix:  %d\n", gpgsa->fixtype);
+                                        printf("  PDOP: %.2lf\n", gpgsa->pdop);
+                                        printf("  HDOP: %.2lf\n", gpgsa->hdop);
+                                        printf("  VDOP: %.2lf\n", gpgsa->vdop);
+                                        current_gps.has_fix_status = true;
+                                        current_gps.fix_status = gpgsa->fixtype;
+                                        // gps_data_fresh = true;
+                                    }
+                                    if (NMEA_GPGGA == data->type) {
+                                        printf("GPGGA sentence\n");
+                                        nmea_gpgga_s* gpgga = (nmea_gpgga_s*)data;
+                                        printf("Number of satellites: %d\n", gpgga->n_satellites);
+                                        printf("Altitude: %f %c\n", gpgga->altitude,
+                                            gpgga->altitude_unit);
+                                        current_gps.alt = gpgga->altitude;
+                                        current_gps.has_sats_used = true;
+                                        current_gps.sats_used = gpgga->n_satellites;
+                                        current_gps.utc_time = gpgga->time.tm_sec + 100000 * gpgga->time.tm_min + 10000000 * gpgga->time.tm_hour; // TODO: Add day/year/etc?
+                                    }
+                                }
+                                nmea_free(data);
+                            }
+                        } else {
+                            ESP_LOGE("GPS", "Pattern read fail.");
+                        }
+                        pos = uart_pattern_pop_pos(UART_GPS);
+                    }
+                }
+                break;
+                case UART_FIFO_OVF:
+                    ESP_LOGW("GPS", "HW FIFO Overflow");
+                    uart_flush(UART_GPS);
+                    xQueueReset(gps_uart_q);
+                    break;
+                case UART_BUFFER_FULL:
+                    ESP_LOGW("GPS", "Ring Buffer Full");
+                    uart_flush(UART_GPS);
+                    xQueueReset(gps_uart_q);
+                    break;
+                case UART_BREAK:
+                    ESP_LOGW("GPS", "Rx Break");
+                    break;
+                case UART_PARITY_ERR:
+                    ESP_LOGE("GPS", "Parity Error");
+                    break;
+                case UART_FRAME_ERR:
+                    ESP_LOGE("GPS", "Frame Error");
+                    break;
+                default:
+                    break;
             }
         }
     }
@@ -512,15 +580,22 @@ static void init_gps() {
     xTaskCreate(&gps_uart_task, "gps_uart_task", 1024 * 4, NULL, 10, NULL);
 }
 
+// TODO: Create mutex for fmgr
 static void battmon_task(void* arg) {
     int battmon_delay_ticks = pdMS_TO_TICKS(1000.0f / BATT_MON_HZ);
     while (true) {
         if (MAX17048_Exists(&battery_monitor)) {
             float soc = MAX1708_SOC(&battery_monitor);
-            float vbatt = MAX17048_Voltage(&battery_monitor);
+            float vbatt = MAX17048_Voltage(&battery_monitor) / 1000.0f;
             bool on_battery = (!battery_monitor.timed_out) && (vbatt > 3.2f);
             if (on_battery) {
                 ESP_LOGI("BATT", "Battery SOC: %f", soc);
+                Battery_Info datum;
+                datum.battery_voltage = vbatt;
+                datum.percentage = soc;
+                if (!fmgr_encode_datum(&fmgr, MessageTypeID_TLM_Battery_Info, Battery_Info_fields, &datum)) {
+                    ESP_LOGW("BATT", "Error encoding Battery_Info datum.");
+                }
             }
             vTaskDelay(battmon_delay_ticks);
         }
@@ -628,6 +703,25 @@ void debug_output_task(void* arg) {
     }
 }
 
+static void telemetry_tx_task(void* arg) {
+    while (1) {
+        // DONE: Receive notification from GPS reading task to actually send the telemetry
+        // TODO: Check for GPS good (check fix level, DOPs, etc.)
+
+        BaseType_t res = xTaskNotifyWait(0, 0, NULL, portMAX_DELAY);
+        if (res == pdTRUE) {
+            fmgr_encode_datum(&fmgr, MessageTypeID_TLM_GPS_Info, GPS_Info_fields, &current_gps);
+
+            ESP_LOGI("RADIO", "Starting TX: %d datum.", fmgr_get_n_datum_encoded(&fmgr));
+
+            int size;
+            uint8_t* data = fmgr_get_frame(&fmgr, &size);
+            radio_tx(data, size);
+            fmgr_reset(&fmgr);
+        }
+    }
+}
+
 static bool s_led_state = false;
 
 void app_main(void) {
@@ -638,6 +732,7 @@ void app_main(void) {
     init_tl_spi();
 
     init_radio();
+    fmgr_init(&fmgr);
 
     init_battmon();
 
@@ -661,6 +756,9 @@ void app_main(void) {
     xTaskCreate(debug_output_task, "debug_task", 4 * 1024, NULL, 10, NULL);
 #endif
 
+
+    xTaskCreate(telemetry_tx_task, "telemetry_tx_task", 4 * 1024, NULL, 10, &telemetry_task);
+
     const esp_timer_create_args_t sensor_timer_args = {
         .callback = &sensors_routine,
         .name = "sensors_routine"
@@ -674,7 +772,6 @@ void app_main(void) {
         s_led_state = !s_led_state;
         gpio_set_level(PIN_LED_G, s_led_state);
         gpio_set_level(PIN_LED_R, !s_led_state);
-        vTaskDelay(pdMS_TO_TICKS(1500));
-        radio_test_tx();
+        vTaskDelay(pdMS_TO_TICKS(500));
     }
 }
