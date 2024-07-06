@@ -25,7 +25,7 @@ int gps_deg_to_dmsint(double degrees, char* nwse_out);
 
 uint8_t nmea_checksum(char* message, int len);
 
-void write_fake_gps(GPS_Info* gps);
+void write_fake_gps(GPS* gps);
 
 void vgps_char_rx_cb(char c);
 

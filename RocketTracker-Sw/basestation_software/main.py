@@ -12,7 +12,7 @@ from gen.mainwindow import Ui_MainWindow
 from gen import logdialog
 from gen.protocol_pb2 import *
 from google.protobuf.json_format import MessageToJson, ParseDict
-from util import battery_percent, MTID_TO_TYPE, msgtype_str, msgtype_fromstr
+from util import MTID_TO_TYPE, msgtype_str, msgtype_fromstr
 from receiver import Receiver
 from typing import Deque
 import json
@@ -226,7 +226,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
     def session_time(self):
         return time.time() - self.session_start_t
 
-    def datum_cb(self, t: MessageTypeID, datum: object):
+    def datum_cb(self, t: DatumTypeID, datum: object):
         self.stats_frame.setDisabled(False)  # We're getting messages!
 
         if (self.logfile != None and not self.logfile.closed):
@@ -245,8 +245,8 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
         # print(f"Type: {msgtype_str(t)}")
 
-        if (t == TLM_GPS_Info):
-            datum: GPS_Info = datum
+        if (t == INFO_GPS):
+            datum: GPS = datum
 
             # TODO: Use CRC and more tracker testing to remove the need for this!!!
             if (len(self.gps_track) > 0 and False):
@@ -271,24 +271,24 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 
             self.update_alt_plot()
 
-        if (t == RX_RadioStatus):
-            datum: Receiver_RadioStatus
+        if (t == STATUS_RadioRxStatus):
+            datum: RadioRxStatus
 
             self.rssi_disp.display(datum.RSSI)
             self.snr_disp.display(datum.SNR)
 
-        if (t == TLM_Battery_Info):
-            datum: Battery_Info
+        if (t == INFO_Battery):
+            datum: Battery
             # Reject obviously wrong values
             if (datum.battery_voltage > 24.0 or datum.battery_voltage < 0.0):
                 return
 
-            self.battery_voltage.setText(f"({datum.battery_voltage})")
+            self.battery_voltage.setText(f"({datum.battery_voltage:.2f})")
             self.battery_bar.setValue(
-                int(battery_percent(datum.battery_voltage)))
+                int(datum.percentage))
             
-        if (t == TLM_Altitude_Info):
-            datum: Altitude_Info
+        if (t == INFO_Altitude):
+            datum: Altitude
             self.alt_log.append((self.session_time(), datum.alt_m))
             self.update_alt_plot()
             

@@ -1,5 +1,6 @@
 import serial, time
-dvc = serial.Serial('COM15', 115200)
+import sys
+dvc = serial.Serial('/dev/ttyACM0' if sys.platform == "linux" else "COM15", 115200)
 
 # dvc.write(bytes([0,1,2,0]))
 

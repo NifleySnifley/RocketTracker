@@ -93,7 +93,7 @@ class Receiver(QWidget):
             if (b == 0x00):
                 # print("RESET")
                 self.rx_buf.clear()
-                self.rx_len == 0
+                self.rx_len =[]
                 continue
             elif (b == 0xFF):
                 bval = 0 if next(biter) == 0x02 else 0xFF
@@ -103,11 +103,17 @@ class Receiver(QWidget):
             # print(hex(bval))
 
             # Get length
-            if (self.rx_len == 0):
+            # rx_len is 16 bit
+            if (isinstance(self.rx_len, list) and len(self.rx_len) < 2):
                 if (len(self.rx_buf) == 0):
-                    self.rx_len = int(bval)
+                    self.rx_len.append(int(bval))
+                    # print("rxlen", bval)
                     self.rx_buf.clear()
             else:
+                if (isinstance(self.rx_len, list)):
+                    # print('rxlen_final', self.rx_len)
+                    self.rx_len = self.rx_len[0] + self.rx_len[1]*256
+                # print('d', self.rx_len)
                 self.rx_buf.append(bval)
                 self.rx_len -= 1
 
@@ -127,8 +133,9 @@ class Receiver(QWidget):
                     while (i < len(self.rx_buf)):
                         dtype = self.rx_buf[i]
                         i += 1
-                        slen = self.rx_buf[i]
-                        i += 1
+                        # slen = self.rx_buf[i]
+                        slen = int.from_bytes(self.rx_buf[i:i+2], 'little')
+                        i += 2#1
                         self.parse_datum(dtype,
                                          bytes(self.rx_buf[i:i+slen]))
                         i += slen
@@ -151,39 +158,41 @@ class Receiver(QWidget):
                 self.port_tlm.readyRead.connect(self.tlm_rx)
                 self.port_vgps.readyRead.connect(self.vgps_rx)
 
-    def parse_datum(self, t: MessageTypeID, data):
+    def parse_datum(self, t: DatumTypeID, data):
+        print(len(data))
         if (msgtype_str(t) == None):
             # self.printfn(t)
             self.printfn("Error, malformed datum type!")
             return
         parsed: object = None
         try:
-            if (t == TLM_GPS_Info):
-                parsed = GPS_Info()
+            if (t == INFO_GPS):
+                parsed = GPS()
                 parsed.ParseFromString(data)
-            elif (t == RX_RadioStatus):
-                parsed = Receiver_RadioStatus()
+            elif (t == STATUS_RadioRxStatus):
+                parsed = RadioRxStatus()
                 parsed.ParseFromString(data)
-            elif (t == TLM_Battery_Info):
-                parsed = Battery_Info()
+            elif (t == INFO_Battery):
+                parsed = Battery()
                 parsed.ParseFromString(data)
-            elif (t == TLM_Alert):
+            elif (t == INFO_Alert):
                 parsed = Alert()
                 parsed.ParseFromString(data)
-            elif (t == TLM_Altitude_Info):
-                parsed = Altitude_Info()
+            elif (t == INFO_Altitude):
+                parsed = Altitude()
                 parsed.ParseFromString(data)
-            elif (t == TLM_Blank):
+            elif (t == INFO_Blank):
                 parsed = None
-            elif (t == TLM_Orientation_Info):
-                parsed = Orientation_Info()
+            elif (t == INFO_Orientation):
+                parsed = Orientation()
                 parsed.ParseFromString(data)
-            elif (t == TLM_Raw):
+            elif (t == INFO_Raw):
                 parsed = Raw()
                 parsed.ParseFromString(data)
 
         except DecodeError:
             self.printfn("Error, malformed datum protobuf!")
+            print([hex(e) for e in data])
             return
         
         if (parsed == None):

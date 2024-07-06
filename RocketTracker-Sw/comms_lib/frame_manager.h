@@ -35,11 +35,14 @@ private:
 	uint8_t* serialization_buffer; // length = get_max_datum_data_size
 
 	size_t frame_maxsize;
+	bool bufs_allocd = false;
 
 public:
 	Frame frame; // frame.data points to &this->frame_buf[FRAME_METADATA_SIZE] (start of the serialized frame's data)
 	int cur_frame_len;
 	int n_datum_encoded;
+
+	FrameManager(uint8_t* buf_frame, uint8_t* buf_ser, size_t frame_maxsize);
 
 
 	// Initialize the frame manager with a frame buffer

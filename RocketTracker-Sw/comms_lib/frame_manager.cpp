@@ -1,10 +1,22 @@
 #include "frame_manager.h"
 
 // frame_databuf will have enough room to store all of a serialized frame, including ID, etc
+
+FrameManager::FrameManager(uint8_t* buf_frame, uint8_t* buf_ser, size_t buflens) {
+	this->frame_maxsize = buflens;
+	this->frame_buf = buf_frame;
+	this->serialization_buffer = buf_ser;
+	bufs_allocd = true;
+
+	this->frame.data = &this->frame_buf[FRAME_METADATA_SIZE];
+	reset();
+}
+
 FrameManager::FrameManager(size_t frame_maxsize) {
 	this->frame_maxsize = frame_maxsize;
 	this->frame_buf = (uint8_t*)malloc(frame_maxsize);
 	this->serialization_buffer = (uint8_t*)malloc(this->get_max_datum_data_size());
+	bufs_allocd = true;
 
 	this->frame.data = &this->frame_buf[FRAME_METADATA_SIZE];
 	reset();
@@ -71,7 +83,7 @@ bool FrameManager::load_frame(uint8_t* data, int length) {
 	this->cur_frame_len = length - FRAME_METADATA_SIZE;
 
 	// Copy data into local buffer
-	memcpy(&this->frame_buf, data, length);
+	memcpy(this->frame_buf, data, length);
 
 	// Retreive metadata and store in `frame`
 	this->frame.id = *((uint16_t*)&this->frame_buf[0]);
@@ -114,8 +126,10 @@ bool FrameManager::check_crc() {
 
 FrameManager::~FrameManager() {
 	this->frame.data = NULL;
-	free(this->frame_buf);
-	free(this->serialization_buffer);
+	if (bufs_allocd) {
+		free(this->frame_buf);
+		free(this->serialization_buffer);
+	}
 }
 
 // size_t transfer_from_framemanager(FrameManager* other, size_t starting_offset) {

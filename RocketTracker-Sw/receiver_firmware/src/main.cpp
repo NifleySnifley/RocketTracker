@@ -32,15 +32,19 @@ static const RFM97_LoRa_config RFM97_CFG_DEFAULT{
 };
 
 RFM97_LoRa radio(spi0, RFM97CW_CS, RFM97CW_DIO0, RFM97CW_RST, RFM97CW_MOSI, RFM97CW_MISO, RFM97CW_SCK, true);
-FrameManager fmg;
+// FrameManager lora_fmg;
+// FrameManager usb_fmg;
+uint8_t fmgr_buf1[256] = { 0 };
+uint8_t fmgr_buf2[256] = { 0 };
+FrameManager fmg(fmgr_buf1, fmgr_buf2, 256);
 RFM97_LoRa_config radioconfig = RFM97_CFG_DEFAULT;
 bool radioconfig_updated = false;
 
 absolute_time_t gps_last_update = at_the_end_of_time;
 bool gps_fresh = false;
-GPS_Info current_gps;
+GPS current_gps;
 
-Receiver_RadioStatus radio_stat;
+RadioRxStatus radio_stat;
 auto_init_mutex(rdata_mutex);
 
 absolute_time_t ledr_d = get_absolute_time(), ledg_d = get_absolute_time(), send_d = get_absolute_time();
@@ -113,7 +117,9 @@ void write_b_esc(uint8_t b) {
 
 void write_frame_raw(uint8_t* frame_data, int len) {
 	uint8_t l = len;
+	// 16-bit length
 	write_b_esc(l);
+	write_b_esc(0);
 
 	for (int i = 0; i < len; ++i)
 		write_b_esc(frame_data[i]);
@@ -185,32 +191,44 @@ void telem_rx_cb() {
 	}
 }
 
-void read_datum(int i, MessageTypeID id, int len, uint8_t* data) {
-	if (id == MessageTypeID_TLM_GPS_Info) {
+void read_datum(int i, DatumTypeID id, int len, uint8_t* data) {
+	if (id == DatumTypeID_INFO_GPS) {
 		pb_istream_t stream = pb_istream_from_buffer(data, len);
-		pb_decode(&stream, GPS_Info_fields, &current_gps);
+		pb_decode(&stream, GPS_fields, &current_gps);
 		gps_fresh = true;
 	}
 
 }
 
+void test_end() {
+	while (1) {
+		gpio_put(PIN_LED_G, 1);
+		tud_task();
+		sleep_ms(1);
+	}
+}
+
 int main() {
+	// FrameManager fmg = FrameManager(256);
+	// lora_fmg = FrameManager(256);
+	// usb_fmg = FrameManager(5000);
 	tud_init(BOARD_TUD_RHPORT);
 	stdio_usb_init();
 
-	multicore_launch_core1(core2);
+	// multicore_launch_core1(core2);
 
 	gpio_init(PIN_LED_R);
 	gpio_set_dir(PIN_LED_R, GPIO_OUT);
 	gpio_init(PIN_LED_G);
 	gpio_set_dir(PIN_LED_G, GPIO_OUT);
 	gpio_put(PIN_LED_G, 0);
+	gpio_put(PIN_LED_R, 1);
 
 	radio.init();
 	radio.setISRA(ISR_A);
 	radio.setISRB(ISR_B);
 	radio.setPower(20, true); // Low-er power for testing :)
-	// radio.setFreq(914.0);
+	radio.setFreq(914.0);
 
 	radio.applyConfig(radioconfig);
 
@@ -276,7 +294,10 @@ int main() {
 
 		if (radio.messageAvailable()) {
 			fmg.reset();
+
 			fmg.load_frame((uint8_t*)radio.rxbuf, radio.lastRxLen);
+
+			// test_end();
 
 			// radio_stat.crc_valid = true;
 			if (fmg.check_crc()) {
@@ -296,7 +317,7 @@ int main() {
 				mutex_exit(&rdata_mutex);
 
 				fmg.reset();
-				fmg.encode_datum(MessageTypeID_RX_RadioStatus, Receiver_RadioStatus_fields, &radio_stat);
+				fmg.encode_datum(DatumTypeID_STATUS_RadioRxStatus, RadioRxStatus_fields, &radio_stat);
 				int len;
 				uint8_t* dat = fmg.get_frame(&len);
 				write_frame_raw(dat, len);

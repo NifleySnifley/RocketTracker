@@ -29,7 +29,7 @@ uint8_t nmea_checksum(char* message, int len) {
 	return checksum;
 }
 
-void write_fake_gps(GPS_Info* gps) {
+void write_fake_gps(GPS* gps) {
 	char ns = 'N', ew = 'E';
 	int lat_dms = gps_deg_to_dmsint(gps->lat, &ns);
 	int lon_dms = gps_deg_to_dmsint(gps->lon, &ew);
