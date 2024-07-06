@@ -1,6 +1,6 @@
 syntax = "proto2";
 
-message GPS_Info {
+message GPS {
   required double lat = 1;        // Latitude in degrees North
   required double lon = 2;        // Longitude in degrees West
   required double alt = 3;        // Altitude in meters above SEA LEVEL
@@ -9,7 +9,7 @@ message GPS_Info {
   optional uint32 fix_status = 6; // NMEA fix status (0-6)
 }
 
-message Battery_Info {
+message Battery {
   required float battery_voltage = 1;
   required float percentage = 3;
 //  required bool charging = 2;
@@ -17,12 +17,12 @@ message Battery_Info {
 
 message Raw { required bytes data = 1; }
 
-message Altitude_Info {
+message Altitude {
   required float alt_m = 1;
   optional float v_speed = 2;
 }
 
-message Orientation_Info {
+message Orientation {
   required float orientation_x = 1;
   required float orientation_y = 2;
   required float orientation_z = 3;
@@ -45,27 +45,44 @@ message Alert {
   optional uint32 data = 2;
 }
 
-message Receiver_RadioStatus {
+message RadioRxStatus {
   required float RSSI = 1;
   required float SNR = 2;
   required bool crc_valid = 3;
 }
 
-enum MessageTypeID {
+// Info (telemetry)
+// Status
+// Cmd
+// Resp
+enum DatumTypeID {
   // Telemetry
-  TLM_Blank = 0;
-  TLM_Raw = 1;
-  TLM_Battery_Info = 2;
-  TLM_GPS_Info = 3;
-  TLM_Altitude_Info = 4;
-  TLM_Orientation_Info = 5;
-  TLM_Alert = 6;
+  INFO_Blank = 0;
+  INFO_Raw = 1;
+  INFO_Battery = 2;
+  INFO_GPS = 3;
+  INFO_Altitude = 4;
+  INFO_Orientation = 5;
+  INFO_Alert = 6;
 
   // Receiver
-  RX_RadioStatus = 64;
+  STATUS_RadioRxStatus = 64;
 
-  // Commands
+  // Commands & Responses
   CMD_Ping = 128;
-  CMD_StartLog = 129;
-  CMD_StopLog = 130;
+  RESP_Ping = 129;
+
+  CMD_StartLog = 130;
+  RESP_StartLog = 131;
+
+  CMD_StopLog = 132;
+  RESP_StopLog = 133;
+}
+
+message Command_Ping {
+  required uint32 data = 1;
+}
+
+message Resp_Ping {
+  required uint32 data = 1;
 }

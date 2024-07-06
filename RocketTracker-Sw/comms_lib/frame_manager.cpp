@@ -1,31 +1,50 @@
 #include "frame_manager.h"
 
-FrameManager::FrameManager() {
+// frame_databuf will have enough room to store all of a serialized frame, including ID, etc
+FrameManager::FrameManager(size_t frame_maxsize) {
+	this->frame_maxsize = frame_maxsize;
+	this->frame_buf = (uint8_t*)malloc(frame_maxsize);
+	this->serialization_buffer = (uint8_t*)malloc(this->get_max_datum_data_size());
+
+	this->frame.data = &this->frame_buf[FRAME_METADATA_SIZE];
 	reset();
+}
+
+size_t FrameManager::get_frame_max_datalen() {
+	return this->frame_maxsize - FRAME_METADATA_SIZE;
+}
+
+size_t FrameManager::get_max_datum_data_size() {
+	return this->frame_maxsize - FRAME_METADATA_SIZE - sizeof(Datum_Info);
 }
 
 void FrameManager::reset() {
 	this->cur_frame_len = 0;
 	this->frame.id = 0;
-	memset(this->tmp_buf, 0, sizeof(this->tmp_buf));
+	memset(this->frame_buf, 0, this->frame_maxsize);
 	n_datum_encoded = 0;
-	this->buf_serializer = pb_ostream_from_buffer(this->tmp_buf, sizeof(this->tmp_buf));
+	// this->buf_serializer = pb_ostream_from_buffer(this->frame.data, get_frame_max_datalen());
 }
 
 uint8_t* FrameManager::get_frame(int* len) {
 	this->frame.crc = calculate_crc();
-	*len = this->cur_frame_len + sizeof(Frame::id) + sizeof(Frame::crc);
-	return (uint8_t*)&this->frame;
+
+	// Move frame metadata to databuf
+	*((uint16_t*)&this->frame_buf[0]) = this->frame.id;
+	*((uint16_t*)&this->frame_buf[sizeof(Frame::id)]) = this->frame.crc;
+
+	*len = this->cur_frame_len + FRAME_METADATA_SIZE;
+	return this->frame_buf;
 }
 
-bool FrameManager::encode_datum(MessageTypeID type, const pb_msgdesc_t* fields, const void* src_struct) {
-	this->buf_serializer = pb_ostream_from_buffer(this->tmp_buf, sizeof(this->tmp_buf));
+bool FrameManager::encode_datum(DatumTypeID type, const pb_msgdesc_t* fields, const void* src_struct) {
+	this->buf_serializer = pb_ostream_from_buffer(this->serialization_buffer, this->get_max_datum_data_size());
 	bool success = pb_encode(&this->buf_serializer, fields, src_struct);
 	if (!success)
 		return false;
 
 	int total_size = sizeof(Datum_Info) + this->buf_serializer.bytes_written;
-	if ((total_size + this->cur_frame_len) > sizeof(Frame::data))
+	if ((total_size + this->cur_frame_len) > this->get_frame_max_datalen())
 		return false; // Over message size limit
 
 	Datum_Info info;
@@ -36,7 +55,7 @@ bool FrameManager::encode_datum(MessageTypeID type, const pb_msgdesc_t* fields, 
 	memcpy(&this->frame.data[this->cur_frame_len], &info, sizeof(info));
 	this->cur_frame_len += sizeof(info);
 
-	memcpy(&this->frame.data[this->cur_frame_len], this->tmp_buf, this->buf_serializer.bytes_written);
+	memcpy(&this->frame.data[this->cur_frame_len], this->serialization_buffer, this->buf_serializer.bytes_written);
 	this->cur_frame_len += this->buf_serializer.bytes_written;
 
 	++n_datum_encoded;
@@ -46,12 +65,18 @@ bool FrameManager::encode_datum(MessageTypeID type, const pb_msgdesc_t* fields, 
 bool FrameManager::load_frame(uint8_t* data, int length) {
 	reset();
 	// Invalid frame or too long
-	if (length < (sizeof(Frame::id) + sizeof(Frame::crc)) || length > sizeof(Frame))
+	if (length < FRAME_METADATA_SIZE || length > frame_maxsize)
 		return false;
 
-	this->cur_frame_len = length - (sizeof(Frame::crc) + sizeof(Frame::id));
+	this->cur_frame_len = length - FRAME_METADATA_SIZE;
 
-	memcpy(&this->frame, data, length);
+	// Copy data into local buffer
+	memcpy(&this->frame_buf, data, length);
+
+	// Retreive metadata and store in `frame`
+	this->frame.id = *((uint16_t*)&this->frame_buf[0]);
+	this->frame.crc = *((uint16_t*)&this->frame_buf[sizeof(Frame::id)]);
+
 	return true;
 }
 
@@ -65,7 +90,7 @@ bool FrameManager::decode_frame(datum_decoded_callback callback) {
 		data_ptr += sizeof(Datum_Info);
 		if (info->length + data_ptr > this->cur_frame_len)
 			return false; // Frame is malformed, not enough data for the datum's body
-		callback(datum_i, (MessageTypeID)info->type, info->length, &this->frame.data[data_ptr]);
+		callback(datum_i, (DatumTypeID)info->type, info->length, &this->frame.data[data_ptr]);
 		data_ptr += info->length;
 		++datum_i;
 	}
@@ -86,3 +111,12 @@ uint16_t FrameManager::calculate_crc() {
 bool FrameManager::check_crc() {
 	return frame.crc == calculate_crc();
 }
+
+FrameManager::~FrameManager() {
+	this->frame.data = NULL;
+	free(this->frame_buf);
+	free(this->serialization_buffer);
+}
+
+// size_t transfer_from_framemanager(FrameManager* other, size_t starting_offset) {
+// }

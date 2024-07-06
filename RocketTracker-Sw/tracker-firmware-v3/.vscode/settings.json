@@ -32,7 +32,15 @@
         "array": "c",
         "string": "c",
         "string_view": "c",
-        "span": "c"
+        "span": "c",
+        "esp_timer.h": "c",
+        "bitset": "c",
+        "initializer_list": "c",
+        "regex": "c",
+        "esp_log.h": "c",
+        "uart.h": "c",
+        "defs.h": "c",
+        "esp_partition.h": "c"
     },
     "editor.tabSize": 4,
     "editor.insertSpaces": true,

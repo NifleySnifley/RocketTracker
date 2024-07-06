@@ -5,11 +5,17 @@
 #include "driver/i2c_master.h"
 #include "driver/spi_master.h"
 #include "driver/uart.h"
-#include "pindefs.h"
+#include "defs.h"
 #include "tracker_config.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "esp_flash.h"
+#include "esp_flash_spi_init.h"
+#include "esp_partition.h"
+#include "esp_system.h"
 #include "memory.h"
+#include "nvs.h"
+#include "nvs_flash.h"
 
 #include "max17048.h"
 #include "lps22hh_reg.h"
@@ -27,7 +33,9 @@
 
 #include <sx127x.h>
 #include "sx127x_spi.h"
+
 #include "fmgr.h"
+#include "logging.h"
 
 ////////////////// GLOBALS //////////////////
 // Peripherals
@@ -52,7 +60,14 @@ spi_device_handle_t adxl_device;
 
 
 ////////////////// GLOBAL HANDLES //////////////////
-fmgr_t fmgr;
+fmgr_t lora_fmgr;
+SemaphoreHandle_t lora_txdone_sem;
+SemaphoreHandle_t fmgr_mutex;
+
+esp_flash_t* ext_flash;
+logger_t logger;
+
+nvs_handle_t nvs_config_handle;
 
 static TaskHandle_t telemetry_task;
 
@@ -83,6 +98,40 @@ static void init_battmon() {
     MAX17048_Init(&battery_monitor, i2c_main_bus_handle);
 }
 
+static void radio_tx(uint8_t* data, int len);
+void lora_link_flush() {
+    int ndatum = fmgr_get_n_datum_encoded(&lora_fmgr);
+    if (ndatum > 0) {
+        int size;
+
+        uint8_t* data = fmgr_get_frame(&lora_fmgr, &size);
+        ESP_LOGI("RADIO", "Starting TX: %d datum. %d bytes.", ndatum, size);
+
+        radio_tx(data, size);
+    }
+}
+
+void link_send_datum(DatumTypeID type, const pb_msgdesc_t* fields, const void* src_struct) {
+    xSemaphoreTake(fmgr_mutex, portMAX_DELAY);
+    // TODO: Switch between USB and LoRa accordingly
+
+    // Keep trying!!!
+    if (!fmgr_encode_datum(&lora_fmgr, type, fields, src_struct)) {
+        // TODO: Encode this data into a backlog, then schedule to send asynchronously rather than block
+
+        lora_link_flush();
+        // Wait for TX done!
+        xSemaphoreTake(lora_txdone_sem, portMAX_DELAY);
+        if (!fmgr_encode_datum(&lora_fmgr, type, fields, src_struct)) {
+            while (1) {
+                ESP_LOGE("LORA", "Critical link error: clogged");
+                vTaskDelay(pdMS_TO_TICKS(500));
+            }
+        }
+    }
+
+    xSemaphoreGive(fmgr_mutex);
+}
 
 static void init_sensor_spi() {
     ESP_LOGI("SYS", "Initializing sensor SPI...");
@@ -132,6 +181,33 @@ static void init_tl_spi() {
     gpio_reset_pin(PIN_RFM_CS);
 }
 
+static void init_logging() {
+    const esp_flash_spi_device_config_t device_config = {
+        .host_id = TL_SPI,
+        .cs_id = 0,
+        .cs_io_num = PIN_FLASH_CS,
+        .io_mode = SPI_FLASH_DIO,
+        .freq_mhz = TL_SPI_FREQ / 1000000, // TODO: FASTER!!!
+    };
+    // esp_err_t e = spi_bus_add_flash_device()
+    ESP_ERROR_CHECK(spi_bus_add_flash_device(&ext_flash, &device_config));
+
+    // Probe the Flash chip and initialize it
+    esp_err_t err = esp_flash_init(ext_flash);
+    if (err != ESP_OK) {
+        ESP_LOGE("FLASH", "Failed to initialize external Flash: %s (0x%x)", esp_err_to_name(err), err);
+    }
+
+    uint32_t id;
+    ESP_ERROR_CHECK(esp_flash_read_id(ext_flash, &id));
+    ESP_LOGI("FLASH", "Initialized external Flash, size=%" PRIu32 " KB, ID=0x%" PRIx32, ext_flash->size / 1024, id);
+
+    err = logger_init(&logger, ext_flash);
+    if (err != ESP_OK) {
+        ESP_LOGE("FLASH", "Failed to initialize logger.");
+    }
+}
+
 TaskHandle_t radio_handle_interrupt;
 void IRAM_ATTR radio_handle_interrupt_fromisr(void* arg) {
     xTaskResumeFromISR(radio_handle_interrupt);
@@ -144,8 +220,12 @@ void radio_handle_interrupt_task(void* arg) {
     }
 }
 
+// This can't be called from an ISR... right?
 static void radio_txcomplete_callback(sx127x* arg) {
     ESP_LOGI("RADIO", "TX Completed.");
+    // Signal
+    fmgr_reset(&lora_fmgr);
+    xSemaphoreGive(fmgr_mutex);
 }
 
 static void init_radio() {
@@ -209,17 +289,16 @@ static void init_radio() {
     ESP_LOGI("RADIO", "Successfully initialized radio.");
 }
 
-static void radio_test_tx() {
-    sx127x_tx_header_t header = {
-        .enable_crc = true,
-        .coding_rate = SX127x_CR_4_5 };
-    ESP_ERROR_CHECK(sx127x_lora_tx_set_explicit_header(&header, radio));
-    uint8_t data[] = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 172, 173, 174, 175, 176, 177, 178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 188, 189, 190, 191, 192, 193, 194, 195, 196, 197, 198, 199 };
-    ESP_ERROR_CHECK(sx127x_lora_tx_set_for_transmission(data, sizeof(data), radio));
-    ESP_ERROR_CHECK(sx127x_set_opmod(SX127x_MODE_TX, SX127x_MODULATION_LORA, radio));
-    ESP_LOGI("RADIO", "Starting TX");
-
-}
+// static void radio_test_tx() {
+//     sx127x_tx_header_t header = {
+//         .enable_crc = true,
+//         .coding_rate = SX127x_CR_4_5 };
+//     ESP_ERROR_CHECK(sx127x_lora_tx_set_explicit_header(&header, radio));
+//     uint8_t data[] = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 172, 173, 174, 175, 176, 177, 178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 188, 189, 190, 191, 192, 193, 194, 195, 196, 197, 198, 199 };
+//     ESP_ERROR_CHECK(sx127x_lora_tx_set_for_transmission(data, sizeof(data), radio));
+//     ESP_ERROR_CHECK(sx127x_set_opmod(SX127x_MODE_TX, SX127x_MODULATION_LORA, radio));
+//     ESP_LOGI("RADIO", "Starting TX");
+// }
 
 static void radio_tx(uint8_t* data, int len) {
     sx127x_tx_header_t header = {
@@ -435,7 +514,7 @@ static QueueHandle_t gps_uart_q;
 // const char GPS_INIT_SEQUENCE[] = 
 // "$PUBX,40,GLL,1,1,1,1,1,0*5D\r\n"; // Set rate of GLL to 10Hz
 
-GPS_Info current_gps;
+GPS current_gps;
 void gps_uart_task(void* args) {
     uart_event_t event;
     nmea_s* data;
@@ -460,35 +539,15 @@ void gps_uart_task(void* args) {
                                 gps_buf[len] = '\n';
                                 data = nmea_parse(&gps_buf[1], len, 0);
                                 if (data == NULL) {
-                                    printf("Failed to parse the sentence!\n");
-                                    printf("Hex data:\n");
-                                    for (int i = 0; i < len; ++i) {
-                                        printf("%x, ", gps_buf[1 + i]);
-                                    }
-                                    printf("\n");
-                                    printf("  Type: %.5s (%d)\n", &gps_buf[1] + 1, nmea_get_type(&gps_buf[1]));
-                                    size_t buffered;
-                                    uart_get_buffered_data_len(UART_GPS, &buffered);
-                                    ESP_LOGE("GPS", "Error information: buflen=%d, len=%d, pos=%d", buffered, len, pos);
+                                    ESP_LOGE("GPS", "Failed to a NMEA sentence! Type: %.5s (%d)\n", &gps_buf[1] + 1, nmea_get_type(&gps_buf[1]));
                                     uart_flush_input(UART_GPS);
                                 } else {
                                     if (data->errors != 0) {
-                                        printf("WARN: The sentence struct contains parse errors!\n");
+                                        ESP_LOGW("GPS", "Sentence struct contains parse errors!\n");
                                     }
 
                                     if (NMEA_GPGLL == data->type) {
-                                        printf("\n\nGPGLL sentence\n");
                                         nmea_gpgll_s* pos = (nmea_gpgll_s*)data;
-                                        printf("Longitude:\n");
-                                        printf("  Degrees: %d\n", pos->longitude.degrees);
-                                        printf("  Minutes: %f\n", pos->longitude.minutes);
-                                        printf("  Cardinal: %c\n", (char)pos->longitude.cardinal);
-                                        printf("Latitude:\n");
-                                        printf("  Degrees: %d\n", pos->latitude.degrees);
-                                        printf("  Minutes: %f\n", pos->latitude.minutes);
-                                        printf("  Cardinal: %c\n", (char)pos->latitude.cardinal);
-                                        // strftime(fmt_buf, sizeof(fmt_buf), "%H:%M:%S", &pos->time);
-                                        // printf("Time: %s\n", fmt_buf);
                                         current_gps.lat = (pos->latitude.degrees + pos->latitude.minutes / 60.0f) * (pos->latitude.cardinal == 'S' ? -1.f : 1.f);
                                         current_gps.lon = (pos->longitude.degrees + pos->longitude.minutes / 60.0f) * (pos->longitude.cardinal == 'W' ? -1.f : 1.f);
 
@@ -498,22 +557,11 @@ void gps_uart_task(void* args) {
                                     if (NMEA_GPGSA == data->type) {
                                         nmea_gpgsa_s* gpgsa = (nmea_gpgsa_s*)data;
 
-                                        printf("GPGSA Sentence:\n");
-                                        printf("  Mode: %c\n", gpgsa->mode);
-                                        printf("  Fix:  %d\n", gpgsa->fixtype);
-                                        printf("  PDOP: %.2lf\n", gpgsa->pdop);
-                                        printf("  HDOP: %.2lf\n", gpgsa->hdop);
-                                        printf("  VDOP: %.2lf\n", gpgsa->vdop);
                                         current_gps.has_fix_status = true;
                                         current_gps.fix_status = gpgsa->fixtype;
-                                        // gps_data_fresh = true;
                                     }
                                     if (NMEA_GPGGA == data->type) {
-                                        printf("GPGGA sentence\n");
                                         nmea_gpgga_s* gpgga = (nmea_gpgga_s*)data;
-                                        printf("Number of satellites: %d\n", gpgga->n_satellites);
-                                        printf("Altitude: %f %c\n", gpgga->altitude,
-                                            gpgga->altitude_unit);
                                         current_gps.alt = gpgga->altitude;
                                         current_gps.has_sats_used = true;
                                         current_gps.sats_used = gpgga->n_satellites;
@@ -590,12 +638,11 @@ static void battmon_task(void* arg) {
             bool on_battery = (!battery_monitor.timed_out) && (vbatt > 3.2f);
             if (on_battery) {
                 ESP_LOGI("BATT", "Battery SOC: %f", soc);
-                Battery_Info datum;
+                Battery datum;
                 datum.battery_voltage = vbatt;
                 datum.percentage = soc;
-                if (!fmgr_encode_datum(&fmgr, MessageTypeID_TLM_Battery_Info, Battery_Info_fields, &datum)) {
-                    ESP_LOGW("BATT", "Error encoding Battery_Info datum.");
-                }
+
+                link_send_datum(DatumTypeID_INFO_Battery, Battery_fields, &datum);
             }
             vTaskDelay(battmon_delay_ticks);
         }
@@ -647,7 +694,6 @@ void sensors_routine(void* arg) {
         lis3mdl_temperature_raw_get(&lis3mdl, &data_raw_temperature);
         temperature_degC = lis3mdl_from_lsb_to_celsius(data_raw_temperature);
     }
-
 
     ///////////////////////// LSM6DSM /////////////////////////
     lsm6dsm_reg_t lsm_reg;
@@ -705,34 +751,54 @@ void debug_output_task(void* arg) {
 
 static void telemetry_tx_task(void* arg) {
     while (1) {
-        // DONE: Receive notification from GPS reading task to actually send the telemetry
         // TODO: Check for GPS good (check fix level, DOPs, etc.)
+        // TODO: Also send over a USB interface when possible (tinyusb?)
 
         BaseType_t res = xTaskNotifyWait(0, 0, NULL, portMAX_DELAY);
         if (res == pdTRUE) {
-            fmgr_encode_datum(&fmgr, MessageTypeID_TLM_GPS_Info, GPS_Info_fields, &current_gps);
-
-            ESP_LOGI("RADIO", "Starting TX: %d datum.", fmgr_get_n_datum_encoded(&fmgr));
-
-            int size;
-            uint8_t* data = fmgr_get_frame(&fmgr, &size);
-            radio_tx(data, size);
-            fmgr_reset(&fmgr);
+            // fmgr_encode_datum(&fmgr, DatumTypeID_INFO_GPS, GPS_fields, &current_gps);
+            link_send_datum(DatumTypeID_INFO_GPS, GPS_fields, &current_gps);
+            lora_link_flush();
         }
+    }
+}
+
+static void init_nvs() {
+    esp_err_t err = nvs_flash_init();
+    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        // NVS partition was truncated and needs to be erased
+        // Retry nvs_flash_init
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        err = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(err);
+
+    err = nvs_open("config", NVS_READWRITE, &nvs_config_handle);
+    if (err != ESP_OK) {
+        ESP_LOGI("CONFIG", "Error (%s) opening config NVS handle!\n", esp_err_to_name(err));
     }
 }
 
 static bool s_led_state = false;
 
 void app_main(void) {
+    init_nvs();
+    // TODO: Set default values if neccesary!!
+    // Reboot will be required to set configuration!!
+    // Make a sub-app that is a pop-out window from the telemetry app that allows configuration
+    // TODO: Maybe in the future allow hot-reloading (or just quick-reboot) and changing of config over-the-air with LoRa
+
     init_leds();
 
     init_i2c();
     init_sensor_spi();
     init_tl_spi();
 
+    init_logging();
+
     init_radio();
-    fmgr_init(&fmgr);
+    fmgr_mutex = xSemaphoreCreateMutex();
+    fmgr_init(&lora_fmgr, 256);
 
     init_battmon();
 

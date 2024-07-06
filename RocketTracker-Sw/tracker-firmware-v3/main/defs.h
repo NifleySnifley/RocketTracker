@@ -36,6 +36,9 @@
 #define SENSORS_SPI_FREQ 5 * 1000 * 1000 // 2 Mhz
 
 #define TL_SPI SPI3_HOST
-#define TL_SPI_FREQ 3E6
+#define TL_SPI_FREQ 10E6
+#define LOG_PARTITION_LABEL "log"
+#define ESP_PARTITION_TYPE_DATA_LOG (esp_partition_type_t)0x40
+#define ESP_PARTITION_SUBTYPE_DATA_LOG (esp_partition_subtype_t)0x00
 
 #define UART_GPS UART_NUM_1

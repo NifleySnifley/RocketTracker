@@ -1,15 +1,18 @@
 #include "fmgr.h"
 #include "frame_manager.h"
 
-void fmgr_init(fmgr_t* fmgr) {
-    fmgr->frame_manager = (void*)(new FrameManager());
+void fmgr_init(fmgr_t* fmgr, size_t frame_maxsize) {
+    fmgr->frame_manager = (void*)(new FrameManager(frame_maxsize));
+}
+void fmgr_deinit(fmgr_t* fmgr) {
+    delete fmgr;
 }
 
 uint8_t* fmgr_get_frame(fmgr_t* fmgr, int* len_out) {
     FrameManager* mgr = (FrameManager*)fmgr->frame_manager;
     return mgr->get_frame(len_out);
 }
-bool fmgr_encode_datum(fmgr_t* fmgr, MessageTypeID type, const pb_msgdesc_t* fields, const void* src_struct) {
+bool fmgr_encode_datum(fmgr_t* fmgr, DatumTypeID type, const pb_msgdesc_t* fields, const void* src_struct) {
     FrameManager* mgr = (FrameManager*)fmgr->frame_manager;
     return mgr->encode_datum(type, fields, src_struct);
 }

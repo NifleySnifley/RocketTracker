@@ -8,16 +8,17 @@
 #include <stdint.h>
 
 // Redef
-typedef void (*datum_decoded_callback)(int i, MessageTypeID type, int length, uint8_t* data);
+typedef void (*datum_decoded_callback)(int i, DatumTypeID type, int length, uint8_t* data);
 
 
 typedef struct fmgr_t {
     void* frame_manager; // FrameManager*
 } fmgr_t;
 
-EXTERNC void fmgr_init(fmgr_t* fmgr);
+EXTERNC void fmgr_init(fmgr_t* fmgr, size_t frame_maxsize);
+EXTERNC void fmgr_deinit(fmgr_t* fmgr);
 EXTERNC uint8_t* fmgr_get_frame(fmgr_t* fmgr, int* len_out);
-EXTERNC bool fmgr_encode_datum(fmgr_t* fmgr, MessageTypeID type, const pb_msgdesc_t* fields, const void* src_struct);
+EXTERNC bool fmgr_encode_datum(fmgr_t* fmgr, DatumTypeID type, const pb_msgdesc_t* fields, const void* src_struct);
 EXTERNC bool fmgr_load_frame(fmgr_t* fmgr, uint8_t* data, int length);
 EXTERNC bool fmgr_decode_frame(fmgr_t* fmgr, datum_decoded_callback callback);
 EXTERNC uint16_t fmgr_calculate_crc(fmgr_t* fmgr);
