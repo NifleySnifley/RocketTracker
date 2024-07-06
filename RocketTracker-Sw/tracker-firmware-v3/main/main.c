@@ -108,9 +108,11 @@ void lora_link_flush() {
         ESP_LOGI("RADIO", "Starting TX: %d datum. %d bytes.", ndatum, size);
 
         radio_tx(data, size);
+        fmgr_reset(&lora_fmgr);
     }
 }
 
+// FIXME: This doesn't seem to work to send datum *while* the radio is sending in progress...
 void link_send_datum(DatumTypeID type, const pb_msgdesc_t* fields, const void* src_struct) {
     xSemaphoreTake(fmgr_mutex, portMAX_DELAY);
     // TODO: Switch between USB and LoRa accordingly
@@ -224,7 +226,6 @@ void radio_handle_interrupt_task(void* arg) {
 static void radio_txcomplete_callback(sx127x* arg) {
     ESP_LOGI("RADIO", "TX Completed.");
     // Signal
-    fmgr_reset(&lora_fmgr);
     xSemaphoreGive(fmgr_mutex);
 }
 

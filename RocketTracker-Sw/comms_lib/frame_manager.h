@@ -19,10 +19,12 @@ typedef struct Frame {
 
 const size_t FRAME_METADATA_SIZE = 2 * sizeof(uint16_t);
 
+#pragma pack(push,1)
 typedef struct Datum_Info {
 	uint8_t type;
 	uint16_t length;
 } Datum_Info;
+#pragma pack(pop)
 
 typedef void (*datum_decoded_callback)(int i, DatumTypeID type, int length, uint8_t* data);
 
