@@ -118,8 +118,8 @@ void write_b_esc(uint8_t b) {
 void write_frame_raw(uint8_t* frame_data, int len) {
 	uint8_t l = len;
 	// 16-bit length
-	write_b_esc(l);
 	write_b_esc(0);
+	write_b_esc(l);
 
 	for (int i = 0; i < len; ++i)
 		write_b_esc(frame_data[i]);
@@ -131,7 +131,7 @@ void write_frame_raw(uint8_t* frame_data, int len) {
 }
 
 uint8_t telem_txbuf[256];
-int telem_txsize = 0;
+uint16_t telem_txsize = 0;
 void telem_rx_cb() {
 	static int telem_txidx = 0;
 	// 0 ready, 1 reading data, 2 esc, 3 done UNUSED
@@ -168,11 +168,21 @@ void telem_rx_cb() {
 	switch (telem_rawtx_state) {
 		case 0:
 			telem_txsize = val_unesc;
+
+			telem_rawtx_state = 4;
+			telem_txidx = 0;
+			// printf("Got len %d\n", telem_txsize);
+			break;
+		case 4:
+			telem_txsize |= ((uint16_t)val_unesc) << 8;
+
 			telem_rawtx_state = 1;
 			telem_txidx = 0;
 			// printf("Got len %d\n", telem_txsize);
 			break;
 		case 1:
+			if (telem_txidx >= sizeof(telem_txbuf)) :
+				return;
 			// printf("Read byte %d to idx %d\n", val_unesc, telem_txidx);
 			telem_txbuf[telem_txidx++] = val_unesc;
 			if (telem_txidx >= telem_txsize) {
@@ -197,7 +207,6 @@ void read_datum(int i, DatumTypeID id, int len, uint8_t* data) {
 		pb_decode(&stream, GPS_fields, &current_gps);
 		gps_fresh = true;
 	}
-
 }
 
 void test_end() {

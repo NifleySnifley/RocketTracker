@@ -6,6 +6,9 @@
 		"*.ipynb": "python",
 		"regex": "cpp",
 		"xlocale": "cpp",
-		"xstring": "cpp"
+		"xstring": "cpp",
+		"array": "cpp",
+		"vector": "cpp",
+		"xutility": "cpp"
 	}
 }

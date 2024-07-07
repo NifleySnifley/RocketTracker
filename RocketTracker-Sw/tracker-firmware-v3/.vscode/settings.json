@@ -40,7 +40,10 @@
         "esp_log.h": "c",
         "uart.h": "c",
         "defs.h": "c",
-        "esp_partition.h": "c"
+        "esp_partition.h": "c",
+        "esp_vfs_usb_serial_jtag.h": "c",
+        "usb_serial_jtag.h": "c",
+        "random": "c"
     },
     "editor.tabSize": 4,
     "editor.insertSpaces": true,

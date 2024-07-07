@@ -1,5 +1,19 @@
 syntax = "proto2";
 
+enum TalkerID {
+  Reserved = 0;
+  Tracker_V2 = 1;
+  Tracker_V3 = 2;
+  Receiver_V1 = 3;
+  Basestation = 4;
+}
+
+enum LinkID {
+  Reserved = 0;
+  USBSerial = 1;
+  LoRa = 2;
+}
+
 message GPS {
   required double lat = 1;        // Latitude in degrees North
   required double lon = 2;        // Longitude in degrees West
@@ -31,7 +45,8 @@ message Orientation {
 enum AlertType {
   ALT_Apogee = 0;  // Reached apogee
   ALT_LowBatt = 1; // Battery < 50%
-  ALT_Landed = 2;  // No major movement for 30 secs
+  ALT_CritBatt = 6; // Battery < 20%
+  ALT_Landed = 2;  // No major movement for X secs (configurable?)
   ALT_Liftoff = 3; // Large forward accel detected
   ALT_Log50 = 4;   // Log memory 50% full warning (IDEA: Maybe have it reduce
                    // logging speed as it fills? inversely slower?)
@@ -79,10 +94,11 @@ enum DatumTypeID {
   RESP_StopLog = 133;
 }
 
+// Used to negotiate the capacity of frames on this link
 message Command_Ping {
-  required uint32 data = 1;
+  required uint32 link_frame_cap = 1;
 }
 
 message Resp_Ping {
-  required uint32 data = 1;
+  required uint32 link_frame_cap = 1;
 }

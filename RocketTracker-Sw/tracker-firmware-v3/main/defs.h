@@ -42,3 +42,9 @@
 #define ESP_PARTITION_SUBTYPE_DATA_LOG (esp_partition_subtype_t)0x00
 
 #define UART_GPS UART_NUM_1
+
+#define USB_SERIAL_BUF_SIZE 1024*5
+#define USB_SER_ESC 0xFF
+#define USB_SER_ESC_ESC 0x01
+#define USB_SER_ESC_NULL 0x02
+#define USB_TIMEOUT_MS 500

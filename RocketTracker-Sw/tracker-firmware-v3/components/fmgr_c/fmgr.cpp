@@ -4,10 +4,18 @@
 void fmgr_init(fmgr_t* fmgr, size_t frame_maxsize) {
     fmgr->frame_manager = (void*)(new FrameManager(frame_maxsize));
 }
+void fmgr_init_with_static_buffers(fmgr_t* fmgr, uint8_t* buffer_1, size_t frame_maxsize) {
+    fmgr->frame_manager = (void*)(new FrameManager(buffer_1, frame_maxsize));
+}
 void fmgr_deinit(fmgr_t* fmgr) {
     delete fmgr;
 }
 
+uint8_t* fmgr_get_buffer(fmgr_t* fmgr, int* bufsize) {
+    FrameManager* mgr = (FrameManager*)fmgr->frame_manager;
+    *bufsize = mgr->get_buffer_size();
+    return mgr->frame_buf;
+}
 uint8_t* fmgr_get_frame(fmgr_t* fmgr, int* len_out) {
     FrameManager* mgr = (FrameManager*)fmgr->frame_manager;
     return mgr->get_frame(len_out);

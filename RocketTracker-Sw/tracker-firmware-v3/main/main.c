@@ -16,6 +16,7 @@
 #include "memory.h"
 #include "nvs.h"
 #include "nvs_flash.h"
+#include "driver/usb_serial_jtag.h"
 
 #include "max17048.h"
 #include "lps22hh_reg.h"
@@ -58,11 +59,14 @@ spi_device_handle_t lsm6dsm_device;
 // TODO: ADXL driver
 spi_device_handle_t adxl_device;
 
-
 ////////////////// GLOBAL HANDLES //////////////////
-fmgr_t lora_fmgr;
+fmgr_t lora_outgoing_fmgr;
+fmgr_t lora_incoming_fmgr;
 SemaphoreHandle_t lora_txdone_sem;
 SemaphoreHandle_t fmgr_mutex;
+
+fmgr_t usb_outgoing_fmgr;
+fmgr_t usb_incoming_fmgr;
 
 esp_flash_t* ext_flash;
 logger_t logger;
@@ -98,41 +102,292 @@ static void init_battmon() {
     MAX17048_Init(&battery_monitor, i2c_main_bus_handle);
 }
 
-static void radio_tx(uint8_t* data, int len);
-void lora_link_flush() {
-    int ndatum = fmgr_get_n_datum_encoded(&lora_fmgr);
-    if (ndatum > 0) {
-        int size;
-
-        uint8_t* data = fmgr_get_frame(&lora_fmgr, &size);
-        ESP_LOGI("RADIO", "Starting TX: %d datum. %d bytes.", ndatum, size);
-
-        radio_tx(data, size);
-        fmgr_reset(&lora_fmgr);
+// GLOBAL DATUM DECODING!
+void link_decode_datum(int i, DatumTypeID id, int len, uint8_t* data, bool is_usb) {
+    if (id == DatumTypeID_INFO_Raw) {
+        ESP_LOGI("LINK", "INFO_Raw datum from %s: (%d bytes)", (is_usb ? "USB" : "LoRa"), len);
+        ESP_LOG_BUFFER_HEX("LINK", data, len);
     }
 }
 
-// FIXME: This doesn't seem to work to send datum *while* the radio is sending in progress...
+
+void link_lora_decode_datum(int i, DatumTypeID id, int len, uint8_t* data) {
+    link_decode_datum(i, id, len, data, false);
+}
+
+void link_usb_decode_datum(int i, DatumTypeID id, int len, uint8_t* data) {
+    link_decode_datum(i, id, len, data, true);
+}
+
+static void radio_tx(uint8_t* data, int len);
+static esp_err_t usb_tx(uint8_t* data, int len);
+
+void lora_link_flush() {
+    int size, ndatum;
+    ndatum = fmgr_get_n_datum_encoded(&lora_outgoing_fmgr);
+
+    uint8_t* data = fmgr_get_frame(&lora_outgoing_fmgr, &size);
+    ESP_LOGI("LINK_LoRa", "Starting TX: %d datum. %d bytes.", ndatum, size);
+
+    radio_tx(data, size);
+    fmgr_reset(&lora_outgoing_fmgr);
+}
+
+static bool usb_active = false;
+static void usb_receive_task(void* args) {
+    static int usb_recv_frameidx = 0;
+    // 0 read len MSB, 4 read len LSB, 1 reading data, 2 esc, 3 done UNUSED
+    static int usb_recv_state = 0;
+    static int usb_recv_state_ret = 0;
+    static uint16_t frame_size;
+    static uint8_t val_unesc;
+
+    int buffer_size;
+    uint8_t* buffer = fmgr_get_buffer(&usb_incoming_fmgr, &buffer_size);
+
+    while (1) {
+        // Blocking read 1 byte
+        // TODO: Maybe read into a longer buffer? prolly not neccesary though...
+        uint8_t byte;
+        int nread = usb_serial_jtag_read_bytes(&byte, 1, pdMS_TO_TICKS(USB_TIMEOUT_MS));
+        if (nread != 1) {
+            usb_active = false;
+            continue;
+        } else {
+            usb_active = true;
+        }
+
+        // Reset FSM on zero byte!
+        if (byte == 0) {
+            usb_recv_frameidx = 0;
+            usb_recv_state = 0;
+            continue;
+        }
+
+        // On esc, save state and go to escape state
+        if (byte == USB_SER_ESC) {
+            usb_recv_state_ret = usb_recv_state;
+            usb_recv_state = 2;
+            // printf("ESC\n");
+            continue;
+            // If in esc state, set val unesc to the unescaped!
+        } else if (usb_recv_state == 2) {
+            val_unesc = (byte == USB_SER_ESC_ESC) ? USB_SER_ESC : 0;
+            usb_recv_state = usb_recv_state_ret; // Pop state
+            // printf("UNESC: %d\n", val_unesc);
+        } else {
+            // Otherwise the value is just the byte
+            val_unesc = byte;
+        }
+
+        switch (usb_recv_state) {
+            // Receive MSB of frame length
+            case 0:
+                frame_size = val_unesc;
+
+                usb_recv_state = 4;
+                break;
+            case 4:
+                frame_size |= (uint16_t)val_unesc << 8;
+
+                usb_recv_state = 1;
+                usb_recv_frameidx = 0;
+                // ESP_LOGI("LINK_USB", "Got frame size: %d", frame_size);
+                break;
+
+            case 1:
+                // ESP_LOGI("LINK_USB", "buffer[%d] = %d", usb_recv_frameidx, val_unesc);
+                buffer[usb_recv_frameidx++] = val_unesc;
+                if (usb_recv_frameidx >= frame_size) {
+                    usb_recv_state = 3;
+
+                    ESP_LOGI("LINK_USB", "Frame received over usb, %d bytes.", frame_size);
+                    fmgr_load_frame(&usb_incoming_fmgr, buffer, frame_size);
+                    fmgr_decode_frame(&usb_incoming_fmgr, link_usb_decode_datum);
+                    fmgr_reset(&usb_incoming_fmgr);
+
+                    // TODO: Decode datum, use a USB datum callback and make a global datum callback as well!!!!
+                    // For command/response, will need a set of semaphores to signal that the response has been received so that task can do this
+                    // link_send_datum(cmd)
+                    // <<wait for semaphore to signal response>>
+                    // handle_response(global_variable) (or even better use a queue/semaphore to send a pointer to the data that is "hot" on the buffer)
+
+                    // radio.transmit(telem_txbuf, frame_size, true);
+                    // // printf("Send %d bytes\n", frame_size);
+                    // // write_frame_raw(telem_txbuf, frame_size);
+                    // ledr_d = make_timeout_time_ms(MS_LED);
+
+                    usb_recv_state = 0;
+                    usb_recv_frameidx = 0;
+                    // printf("Message full!\n");
+                }
+                break;
+        }
+    }
+}
+
+static void init_usb() {
+    usb_serial_jtag_driver_config_t usb_serial_jtag_config = {
+        .rx_buffer_size = USB_SERIAL_BUF_SIZE,
+        .tx_buffer_size = USB_SERIAL_BUF_SIZE,
+    };
+
+    ESP_ERROR_CHECK(usb_serial_jtag_driver_install(&usb_serial_jtag_config));
+    ESP_LOGI("USB", "USB_SERIAL_JTAG init done");
+
+    xTaskCreate(usb_receive_task, "usb_receive_task", 1024 * 4, NULL, 10, NULL);
+    ESP_LOGI("USB", "Created USB receiving task");
+}
+
+#define USB_AVAILABLE (usb_serial_jtag_is_connected() && usb_active)
+void link_flush() {
+    // This dumb thing was blocking... make sure this never happens!!!
+     // printf("Flush eeeeEeEEE!\n");
+     // const char* msg = "Flush eeeeEeEEE!\n";
+     // usb_serial_jtag_write_bytes(msg, strlen(msg), portMAX_DELAY);
+    int n_lora_datum = fmgr_get_n_datum_encoded(&lora_outgoing_fmgr);
+    int n_usb_datum = fmgr_get_n_datum_encoded(&usb_outgoing_fmgr);
+    int size;
+
+    // Use USB active!
+    if (USB_AVAILABLE) {
+        ESP_LOGI("LINK_USB", "Sending datum (%d USB, %d LoRa)", n_usb_datum, n_lora_datum);
+
+        if (n_lora_datum > 0) {
+            uint8_t* data = fmgr_get_frame(&lora_outgoing_fmgr, &size);
+            if (usb_tx(data, size) != ESP_OK) {
+                ESP_LOGW("LINK_USB", "Error transmitting frame");
+            }
+            fmgr_reset(&lora_outgoing_fmgr);
+
+        }
+        if (n_usb_datum > 0) {
+            uint8_t* data = fmgr_get_frame(&usb_outgoing_fmgr, &size);
+            ESP_LOGI("LINK_USB", "Flushing %d bytes", size);
+
+            if (usb_tx(data, size) != ESP_OK) {
+                ESP_LOGW("LINK_USB", "Error transmitting frame");
+            }
+            fmgr_reset(&usb_outgoing_fmgr);
+        }
+    } else {
+        if (n_lora_datum > 0) {
+            lora_link_flush();
+        }
+    }
+}
+
 void link_send_datum(DatumTypeID type, const pb_msgdesc_t* fields, const void* src_struct) {
     xSemaphoreTake(fmgr_mutex, portMAX_DELAY);
-    // TODO: Switch between USB and LoRa accordingly
+    // DONE: Switch between USB and LoRa accordingly
 
-    // Keep trying!!!
-    if (!fmgr_encode_datum(&lora_fmgr, type, fields, src_struct)) {
-        // TODO: Encode this data into a backlog, then schedule to send asynchronously rather than block
+    if (USB_AVAILABLE) {
+        // Send with USB link
+        // Keep trying!!!
+        if (!fmgr_encode_datum(&usb_outgoing_fmgr, type, fields, src_struct)) {
+            ESP_LOGW("LINK_USB", "Failed to encode datum");
 
-        lora_link_flush();
-        // Wait for TX done!
-        xSemaphoreTake(lora_txdone_sem, portMAX_DELAY);
-        if (!fmgr_encode_datum(&lora_fmgr, type, fields, src_struct)) {
-            while (1) {
-                ESP_LOGE("LORA", "Critical link error: clogged");
-                vTaskDelay(pdMS_TO_TICKS(500));
+            // TX should be "instant" (blocking buffer-copy)
+            link_flush();
+
+            if (!fmgr_encode_datum(&usb_outgoing_fmgr, type, fields, src_struct)) {
+                while (1) {
+                    ESP_LOGE("LINK_USB", "Critical link error: clogged");
+                    vTaskDelay(pdMS_TO_TICKS(500));
+                }
+            }
+        }
+    } else {
+        // Send with LoRa link
+
+        // Keep trying!!!
+        if (!fmgr_encode_datum(&lora_outgoing_fmgr, type, fields, src_struct)) {
+            // TODO: Encode this data into a backlog, then schedule to send asynchronously rather than block
+
+            lora_link_flush();
+
+            // Wait for TX done!
+            xSemaphoreTake(lora_txdone_sem, portMAX_DELAY);
+
+            if (!fmgr_encode_datum(&lora_outgoing_fmgr, type, fields, src_struct)) {
+                while (1) {
+                    ESP_LOGE("LINK_LoRa", "Critical link error: clogged");
+                    vTaskDelay(pdMS_TO_TICKS(500));
+                }
             }
         }
     }
 
     xSemaphoreGive(fmgr_mutex);
+}
+
+
+/*
+void write_b_esc(uint8_t b) {
+    if (b == 0) {
+        tud_cdc_n_write_char(ITF_TELEM, ESC);
+        tud_cdc_n_write_char(ITF_TELEM, ESC_NULL);
+    } else if (b == ESC) {
+        tud_cdc_n_write_char(ITF_TELEM, ESC);
+        tud_cdc_n_write_char(ITF_TELEM, ESC_ESC);
+    } else {
+        tud_cdc_n_write_char(ITF_TELEM, b);
+    }
+}
+
+void write_frame_raw(uint8_t* frame_data, int len) {
+    uint8_t l = len;
+    // 16-bit length
+    write_b_esc(l);
+    write_b_esc(0);
+
+    for (int i = 0; i < len; ++i)
+        write_b_esc(frame_data[i]);
+
+    for (int i = 0; i < 10; ++i)
+        tud_cdc_n_write_char(ITF_TELEM, '\0');
+
+    tud_cdc_n_write_flush(ITF_TELEM);
+}
+*/
+
+static bool usb_write_byte(uint8_t b, TickType_t wait) {
+    static uint8_t tmpbuf[2] = { 0 };
+    if (b == 0) {
+        tmpbuf[0] = USB_SER_ESC;
+        tmpbuf[1] = USB_SER_ESC_NULL;
+        return usb_serial_jtag_write_bytes(tmpbuf, 2, wait) == 2;
+    } else if (b == USB_SER_ESC) {
+        tmpbuf[0] = USB_SER_ESC;
+        tmpbuf[1] = USB_SER_ESC_ESC;
+        return usb_serial_jtag_write_bytes(tmpbuf, 2, wait) == 2;
+    } else {
+        return usb_serial_jtag_write_bytes(&b, 1, wait) == 1;
+    }
+}
+
+static esp_err_t usb_tx(uint8_t* data, int len) {
+    if (!USB_AVAILABLE) {
+        return ESP_ERR_INVALID_STATE;
+    } else {
+        uint16_t len_b = len;
+        // LSB first
+        bool sent = usb_write_byte((len_b) & 0xFF, pdMS_TO_TICKS(10));
+        sent &= usb_write_byte((len_b >> 8) & 0xFF, pdMS_TO_TICKS(10));
+
+        for (int i = 0; i < len; ++i)
+            sent &= usb_write_byte(data[i], pdMS_TO_TICKS(10));
+
+        uint8_t zero = 0x00;
+        for (int i = 0; i < 10; ++i)
+            sent &= usb_serial_jtag_write_bytes(&zero, 1, pdMS_TO_TICKS(10));
+
+        if (!sent) {
+            ESP_LOGE("LINK_USB", "Error sending over USB (likely the buffer is full)");
+            return ESP_ERR_NOT_FINISHED;
+        } else
+            return ESP_OK;
+    }
 }
 
 static void init_sensor_spi() {
@@ -224,12 +479,14 @@ void radio_handle_interrupt_task(void* arg) {
 
 // This can't be called from an ISR... right?
 static void radio_txcomplete_callback(sx127x* arg) {
-    ESP_LOGI("RADIO", "TX Completed.");
+    ESP_LOGI("LINK_LoRa", "TX Completed.");
     // Signal
-    xSemaphoreGive(fmgr_mutex);
+    xSemaphoreGive(lora_txdone_sem);
 }
 
 static void init_radio() {
+    lora_txdone_sem = xSemaphoreCreateBinary();
+
     spi_device_interface_config_t dev_cfg = {
         .clock_speed_hz = TL_SPI_FREQ,
         .spics_io_num = PIN_RFM_CS,
@@ -554,6 +811,7 @@ void gps_uart_task(void* args) {
 
                                         // Notify telemetry task that GPS data is ready.
                                         xTaskNotify(telemetry_task, 0, eNoAction);
+                                        // ESP_LOGI("GPS", "GLL xTaskNotify");
                                     }
                                     if (NMEA_GPGSA == data->type) {
                                         nmea_gpgsa_s* gpgsa = (nmea_gpgsa_s*)data;
@@ -756,11 +1014,9 @@ static void telemetry_tx_task(void* arg) {
         // TODO: Also send over a USB interface when possible (tinyusb?)
 
         BaseType_t res = xTaskNotifyWait(0, 0, NULL, portMAX_DELAY);
-        if (res == pdTRUE) {
-            // fmgr_encode_datum(&fmgr, DatumTypeID_INFO_GPS, GPS_fields, &current_gps);
-            link_send_datum(DatumTypeID_INFO_GPS, GPS_fields, &current_gps);
-            lora_link_flush();
-        }
+
+        link_send_datum(DatumTypeID_INFO_GPS, GPS_fields, &current_gps);
+        link_flush();
     }
 }
 
@@ -783,6 +1039,14 @@ static void init_nvs() {
 static bool s_led_state = false;
 
 void app_main(void) {
+    fmgr_mutex = xSemaphoreCreateMutex();
+    fmgr_init(&lora_outgoing_fmgr, 256);
+    fmgr_init(&lora_incoming_fmgr, 256);
+    fmgr_init(&usb_outgoing_fmgr, USB_SERIAL_BUF_SIZE);
+    fmgr_init(&usb_incoming_fmgr, USB_SERIAL_BUF_SIZE);
+
+    init_usb();
+
     init_nvs();
     // TODO: Set default values if neccesary!!
     // Reboot will be required to set configuration!!
@@ -798,8 +1062,6 @@ void app_main(void) {
     init_logging();
 
     init_radio();
-    fmgr_mutex = xSemaphoreCreateMutex();
-    fmgr_init(&lora_fmgr, 256);
 
     init_battmon();
 
