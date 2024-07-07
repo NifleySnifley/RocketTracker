@@ -1,7 +1,7 @@
 syntax = "proto2";
 
 enum TalkerID {
-  Reserved = 0;
+  TalkerReserved = 0;
   Tracker_V2 = 1;
   Tracker_V3 = 2;
   Receiver_V1 = 3;
@@ -9,7 +9,7 @@ enum TalkerID {
 }
 
 enum LinkID {
-  Reserved = 0;
+  LinkReserved = 0;
   USBSerial = 1;
   LoRa = 2;
 }
