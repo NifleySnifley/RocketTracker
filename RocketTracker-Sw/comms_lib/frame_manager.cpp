@@ -92,13 +92,14 @@ bool FrameManager::load_frame(uint8_t* data, int length) {
     if (length < FRAME_METADATA_SIZE || length > frame_maxsize)
         return false;
 
-    this->cur_frame_len = length - FRAME_METADATA_SIZE;
 
     // Copy data into local buffer
     if (this->frame_buf != data) {
         reset();
         memcpy(this->frame_buf, data, length);
     }
+
+    this->cur_frame_len = length - FRAME_METADATA_SIZE;
 
     // Retreive metadata and store in `frame`
     this->frame.id = *((uint16_t*)&this->frame_buf[0]);

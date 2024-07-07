@@ -35,8 +35,7 @@ RFM97_LoRa radio(spi0, RFM97CW_CS, RFM97CW_DIO0, RFM97CW_RST, RFM97CW_MOSI, RFM9
 // FrameManager lora_fmg;
 // FrameManager usb_fmg;
 uint8_t fmgr_buf1[256] = { 0 };
-uint8_t fmgr_buf2[256] = { 0 };
-FrameManager fmg(fmgr_buf1, fmgr_buf2, 256);
+FrameManager fmg(fmgr_buf1, 256);
 RFM97_LoRa_config radioconfig = RFM97_CFG_DEFAULT;
 bool radioconfig_updated = false;
 
@@ -118,8 +117,8 @@ void write_b_esc(uint8_t b) {
 void write_frame_raw(uint8_t* frame_data, int len) {
 	uint8_t l = len;
 	// 16-bit length
-	write_b_esc(0);
 	write_b_esc(l);
+	write_b_esc(0);
 
 	for (int i = 0; i < len; ++i)
 		write_b_esc(frame_data[i]);
@@ -181,7 +180,7 @@ void telem_rx_cb() {
 			// printf("Got len %d\n", telem_txsize);
 			break;
 		case 1:
-			if (telem_txidx >= sizeof(telem_txbuf)) :
+			if (telem_txidx >= sizeof(telem_txbuf))
 				return;
 			// printf("Read byte %d to idx %d\n", val_unesc, telem_txidx);
 			telem_txbuf[telem_txidx++] = val_unesc;
