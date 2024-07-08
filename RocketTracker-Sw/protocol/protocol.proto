@@ -66,6 +66,12 @@ message RadioRxStatus {
   required bool crc_valid = 3;
 }
 
+message LogStatus {
+  required uint32 log_size = 1;
+  required uint32 log_maxsize = 2;
+  optional float cur_logging_hz = 3;
+}
+
 // Info (telemetry)
 // Status
 // Cmd
@@ -79,26 +85,47 @@ enum DatumTypeID {
   INFO_Altitude = 4;
   INFO_Orientation = 5;
   INFO_Alert = 6;
+  INFO_LogStatus = 7;
 
   // Receiver
   STATUS_RadioRxStatus = 64;
 
   // Commands & Responses
-  CMD_Ping = 128;
+  CMD_Ping = 128; // -> RESP_Ping
   RESP_Ping = 129;
 
-  CMD_StartLog = 130;
+  // TODO: Integrate commands to: arm logging, manually start logging, stop logging
+  CMD_StartLog = 130; // NO_BODY -> RESP_StartLog
   RESP_StartLog = 131;
 
-  CMD_StopLog = 132;
+  CMD_StopLog = 132; // NO_BODY -> RESP_StopLog
   RESP_StopLog = 133;
+
+  CMD_EraseLog = 134; // -> RESP_EraseLog
+  RESP_EraseLog = 135;
+
+  CMD_DownloadLog = 136; // -> N * (RESP_DownloadLog_Segment)
+  RESP_DownloadLog_Segment = 137; // <- ACK_DownloadLog_Segment
+  ACK_DownloadLog_Segment = 138;
+
+  CMD_LogStatus = 139; // NO_BODY -> INFO_LogStatus
 }
 
 // Used to negotiate the capacity of frames on this link
 message Command_Ping {
-  required uint32 link_frame_cap = 1;
+  required LinkID link = 1;
+}
+message Resp_Ping {
+  required LinkID link = 1;
 }
 
-message Resp_Ping {
-  required uint32 link_frame_cap = 1;
+enum EraseType {
+    Erase_Log = 0; // Deletes the current log and starts a new one
+    Erase_Clean = 1; // Resets log to defaults, overrides wear leveling, and wipes the entire flash memory
+}
+message Command_EraseLog {
+    required EraseType type = 1;
+}
+message Resp_EraseLog {
+    required int32 error = 1;
 }

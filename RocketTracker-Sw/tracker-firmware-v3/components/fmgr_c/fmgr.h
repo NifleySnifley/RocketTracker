@@ -29,4 +29,7 @@ EXTERNC int fmgr_get_n_datum_encoded(fmgr_t* fmgr);
 EXTERNC int fmgr_get_cur_frame_len(fmgr_t* fmgr);
 EXTERNC void fmgr_set_frame_id(fmgr_t* fmgr, uint16_t id);
 
+EXTERNC uint16_t fmgr_get_cur_frame_crc(fmgr_t* fmgr);
+EXTERNC uint16_t fmgr_get_cur_frame_id(fmgr_t* fmgr);
+
 #undef EXTERNC

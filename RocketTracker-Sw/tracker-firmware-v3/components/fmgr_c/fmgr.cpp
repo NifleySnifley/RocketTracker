@@ -56,3 +56,13 @@ void fmgr_set_frame_id(fmgr_t* fmgr, uint16_t id) {
     FrameManager* mgr = (FrameManager*)fmgr->frame_manager;
     mgr->frame.id = id;
 }
+
+
+uint16_t fmgr_get_cur_frame_crc(fmgr_t* fmgr) {
+    FrameManager* mgr = (FrameManager*)fmgr->frame_manager;
+    return mgr->frame.crc;
+}
+uint16_t fmgr_get_cur_frame_id(fmgr_t* fmgr) {
+    FrameManager* mgr = (FrameManager*)fmgr->frame_manager;
+    return mgr->frame.id;
+}
