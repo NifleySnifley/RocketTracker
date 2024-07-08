@@ -22,8 +22,9 @@ def crc16(bs):
         
     return crc 
 
-print(hex(crc16(testmsg)))
-        
-print("uint16_t CRC_TABLE[256] = {" + ",".join([hex(c) for c in crctab]) + "};\n")
+if __name__ == "__main__":
+    print(hex(crc16(testmsg)))
+            
+    print("uint16_t CRC_TABLE[256] = {" + ",".join([hex(c) for c in crctab]) + "};\n")
 
-print(hex(crcb16(0x01)))
+    print(hex(crcb16(0x01)))

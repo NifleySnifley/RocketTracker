@@ -257,7 +257,8 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             if (len(self.gps_track) > 86400): # OK I hope this never happens
                 self.gps_track.popLeft()
 
-            if (datum.fix_status == 0):
+            print(datum.fix_status)
+            if (datum.fix_status < 2):
                 return  # Nothing to do with invalid GPS fix
 
             self.map_track_line.latLngs = [[g[1],g[2]] for g in self.gps_track]
