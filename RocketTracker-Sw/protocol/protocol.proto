@@ -29,8 +29,6 @@ message Battery {
 //  required bool charging = 2;
 }
 
-message Raw { required bytes data = 1; }
-
 message Altitude {
   required float alt_m = 1;
   optional float v_speed = 2;
@@ -70,6 +68,8 @@ message LogStatus {
   required uint32 log_size = 1;
   required uint32 log_maxsize = 2;
   optional float cur_logging_hz = 3;
+  required bool is_armed = 4;
+  required bool is_auto = 5;
 }
 
 // Info (telemetry)
@@ -95,20 +95,62 @@ enum DatumTypeID {
   RESP_Ping = 129;
 
   // TODO: Integrate commands to: arm logging, manually start logging, stop logging
-  CMD_StartLog = 130; // NO_BODY -> RESP_StartLog
-  RESP_StartLog = 131;
-
-  CMD_StopLog = 132; // NO_BODY -> RESP_StopLog
-  RESP_StopLog = 133;
+  CMD_ConfigureLogging = 130; // NO_BODY -> RESP_StartLog
+  RESP_ConfigureLogging = 131; // Resp_BasicError
 
   CMD_EraseLog = 134; // -> RESP_EraseLog
-  RESP_EraseLog = 135;
+  RESP_EraseLog = 135; // Resp_BasicError
 
-  CMD_DownloadLog = 136; // -> N * (RESP_DownloadLog_Segment)
-  RESP_DownloadLog_Segment = 137; // <- ACK_DownloadLog_Segment
-  ACK_DownloadLog_Segment = 138;
+  CMD_DownloadLog = 136; // NO_BODY -> N * (RESP_DownloadLog_Segment)
+  RESP_DownloadLog = 140; // Resp_BasicError -> N * (RESP_DownloadLog_Segment)
+  RESP_DownloadLog_Segment = 137; // Resp_DownloadLog_Segment
+  ACK_Download_Complete = 138; //
+  //ACK_DownloadLog_Segment = 141;
+  // ACK_Download_Resend = 141; // TODO: Implement a mechanism for resending portions of the log!
 
   CMD_LogStatus = 139; // NO_BODY -> INFO_LogStatus
+}
+
+enum LoggingMode {
+    Stopped = 0;
+    Armed = 1;
+    ManualHz = 2;
+}
+
+message Command_ConfigureLogging {
+    required LoggingMode setting = 1;
+    optional uint32 parameter = 2; // Used for ManualHz
+}
+
+message Resp_BasicError {
+  optional uint32 error = 1;
+}
+
+// Log download:
+// -> CMD_StopLog 
+// <- RESP_StopLog (Resp_BasicError)
+// -> CMD_LogStatus 
+// <- INFO_LogStatus
+// -> CMD_DownloadLog
+// <- ACK_DownloadLog_Segment * N
+// IGNORE IGNORE IGNORE IGNORE IGNORE-> ACK_DownloadLog_Segment // TBD whether this will be implemented!!!
+// <- ACK_Download_Complete
+// -> ACK_Download_Complete
+
+message Resp_DownloadLog_Segment {
+  required uint32 start_address = 1;
+  required uint32 length = 2;
+  required bytes data = 3; // 4096 bytes max
+  // IS uint16!!
+  required uint32 segment_crc16 = 4; // Same as for LoRa, check this on the receiving end
+
+  optional uint32 error = 5;
+}
+
+message Acknowledgement_Download_Complete {
+  // IS uint16!!
+  required uint32 log_crc16 = 1;
+  optional uint32 error = 2;
 }
 
 // Used to negotiate the capacity of frames on this link

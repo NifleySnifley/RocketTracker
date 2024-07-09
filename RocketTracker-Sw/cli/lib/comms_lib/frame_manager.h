@@ -9,7 +9,6 @@
 #include <pb_decode.h>
 
 #define CRC_POLY 0x8d95
-extern uint16_t CRC_TABLE[256];
 
 typedef struct Frame {
     uint16_t id;

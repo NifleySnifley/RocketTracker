@@ -1,0 +1,11 @@
+tracker-cli -p PORT log stop
+tracker-cli -p PORT log start
+tracker-cli -p PORT log delete
+tracker-cli -p PORT log clean (confirmation message)
+tracker-cli -p PORT log status
+tracker-cli -p PORT log download -f FORMAT (bin|csv) -o FILE 
+
+tracker-cli -p PORT monitor (debug frame/datum stream in JSON)
+tracker-cli -p PORT send JSON_FILE
+
+tracker-cli -p PORT viewer (TUI display of GPS, battery, etc.)

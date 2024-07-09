@@ -44,7 +44,8 @@
         "esp_vfs_usb_serial_jtag.h": "c",
         "usb_serial_jtag.h": "c",
         "random": "c",
-        "limits": "c"
+        "limits": "c",
+        "chrono": "c"
     },
     "editor.tabSize": 4,
     "editor.insertSpaces": true,

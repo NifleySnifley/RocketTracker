@@ -9,12 +9,15 @@
 #define NVS_LOG_END "log_end"
 
 // Actual: 32000000 bytes (256Mbit)
-#define LOG_MEMORY_SIZE_B 32000000
+// #define LOG_MEMORY_SIZE_B 32000000
+#define LOG_MEMORY_SIZE_B 256
 #define LOG_FLASH_SECTOR_SIZE 4096
 
 #define LOGGER_COBS_ESC 0x0
 #define LOGGER_COBS_ESC_00 0x01
 #define LOGGER_COBS_ESC_FF 0x02
+
+size_t min(size_t a, size_t b);
 
 typedef struct logger_t {
     esp_flash_t* ext_flash;
@@ -26,6 +29,20 @@ typedef struct logger_t {
     const esp_partition_t* log_partition;
     uint8_t* log_buffer;
 } logger_t;
+
+typedef enum logging_state_t {
+    LOGSTATE_LOGGING_STOPPED,
+    LOGSTATE_LOGGING_AUTO_ARMED,
+    LOGSTATE_LOGGING_AUTO_LIFTOFF,
+    LOGSTATE_LOGGING_AUTO_FLIGHT,
+    LOGSTATE_LOGGING_AUTO_LANDED,
+    LOGSTATE_LOGGING_MANUAL_HZ
+} logging_state_t;
+
+#define LOG_HZ_AUTO_ARMED 10
+#define LOG_HZ_AUTO_LIFTOFF 200
+#define LOG_HZ_AUTO_FLIGHT 60
+#define LOG_HZ_AUTO_LANDED 1
 
 #define LOG_FLAG_PRESS_FRESH (1<<0)
 #define LOG_FLAG_MAG_FRESH (1<<1)
@@ -87,5 +104,19 @@ esp_err_t logger_clean_log(logger_t* logger);
 
 // 3 <- DONE
 size_t logger_get_current_log_size(logger_t* logger);
+
+// Log download:
+// -> CMD_StopLog 
+// <- RESP_StopLog (Resp_BasicError)
+
+// -> CMD_LogStatus 
+// <- INFO_LogStatus
+
+///////////////////////////////////
+// -> CMD_DownloadLog
+// <- ACK_DownloadLog_Segment * N
+// IGNORE IGNORE IGNORE IGNORE IGNORE-> ACK_DownloadLog_Segment // TBD whether this will be implemented!!!
+// <- ACK_Download_Complete
+// -> ACK_Download_Complete
 
 #endif

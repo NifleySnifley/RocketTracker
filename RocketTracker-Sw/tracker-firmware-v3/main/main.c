@@ -72,8 +72,16 @@ SemaphoreHandle_t fmgr_mutex;
 fmgr_t usb_outgoing_fmgr;
 fmgr_t usb_incoming_fmgr;
 
+// Logging
 esp_flash_t* ext_flash;
 logger_t logger;
+log_data_t log_data = { 0 };
+logging_state_t log_state = LOGSTATE_LOGGING_STOPPED;
+int log_state_hz = 0;
+esp_timer_handle_t logging_timer;
+#define LOGDL_NOTIFY_START 0x01
+#define LOGDL_NOTIFY_ACK 0x02 // TODO: Use this to receive a acknowledgement for each segment in the future
+static TaskHandle_t log_download_task_handle;
 
 nvs_handle_t nvs_config_handle;
 
@@ -83,6 +91,14 @@ static TaskHandle_t telemetry_task;
 void link_send_datum(DatumTypeID type, const pb_msgdesc_t* fields, const void* src_struct);
 static void radio_tx(uint8_t* data, int len);
 static esp_err_t usb_tx(uint8_t* data, int len);
+void set_logstate(logging_state_t state, int manual_hz);
+static void log_download_task(void* arg);
+void link_flush();
+
+// USB
+static bool usb_active = false;
+#define USB_AVAILABLE (usb_serial_jtag_is_connected() && usb_active)
+
 
 ////////////////// INIT FUNCTIONS //////////////////
 static void init_leds(void) {
@@ -153,9 +169,78 @@ void link_decode_datum(int i, DatumTypeID id, int len, uint8_t* data, bool is_us
         Command_Ping cmd;
         Resp_Ping resp;
         if (pb_decode(&istream, Command_Ping_fields, &cmd)) {
+            ESP_LOGI("LINK", "Pong!");
             // Link info is unneccesary
             resp.link = is_usb ? LinkID_USBSerial : LinkID_LoRa;
             link_send_datum(DatumTypeID_RESP_Ping, Resp_Ping_fields, &resp);
+        }
+    } else if (id == DatumTypeID_CMD_ConfigureLogging) {
+        Command_ConfigureLogging cmd;
+        Resp_BasicError resp = {
+            .error = 0,
+            .has_error = false
+        };
+
+        if (pb_decode(&istream, Command_ConfigureLogging_fields, &cmd)) {
+            ESP_LOGI("LINK", "Configuring logging");
+            if (cmd.setting == LoggingMode_Stopped) {
+                set_logstate(LOGSTATE_LOGGING_STOPPED, 0);
+            } else if (cmd.setting == LoggingMode_ManualHz) {
+                if (cmd.has_parameter) {
+                    set_logstate(LOGSTATE_LOGGING_STOPPED, 0);
+                } else {
+                    resp.has_error = true;
+                    resp.error = 1;
+                }
+            } else if (cmd.setting == LoggingMode_Armed) {
+                set_logstate(LOGSTATE_LOGGING_AUTO_ARMED, 0);
+            } else {
+                resp.has_error = true;
+                resp.error = 2;
+            }
+
+            // Link info is unneccesary
+            link_send_datum(DatumTypeID_RESP_ConfigureLogging, Resp_BasicError_fields, &resp);
+        }
+    } else if (id == DatumTypeID_CMD_LogStatus) {
+        LogStatus resp;
+        resp.cur_logging_hz = log_state_hz;
+        resp.is_armed = log_state == LOGSTATE_LOGGING_AUTO_ARMED;
+        resp.is_auto = log_state == LOGSTATE_LOGGING_AUTO_ARMED || log_state == LOGSTATE_LOGGING_AUTO_FLIGHT || log_state == LOGSTATE_LOGGING_AUTO_LANDED || log_state == LOGSTATE_LOGGING_AUTO_LIFTOFF;
+        resp.has_cur_logging_hz = true;
+        resp.log_maxsize = LOG_MEMORY_SIZE_B;
+        resp.log_size = logger_get_current_log_size(&logger);
+
+        link_send_datum(DatumTypeID_INFO_LogStatus, LogStatus_fields, &resp);
+    } else if (id == DatumTypeID_CMD_DownloadLog) {
+        Resp_BasicError resp = {
+            .error = 0,
+            .has_error = false
+        };
+
+        // Must not be logging now
+        bool stopped = (log_state_hz == 0) && (log_state == LOGSTATE_LOGGING_STOPPED);
+        if (!stopped) {
+            resp.error = 1;
+            resp.has_error = true;
+        }
+        // Must have a log to download
+        bool has_log = logger_get_current_log_size(&logger) > 0;
+        if (!has_log) {
+            resp.error = 2;
+            resp.has_error = true;
+        }
+        // Must be connected over USB
+        if (!USB_AVAILABLE) {
+            resp.error = 3;
+            resp.has_error = true;
+        }
+
+        link_send_datum(DatumTypeID_RESP_DownloadLog, Resp_BasicError_fields, &resp);
+        if (USB_AVAILABLE) link_flush(); // FLush OK here because it must be ok USB
+
+        if (!resp.has_error) {
+            xTaskNotify(log_download_task_handle, LOGDL_NOTIFY_START, eSetValueWithOverwrite);
         }
     }
 }
@@ -174,13 +259,12 @@ void lora_link_flush() {
 
     fmgr_set_frame_id(&lora_outgoing_fmgr, TalkerID_Tracker_V3);
     uint8_t* data = fmgr_get_frame(&lora_outgoing_fmgr, &size);
-    ESP_LOGI("LINK_LoRa", "Starting TX: %d datum. %d bytes.", ndatum, size);
+    // ESP_LOGI("LINK_LoRa", "Starting TX: %d datum. %d bytes.", ndatum, size);
 
     radio_tx(data, size);
     fmgr_reset(&lora_outgoing_fmgr);
 }
 
-static bool usb_active = false;
 static void usb_receive_task(void* args) {
     static int usb_recv_frameidx = 0;
     // 0 read len MSB, 4 read len LSB, 1 reading data, 2 esc, 3 done UNUSED
@@ -279,7 +363,6 @@ static void init_usb() {
     ESP_LOGI("USB", "Created USB receiving task");
 }
 
-#define USB_AVAILABLE (usb_serial_jtag_is_connected() && usb_active)
 void link_flush() {
     // This dumb thing was blocking... make sure this never happens!!!
      // printf("Flush eeeeEeEEE!\n");
@@ -291,7 +374,7 @@ void link_flush() {
 
     // Use USB active!
     if (USB_AVAILABLE) {
-        ESP_LOGI("LINK_USB", "Sending datum (%d USB, %d LoRa)", n_usb_datum, n_lora_datum);
+        // ESP_LOGI("LINK_USB", "Sending datum (%d USB, %d LoRa)", n_usb_datum, n_lora_datum);
 
         if (n_lora_datum > 0) {
             fmgr_set_frame_id(&lora_outgoing_fmgr, TalkerID_Tracker_V3);
@@ -305,7 +388,7 @@ void link_flush() {
         if (n_usb_datum > 0) {
             fmgr_set_frame_id(&usb_outgoing_fmgr, TalkerID_Tracker_V3);
             uint8_t* data = fmgr_get_frame(&usb_outgoing_fmgr, &size);
-            ESP_LOGI("LINK_USB", "Flushing %d bytes", size);
+            // ESP_LOGI("LINK_USB", "Flushing %d bytes", size);
 
             if (usb_tx(data, size) != ESP_OK) {
                 ESP_LOGW("LINK_USB", "Error transmitting frame");
@@ -450,6 +533,44 @@ static void init_tl_spi() {
     gpio_reset_pin(PIN_RFM_CS);
 }
 
+static void log_timer_task() {
+    logger_log_data_now(&logger, (uint8_t*)&log_data, sizeof(log_data));
+}
+
+void set_logstate(logging_state_t state, int manual_hz) {
+    log_state = state;
+    switch (state) {
+        case LOGSTATE_LOGGING_STOPPED:
+            log_state_hz = (manual_hz < 0) ? 0 : manual_hz;
+            break;
+        case LOGSTATE_LOGGING_MANUAL_HZ:
+            log_state_hz = manual_hz;
+            break;
+        case LOGSTATE_LOGGING_AUTO_ARMED:
+            log_state_hz = LOG_HZ_AUTO_ARMED;
+            break;
+        case LOGSTATE_LOGGING_AUTO_FLIGHT:
+            log_state_hz = LOG_HZ_AUTO_FLIGHT;
+            break;
+        case LOGSTATE_LOGGING_AUTO_LANDED:
+            log_state_hz = LOG_HZ_AUTO_LANDED;
+            break;
+        case LOGSTATE_LOGGING_AUTO_LIFTOFF:
+            log_state_hz = LOG_HZ_AUTO_LIFTOFF;
+            break;
+    }
+
+    if (log_state_hz == 0) {
+        ESP_ERROR_CHECK(esp_timer_stop(logging_timer));
+    } else {
+        if (esp_timer_is_active(logging_timer)) {
+            ESP_ERROR_CHECK(esp_timer_restart(logging_timer, 1000000 / log_state_hz));
+        } else {
+            ESP_ERROR_CHECK(esp_timer_start_periodic(logging_timer, 1000000 / log_state_hz));
+        }
+    }
+}
+
 static void init_logging() {
     const esp_flash_spi_device_config_t device_config = {
         .host_id = TL_SPI,
@@ -481,6 +602,99 @@ static void init_logging() {
     uint8_t buf[256];
     ESP_ERROR_CHECK(logger_read_bytes_raw(&logger, 0, sizeof(buf), buf));
     ESP_LOG_BUFFER_HEX("FLASH CONTENTS", buf, sizeof(buf));
+
+    const esp_timer_create_args_t logtimer_args = {
+        .callback = &log_timer_task,
+        .name = "log_timer_task"
+    };
+
+    ESP_ERROR_CHECK(esp_timer_create(&logtimer_args, &logging_timer));
+    set_logstate(LOGSTATE_LOGGING_STOPPED, -1);
+
+    // Would need larger stack, but for now it's just using static buffers;
+    xTaskCreate(log_download_task, "log_dl_task", 1024 * 4, NULL, 10, &log_download_task_handle);
+}
+
+// TODO: Make a special extension to the frame manager to reduce the amount of memcpys?
+static Resp_DownloadLog_Segment download_segment;
+static void log_download_task(void* arg) {
+    // Log download:
+    // -> CMD_DownloadLog
+    // <- ACK_DownloadLog_Segment * N
+    // IGNORE IGNORE IGNORE IGNORE IGNORE-> ACK_DownloadLog_Segment // TBD whether this will be implemented!!!
+    // <- ACK_Download_Complete
+    // -> ACK_Download_Complete
+    while (1) {
+        // Wait for notification signalling to DownloadLog
+        uint32_t not_val;
+        xTaskNotifyWait(0, 0, &not_val, portMAX_DELAY);
+        if (not_val == LOGDL_NOTIFY_START) {
+            size_t current_address = logger.log_start_address;
+
+            uint16_t total_crc = 0;
+            int n_segments = 0;
+
+            // TODO: Make SUPER SURE that log is totally frozen during this time (mutex lock)
+            // Send download segments
+            esp_err_t e = ESP_OK;
+            while ((current_address != logger.log_end_address) && (e == ESP_OK)) {
+                // Clear, not memsetting because that would be big with the data...
+                download_segment.has_error = false;
+                download_segment.length = 0;
+                download_segment.segment_crc16 = 0;
+                download_segment.start_address = 0;
+                download_segment.error = 0;
+
+                // Wrap!
+                if (current_address == LOG_MEMORY_SIZE_B) current_address = 0;
+
+                size_t segment_length = 0;
+                if (logger.log_end_address > current_address) {
+                    segment_length = min(logger.log_end_address - current_address, 4096);
+                } else {
+                    segment_length = min(LOG_MEMORY_SIZE_B - current_address, 4096);
+                }
+
+                ESP_LOGI("LOGGER", "Downloading segment starting at address %d, %d bytes long.", current_address, segment_length);
+
+                download_segment.data.size = segment_length;
+                download_segment.start_address = current_address;
+                download_segment.length = segment_length;
+                e = logger_read_bytes_raw(&logger, current_address, segment_length, download_segment.data.bytes);
+
+                uint16_t frame_crc = fmgr_util_crc16(download_segment.data.bytes, segment_length);
+                download_segment.segment_crc16 = frame_crc;
+                // TODO: Keep running CRC! in total_crc, this is a bad hack (but might work... admittedly!)
+                total_crc ^= frame_crc;
+
+                if (e != ESP_OK) {
+                    download_segment.has_error = true;
+                    download_segment.error = e;
+                    link_send_datum(DatumTypeID_RESP_DownloadLog_Segment, Resp_DownloadLog_Segment_fields, &download_segment);
+                    ESP_LOGE("LOGGER", "Error while logger_read_bytes_raw in log download: %s", esp_err_to_name(e));
+                    link_flush();
+                    break; // Break the downloading inner loop
+                } else {
+                    link_send_datum(DatumTypeID_RESP_DownloadLog_Segment, Resp_DownloadLog_Segment_fields, &download_segment);
+                    link_flush();
+                    // TODO: wait for ack here, fail download on timeout!
+                }
+                n_segments++;
+            }
+
+            // Success?
+            Acknowledgement_Download_Complete ack;
+            ack.has_error = e != ESP_OK;
+            ack.error = e;
+            ack.log_crc16 = total_crc;
+            ESP_LOGI("LOGGER", "Log download completed! %d segments sent, error code: %s, full crc xor: %d", n_segments, esp_err_to_name(e), total_crc);
+            link_send_datum(DatumTypeID_ACK_Download_Complete, Acknowledgement_Download_Complete_fields, &ack);
+            link_flush();
+
+        } else {
+            continue;
+        }
+    }
 }
 
 TaskHandle_t radio_handle_interrupt;
@@ -533,11 +747,12 @@ void radio_rx_callback(sx127x* device, uint8_t* data, uint16_t data_length) {
 
 // This can't be called from an ISR... right?
 static void radio_txcomplete_callback(sx127x* device) {
-    ESP_LOGI("LINK_LoRa", "TX Completed.");
+    // ESP_LOGI("LINK_LoRa", "TX Completed.");
     ESP_ERROR_CHECK(sx127x_set_opmod(SX127x_MODE_RX_CONT, SX127x_MODULATION_LORA, radio));
 
     // Signal
     xSemaphoreGive(lora_txdone_sem);
+    gpio_set_level(PIN_LED_R, 0);
     // xSemaphoreGive(radio_mutex);
 }
 
@@ -628,6 +843,7 @@ static void radio_tx(uint8_t* data, int len) {
     //     ESP_LOGE("RADIO", "Error acquiring radio mutex! (lockup?)");
     //     return;
     // }
+    gpio_set_level(PIN_LED_R, 1);
 
     sx127x_tx_header_t header = {
        .enable_crc = true,
@@ -877,11 +1093,11 @@ void gps_uart_task(void* args) {
 
                                     if (NMEA_GPGLL == data->type) {
                                         nmea_gpgll_s* pos = (nmea_gpgll_s*)data;
-                                        current_gps.lat = (pos->latitude.degrees + pos->latitude.minutes / 60.0f) * (pos->latitude.cardinal == 'S' ? -1.f : 1.f);
-                                        current_gps.lon = (pos->longitude.degrees + pos->longitude.minutes / 60.0f) * (pos->longitude.cardinal == 'W' ? -1.f : 1.f);
+                                        // current_gps.lat = (pos->latitude.degrees + pos->latitude.minutes / 60.0f) * (pos->latitude.cardinal == 'S' ? -1.f : 1.f);
+                                        // current_gps.lon = (pos->longitude.degrees + pos->longitude.minutes / 60.0f) * (pos->longitude.cardinal == 'W' ? -1.f : 1.f);
 
                                         // Notify telemetry task that GPS data is ready.
-                                        xTaskNotify(telemetry_task, 0, eNoAction);
+                                        // xTaskNotify(telemetry_task, 0, eNoAction);
                                         // ESP_LOGI("GPS", "GLL xTaskNotify");
                                     }
                                     if (NMEA_GPGSA == data->type) {
@@ -892,10 +1108,21 @@ void gps_uart_task(void* args) {
                                     }
                                     if (NMEA_GPGGA == data->type) {
                                         nmea_gpgga_s* gpgga = (nmea_gpgga_s*)data;
+
+                                        current_gps.lat = (gpgga->latitude.degrees + gpgga->latitude.minutes / 60.0f) * (gpgga->latitude.cardinal == 'S' ? -1.f : 1.f);
+                                        current_gps.lon = (gpgga->longitude.degrees + gpgga->longitude.minutes / 60.0f) * (gpgga->longitude.cardinal == 'W' ? -1.f : 1.f);
                                         current_gps.alt = gpgga->altitude;
                                         current_gps.has_sats_used = true;
                                         current_gps.sats_used = gpgga->n_satellites;
                                         current_gps.utc_time = gpgga->time.tm_sec + 100000 * gpgga->time.tm_min + 10000000 * gpgga->time.tm_hour; // TODO: Add day/year/etc?
+
+                                        // TODO: Check that GGA works as the primary message
+                                        log_data.gps_lat = current_gps.lat;
+                                        log_data.gps_lon = current_gps.lon;
+                                        log_data.gps_lon = current_gps.alt;
+                                        log_data.flags |= LOG_FLAG_GPS_FRESH;
+
+                                        xTaskNotify(telemetry_task, 0, eNoAction);
                                     }
                                 }
                                 nmea_free(data);
@@ -1002,6 +1229,9 @@ void sensors_routine(void* arg) {
         memset(&data_raw_pressure, 0x00, sizeof(uint32_t));
         lps22hh_pressure_raw_get(&lps22, &data_raw_pressure);
         pressure_hPa = lps22hh_from_lsb_to_hpa(data_raw_pressure);
+
+        log_data.lps_press_raw = data_raw_pressure;
+        log_data.flags |= LOG_FLAG_PRESS_FRESH;
     }
 
     ///////////////////////// LIS3MDL /////////////////////////
@@ -1023,6 +1253,10 @@ void sensors_routine(void* arg) {
         memset(&data_raw_temperature, 0x00, sizeof(int16_t));
         lis3mdl_temperature_raw_get(&lis3mdl, &data_raw_temperature);
         temperature_degC = lis3mdl_from_lsb_to_celsius(data_raw_temperature);
+
+        // log_data.lis_mag_raw
+        memcpy(log_data.lis_mag_raw, data_raw_magnetic, sizeof(data_raw_magnetic));
+        log_data.flags |= LOG_FLAG_MAG_FRESH;
     }
 
     ///////////////////////// LSM6DSM /////////////////////////
@@ -1040,6 +1274,9 @@ void sensors_routine(void* arg) {
             lsm6dsm_from_fs8g_to_mg(data_raw_acceleration[1]) * 0.001f;
         acceleration_g[2] =
             lsm6dsm_from_fs8g_to_mg(data_raw_acceleration[2]) * 0.001f;
+
+        memcpy(log_data.lsm_acc_raw, data_raw_acceleration, sizeof(data_raw_acceleration));
+        log_data.flags |= LOG_FLAG_LSM_ACC_FRESH;
     }
 
     if (lsm_reg.status_reg.gda) {
@@ -1052,7 +1289,14 @@ void sensors_routine(void* arg) {
             lsm6dsm_from_fs2000dps_to_mdps(data_raw_angular_rate[1]) * 0.001f;
         angular_rate_dps[2] =
             lsm6dsm_from_fs2000dps_to_mdps(data_raw_angular_rate[2]) * 0.001f;
+
+        memcpy(log_data.lsm_gyr_raw, data_raw_angular_rate, sizeof(data_raw_angular_rate));
+        log_data.flags |= LOG_FLAG_LSM_GYR_FRESH;
     }
+
+    // TODO: ADXL! Read 200g accel data
+    // TODO: Fusion orientation filter
+    // TODO: Kalman altitude filter
 }
 
 void debug_output_task(void* arg) {
@@ -1094,10 +1338,11 @@ static void telemetry_tx_task(void* arg) {
 
 esp_timer_handle_t once_per_second_timer;
 static void once_per_second() {
-    static int seconds = 0;
+    static uint32_t seconds = 0;
 
     // Flush logger every 5 seconds
-    if ((seconds % 5) == 0) {
+    // DONE: Only do this while logging!
+    if ((seconds % 5) == 0 && (log_state_hz != 0)) {
         ESP_LOGI("LOGGER", "Flushing NVS");
         logger_flush(&logger);
     }
@@ -1182,7 +1427,6 @@ void app_main(void) {
     ESP_ERROR_CHECK(esp_timer_create(&sensor_timer_args, &sensor_timer));
     ESP_ERROR_CHECK(esp_timer_start_periodic(sensor_timer, 1000000 / SENSOR_HZ));
 
-
     const esp_timer_create_args_t pps_timer_args = {
         .callback = &once_per_second,
         .name = "once_per_second"
@@ -1195,7 +1439,7 @@ void app_main(void) {
         /* Toggle the LED state */
         s_led_state = !s_led_state;
         gpio_set_level(PIN_LED_G, s_led_state);
-        gpio_set_level(PIN_LED_R, !s_led_state);
+        // gpio_set_level(PIN_LED_R, !s_led_state);
         vTaskDelay(pdMS_TO_TICKS(500));
     }
 }

@@ -31,5 +31,6 @@ EXTERNC void fmgr_set_frame_id(fmgr_t* fmgr, uint16_t id);
 
 EXTERNC uint16_t fmgr_get_cur_frame_crc(fmgr_t* fmgr);
 EXTERNC uint16_t fmgr_get_cur_frame_id(fmgr_t* fmgr);
+EXTERNC uint16_t fmgr_util_crc16(uint8_t* buffer, size_t length);
 
 #undef EXTERNC

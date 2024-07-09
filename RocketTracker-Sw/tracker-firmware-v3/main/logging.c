@@ -105,7 +105,7 @@ size_t logger_get_current_log_size(logger_t* logger) {
 }
 
 esp_err_t logger_erase_log(logger_t* logger) {
-    if (logger_get_current_log_size(&logger) <= 0) {
+    if (logger_get_current_log_size(logger) <= 0) {
         return ESP_ERR_NOT_ALLOWED;
     }
 

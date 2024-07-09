@@ -1,0 +1,21 @@
+{
+	"configurations": [
+		{
+			"name": "ESP-IDF",
+			"includePath": [
+				"${workspaceFolder}/**",
+				"${workspaceFolder}/../tracker-firmware-v3/components/",
+				"${workspaceFolder}/../tracker-firmware-v3/main/**",
+				"${workspaceFolder}/../tracker-firmware-v3/components/fmgr_c/compiled/**"
+			],
+			"browse": {
+				"path": [
+					"${config:idf.espIdfPathWin}/components",
+					"${workspaceFolder}"
+				],
+				"limitSymbolsToIncludedHeaders": true
+			}
+		}
+	],
+	"version": 4
+}

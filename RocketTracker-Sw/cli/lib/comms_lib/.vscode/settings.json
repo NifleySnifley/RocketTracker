@@ -1,0 +1,14 @@
+{
+	"files.associations": {
+		"CMakeLists.txt": "cmake",
+		"*.fs": "fsharp",
+		"*.html": "html",
+		"*.ipynb": "python",
+		"regex": "cpp",
+		"xlocale": "cpp",
+		"xstring": "cpp",
+		"array": "cpp",
+		"vector": "cpp",
+		"xutility": "cpp"
+	}
+}

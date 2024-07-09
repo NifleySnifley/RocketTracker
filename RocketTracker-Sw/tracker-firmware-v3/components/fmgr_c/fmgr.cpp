@@ -66,3 +66,12 @@ uint16_t fmgr_get_cur_frame_id(fmgr_t* fmgr) {
     FrameManager* mgr = (FrameManager*)fmgr->frame_manager;
     return mgr->frame.id;
 }
+
+uint16_t fmgr_util_crc16(uint8_t* buffer, size_t length) {
+    uint16_t crc = 0;
+    for (int i = 0; i < length; ++i) {
+        uint8_t prev = ((crc & 0xFF00) >> 8) ^ buffer[i];
+        crc = ((crc << 8) ^ CRC_TABLE[prev]) & 0xFFFF;
+    }
+    return crc;
+}
