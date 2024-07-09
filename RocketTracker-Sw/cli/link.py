@@ -55,18 +55,17 @@ DATUMTYPEID_TO_CLASS = {
     CMD_Ping: Command_Ping,
     RESP_Ping: Resp_Ping,
 
-    CMD_StartLog: None,
-    RESP_StartLog: None,
-
-    CMD_StopLog: None,
-    RESP_StopLog: None,
+    CMD_ConfigureLogging: Command_ConfigureLogging,
+    RESP_ConfigureLogging: Resp_BasicError,
 
     CMD_EraseLog: Command_EraseLog,
-    RESP_EraseLog: Resp_EraseLog,
+    RESP_EraseLog: Resp_BasicError,
 
     CMD_DownloadLog: None,  # IMPLEMENT!!!!
-    RESP_DownloadLog_Segment: None,  # IMPLEMENT!!!!
-    ACK_DownloadLog_Segment: None,  # IMPLEMENT!!!!
+    RESP_DownloadLog: Resp_BasicError,  # IMPLEMENT!!!!
+    RESP_DownloadLog_Segment: Resp_DownloadLog_Segment,
+    ACK_Download_Complete: Acknowledgement_Download_Complete,
+    # ACK_DownloadLog_Segment: None,  # IMPLEMENT!!!!
 
     CMD_LogStatus: LogStatus,
 }

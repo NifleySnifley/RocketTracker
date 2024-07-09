@@ -6,14 +6,17 @@ import argparse
 from serial import Serial
 import signal
 from queue import Queue
+from threading import Condition
 import time
 import lib.proto.protocol_pb2 as protocol
 from threading import Thread
 from distutils.util import strtobool
+import pickle
 
 serialport: Serial | None = None
 rx_queue: Queue[Datum] = Queue()
 tx_queue: Queue[Datum] = Queue()
+tx_done = Condition()
 
 send_thread = None
 recv_thread = None
@@ -50,6 +53,7 @@ def receiver_thread():
                         f = Frame()
                         f.load_from_bytes(data[2:])
                         for d in f.datums:
+                            # print(d)
                             rx_queue.put(d)
                 buffer.clear()
                 continue
@@ -73,6 +77,9 @@ def sender_thread():
                 len(bdata), 2, byteorder='little') + bdata)
             serialport.write(packet)
             serialport.write(bytes.fromhex('0000'))
+            tx_done.acquire()
+            tx_done.notify()
+            tx_done.release()
         except SystemExit:
             return
 
@@ -123,55 +130,230 @@ def init_cli(args):
 def log_stop(args):
     init_cli(args)
 
-    confirm = strtobool(input("Are you sure you want to stop logging?:"))
+    confirm = strtobool(
+        input("Are you sure you want to stop logging?\n[y/n]:"))
+    if (confirm):
+        command = protocol.Command_ConfigureLogging(setting=protocol.Stopped)
+
+        d = Datum(protocol.CMD_ConfigureLogging)
+        d.load_protobuf(command)
+
+        tx_queue.put(d)
+
+        resp = wait_for_datum([protocol.RESP_ConfigureLogging], 5.0)
+        # print(resp)
+        if (resp is None):
+            print("Error: timed out")
+        elif ("error" in resp.to_dict()):
+            print(f"Error stopping log: {resp.to_dict()['error']}")
+        else:
+            print(f"Successfully stopped logging")
 
 
 def log_start(args):
-    global serialport
     init_cli(args)
-    print("log_start")
-    pass
+
+    print("Starting Logging")
+    command = protocol.Command_ConfigureLogging(
+        setting=protocol.ManualHz, parameter=args.hz)
+
+    d = Datum(protocol.CMD_ConfigureLogging)
+    d.load_protobuf(command)
+
+    tx_queue.put(d)
+
+    resp = wait_for_datum([protocol.RESP_ConfigureLogging], 5.0)
+    # print(resp)
+    if (resp is None):
+        print("Error: timed out")
+    elif ("error" in resp.to_dict()):
+        print(f"Error starting logging: {resp.to_dict()['error']}")
+    else:
+        print(f"Successfully started logging at {args.hz}Hz")
 
 
 def log_delete(args):
-    global serialport
     init_cli(args)
-    print("log_delete")
-    pass
+
+    confirm = strtobool(
+        input("Are you sure you want to erase the current log? all data will be lost\n[y/n]:"))
+    if (confirm):
+        command = protocol.Command_EraseLog(type=protocol.Erase_Log)
+
+        d = Datum(protocol.CMD_EraseLog)
+        d.load_protobuf(command)
+
+        tx_queue.put(d)
+
+        resp = wait_for_datum([protocol.RESP_EraseLog], 5.0)
+        # print(resp)
+        if (resp is None):
+            print("Error: timed out")
+        elif ("error" in resp.to_dict()):
+            print(f"Error erasing log: {resp.to_dict()['error']}")
+        else:
+            print(f"Successfully deleted log")
+    else:
+        print("Aborted, did not erase log")
+
+
+def log_mark(args):
+    init_cli(args)
+
+    data = bytes.fromhex("DEADBEEF") if (
+        args.data is None) else bytes.fromhex(args.data)
+
+    print("Writing a marker to the log NOW")
+    print(f"Marker data: {data.hex(':')}")
+    d = Datum(protocol.INFO_Raw)
+    d.set_data(data)
+    tx_queue.put(d)
+
+    tx_done.acquire()
+    tx_done.wait()
+    tx_done.release()
 
 
 def log_clean(args):
-    global serialport
     init_cli(args)
-    print("log_clean")
+    confirm = strtobool(
+        input("Are you sure you want to CLEAN the log memory? all data will be lost.\nThe entire log memory will be erased, this may take up to 7 minutes!\n[y/n]:"))
+    if (confirm):
+        command = protocol.Command_EraseLog(type=protocol.Erase_Clean)
 
-    pass
+        d = Datum(protocol.CMD_EraseLog)
+        d.load_protobuf(command)
+
+        tx_queue.put(d)
+
+        # Timeout 400 seconds, max erase time in flash memory datasheet!
+        resp = wait_for_datum([protocol.RESP_EraseLog], 400)
+        # print(resp)
+        if (resp is None):
+            print("Error: timed out")
+        elif ("error" in resp.to_dict()):
+            print(f"Error cleaning log memory: {resp.to_dict()['error']}")
+        else:
+            print(f"Successfully cleaned log memory")
+    else:
+        print("Aborted, did not clean log memory")
 
 
 def log_status(args):
-    global serialport
     init_cli(args)
-    print("log_status")
 
-    pass
+    print("Requesting log status...")
+    d = Datum(protocol.CMD_LogStatus)
+    d.set_data(bytes())
+
+    tx_queue.put(d)
+
+    status = wait_for_datum([protocol.INFO_LogStatus], 12.0)
+    if (status is None):
+        print("Error: timed out")
+    else:
+        print(status.to_dict())
 
 
 def log_download(args):
     # Log download:
     # -> CMD_StopLog
     # <- RESP_StopLog(Resp_BasicError)
+
     # -> CMD_LogStatus
     # <- INFO_LogStatus
+
     # -> CMD_DownloadLog
     # <- ACK_DownloadLog_Segment * N
     # IGNORE IGNORE IGNORE IGNORE IGNORE -> ACK_DownloadLog_Segment // TBD whether this will be implemented!!!
     # <- ACK_Download_Complete
     # -> ACK_Download_Complete
-    global serialport
     init_cli(args)
-    print("log_download")
 
-    pass
+    print("Testing connection... ")
+    d = Datum(protocol.CMD_Ping)
+    d.load_protobuf(protocol.Command_Ping(link=protocol.USBSerial))
+
+    tx_queue.put(d)
+
+    pong = wait_for_datum([protocol.RESP_Ping], 1.5)
+    if (pong is None):
+        print("Error: timed out")
+        return 2
+    elif (pong.to_protobuf().link == protocol.LoRa):
+        print("Error: Cannot download logs over LoRa/receiver connection")
+        return 1
+    else:
+        print("connected over USB")
+
+    d = Datum(protocol.CMD_ConfigureLogging)
+    d.load_protobuf(protocol.Command_ConfigureLogging(
+        setting=protocol.Stopped))
+
+    print("Stopping logging... ", end='')
+    tx_queue.put(d)
+    resp = wait_for_datum([protocol.RESP_ConfigureLogging], 5.0)
+    # print(resp)
+    if (resp is None):
+        print("Error: log stop timed out")
+        return 2
+    elif ("error" in resp.to_dict()):
+        print(f"Error stopping logging: {resp.to_dict()['error']}")
+        return 1
+    else:
+        print("stopped")
+
+    print("Requesting log status... ", end='')
+    d = Datum(protocol.CMD_LogStatus)
+    d.set_data(bytes())
+
+    tx_queue.put(d)
+
+    status = wait_for_datum([protocol.INFO_LogStatus], 5.0)
+    if (status is None):
+        print("Error: timed out")
+        return 2
+    else:
+        print("success")
+
+    print("Starting download sequence... ", end='')
+    d = Datum(protocol.CMD_DownloadLog)
+    d.set_data(bytes())
+    tx_queue.put(d)
+
+    resp = wait_for_datum([protocol.RESP_DownloadLog], 5.0)
+    if (resp is None):
+        print("Error: timed out")
+        return 1
+    elif ("error" in resp.to_dict()):
+        print(f"Error initiating download: {resp.to_dict()['error']}")
+        return 1
+    else:
+        print("started!")
+
+    segments = []
+    while (True):
+        segment = wait_for_datum(
+            [protocol.ACK_Download_Complete, protocol.RESP_DownloadLog_Segment], 5.0)
+        if (segment is None):
+            print("Error: timed out, stopping download")
+            return 1
+        elif (segment.typeid == protocol.ACK_Download_Complete):
+            print(
+                f"Download complete! Downloaded {status.to_dict()['log_size']}")
+            segments.append(segment.to_dict())  # Get the ACK too!
+            # print(segments)
+            pickle.dump(segments, args.outfile)
+            args.outfile.flush()
+            args.outfile.close()
+            print("Saved to pickle")
+            break
+        else:
+            if ("error" in segment.to_dict()):
+                print(
+                    f"Error while downloading log: {segment.to_dict()['error']}")
+                return
+            segments.append(segment.to_dict())
 
 
 # TODO: Make a nice "view" command with a TUI
@@ -196,8 +378,11 @@ def ping(args):
     tx_queue.put(d)
 
     pong = wait_for_datum([protocol.RESP_Ping], 1.5)
-    print(
-        f"Got pong! connected over link type '{protocol.LinkID.DESCRIPTOR.values_by_number[pong.to_protobuf().link].name}'")
+    if (pong is None):
+        print("Error: timed out")
+    else:
+        print(
+            f"Got pong! connected over link type '{protocol.LinkID.DESCRIPTOR.values_by_number[pong.to_protobuf().link].name}'")
 
 
 def receiver_config(args):
@@ -223,7 +408,21 @@ def argparse_restricted_float(mi, ma):
             x = float(x)
         except ValueError:
             raise argparse.ArgumentTypeError(
-                "%r not a floating-point literal" % (x,))
+                "%r is not a floating-point literal" % (x,))
+        if x < mi or x > ma:
+            raise argparse.ArgumentTypeError(
+                f"{x} not in range [{mi}, {ma}]")
+        return x
+    return worker
+
+
+def argparse_restricted_int(mi: int, ma: int):
+    def worker(x):
+        try:
+            x = int(x)
+        except ValueError:
+            raise argparse.ArgumentTypeError(
+                "%r is not a int literal" % (x,))
         if x < mi or x > ma:
             raise argparse.ArgumentTypeError(
                 f"{x} not in range [{mi}, {ma}]")
@@ -262,8 +461,13 @@ log_subparsers = parser_log.add_subparsers()
 parser_log_stop = log_subparsers.add_parser('stop')
 parser_log_stop.set_defaults(func=log_stop)
 
+parser_log_mark = log_subparsers.add_parser('mark')
+parser_log_mark.set_defaults(func=log_mark)
+parser_log_mark.add_argument('data', nargs='?', default='DEADBEEF')
+
 parser_log_start = log_subparsers.add_parser('start')
 parser_log_start.set_defaults(func=log_start)
+parser_log_start.add_argument("hz", type=argparse_restricted_int(0, 200))
 
 parser_log_delete = log_subparsers.add_parser('delete')
 parser_log_delete.set_defaults(func=log_delete)
@@ -276,7 +480,7 @@ parser_log_status.set_defaults(func=log_status)
 
 parser_log_download = log_subparsers.add_parser('download')
 parser_log_download.add_argument(
-    '-o', '--outfile', required=True, type=argparse.FileType('w'))
+    '-o', '--outfile', required=True, type=argparse.FileType('wb'))
 parser_log_download.add_argument(
     '-f', '--format', required=True, type=str, choices=['rlog', 'csv', 'json'])
 parser_log_download.set_defaults(func=log_download)

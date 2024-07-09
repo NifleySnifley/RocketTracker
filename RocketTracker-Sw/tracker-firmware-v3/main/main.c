@@ -18,6 +18,7 @@
 #include "nvs_flash.h"
 #include "driver/usb_serial_jtag.h"
 #include "pb_decode.h"
+#include "esp_task_wdt.h"
 
 #include "max17048.h"
 #include "lps22hh_reg.h"
@@ -141,16 +142,20 @@ void link_decode_datum(int i, DatumTypeID id, int len, uint8_t* data, bool is_us
     } else if (id == DatumTypeID_CMD_EraseLog) {
         // TODO: Only allow erase over USB for safety
         Command_EraseLog cmd;
-        Resp_EraseLog resp;
+        Resp_BasicError resp;
+        resp.has_error = false;
+
         if (pb_decode(&istream, Command_EraseLog_fields, &cmd)) {
             if (cmd.type == EraseType_Erase_Log) {
                 ESP_LOGI("LINK", "Erasing log as commanded.");
                 esp_err_t e = logger_erase_log(&logger);
                 if (e != ESP_OK) {
                     ESP_LOGE("LINK", "Error %s erasing log!", esp_err_to_name(e));
+                    resp.has_error = true;
                 }
+                ESP_LOGI("LINK", "Logger erase done");
                 resp.error = e;
-                link_send_datum(DatumTypeID_RESP_EraseLog, Resp_EraseLog_fields, &resp);
+                link_send_datum(DatumTypeID_RESP_EraseLog, Resp_BasicError_fields, &resp);
             }
 
             if (cmd.type == EraseType_Erase_Clean) {
@@ -158,9 +163,11 @@ void link_decode_datum(int i, DatumTypeID id, int len, uint8_t* data, bool is_us
                 esp_err_t e = logger_clean_log(&logger);
                 if (e != ESP_OK) {
                     ESP_LOGE("LINK", "Error %s cleaning log!", esp_err_to_name(e));
+                    resp.has_error = true;
                 }
+                ESP_LOGI("LINK", "Logger clean done");
                 resp.error = e;
-                link_send_datum(DatumTypeID_RESP_EraseLog, Resp_EraseLog_fields, &resp);
+                link_send_datum(DatumTypeID_RESP_EraseLog, Resp_BasicError_fields, &resp);
             }
         } else {
             ESP_LOGW("LINK", "Failed to parse Command_EraseLog");
@@ -187,7 +194,7 @@ void link_decode_datum(int i, DatumTypeID id, int len, uint8_t* data, bool is_us
                 set_logstate(LOGSTATE_LOGGING_STOPPED, 0);
             } else if (cmd.setting == LoggingMode_ManualHz) {
                 if (cmd.has_parameter) {
-                    set_logstate(LOGSTATE_LOGGING_STOPPED, 0);
+                    set_logstate(LOGSTATE_LOGGING_MANUAL_HZ, cmd.parameter);
                 } else {
                     resp.has_error = true;
                     resp.error = 1;
@@ -199,10 +206,13 @@ void link_decode_datum(int i, DatumTypeID id, int len, uint8_t* data, bool is_us
                 resp.error = 2;
             }
 
+            logger_flush(&logger);
+
             // Link info is unneccesary
             link_send_datum(DatumTypeID_RESP_ConfigureLogging, Resp_BasicError_fields, &resp);
         }
     } else if (id == DatumTypeID_CMD_LogStatus) {
+        ESP_LOGI("LINK", "Sending log status");
         LogStatus resp;
         resp.cur_logging_hz = log_state_hz;
         resp.is_armed = log_state == LOGSTATE_LOGGING_AUTO_ARMED;
@@ -334,7 +344,9 @@ static void usb_receive_task(void* args) {
 
                     ESP_LOGI("LINK_USB", "Frame received over usb, %d bytes.", frame_size);
                     fmgr_load_frame(&usb_incoming_fmgr, buffer, frame_size);
-                    fmgr_decode_frame(&usb_incoming_fmgr, link_usb_decode_datum);
+                    bool ok = fmgr_decode_frame(&usb_incoming_fmgr, link_usb_decode_datum);
+                    if (!ok)
+                        ESP_LOGW("LINK_USB", "Error decoding frame!");
                     fmgr_reset(&usb_incoming_fmgr);
 
                     // For command/response, will need a set of semaphores to signal that the response has been received so that task can do this
@@ -422,6 +434,9 @@ void link_send_datum(DatumTypeID type, const pb_msgdesc_t* fields, const void* s
                 }
             }
         }
+        // This is USB, make it fast!
+        link_flush();
+
     } else {
         // Send with LoRa link
 
@@ -534,7 +549,12 @@ static void init_tl_spi() {
 }
 
 static void log_timer_task() {
-    logger_log_data_now(&logger, (uint8_t*)&log_data, sizeof(log_data));
+    esp_err_t e = logger_log_data_now(&logger, (uint8_t*)&log_data, sizeof(log_data));
+    log_data.flags = 0; // Clear flags
+    if (e != ESP_OK) {
+        ESP_LOGE("LOGGER", "Error logging data in timer task! stopping logging");
+        set_logstate(LOGSTATE_LOGGING_STOPPED, 0);
+    }
 }
 
 void set_logstate(logging_state_t state, int manual_hz) {
@@ -560,8 +580,11 @@ void set_logstate(logging_state_t state, int manual_hz) {
             break;
     }
 
+    ESP_LOGI("LOGGER", "Hz: %d", log_state_hz);
+
     if (log_state_hz == 0) {
-        ESP_ERROR_CHECK(esp_timer_stop(logging_timer));
+        if (esp_timer_is_active(logging_timer))
+            ESP_ERROR_CHECK(esp_timer_stop(logging_timer));
     } else {
         if (esp_timer_is_active(logging_timer)) {
             ESP_ERROR_CHECK(esp_timer_restart(logging_timer, 1000000 / log_state_hz));
@@ -612,7 +635,7 @@ static void init_logging() {
     set_logstate(LOGSTATE_LOGGING_STOPPED, -1);
 
     // Would need larger stack, but for now it's just using static buffers;
-    xTaskCreate(log_download_task, "log_dl_task", 1024 * 4, NULL, 10, &log_download_task_handle);
+    xTaskCreate(log_download_task, "log_dl_task", 1024 * 8, NULL, 10, &log_download_task_handle);
 }
 
 // TODO: Make a special extension to the frame manager to reduce the amount of memcpys?
@@ -679,7 +702,12 @@ static void log_download_task(void* arg) {
                     link_flush();
                     // TODO: wait for ack here, fail download on timeout!
                 }
+
+                // esp_task_wdt_reset();
+                // TODO: Feed the WDT during this task...
+                // Or maybe sleep a little bit during the flush...
                 n_segments++;
+                current_address += segment_length;
             }
 
             // Success?
@@ -1345,6 +1373,7 @@ static void once_per_second() {
     if ((seconds % 5) == 0 && (log_state_hz != 0)) {
         ESP_LOGI("LOGGER", "Flushing NVS");
         logger_flush(&logger);
+        // TODO: logger alerts!
     }
 
     seconds += 1;

@@ -12,4 +12,4 @@
 #define DEBUG_MON_ENABLED true
 #define DEBUG_MON_LPS22 false
 #define DEBUG_MON_LSM6DSM false
-#define DEBUG_MON_LIS3MDL false
+#define DEBUG_MON_LIS3MDL true

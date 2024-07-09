@@ -113,7 +113,7 @@ bool FrameManager::decode_frame(datum_decoded_callback callback) {
     int data_ptr = 0;
 
     // Seek datum info
-    while ((data_ptr + sizeof(Datum_Info)) < this->cur_frame_len) {
+    while ((data_ptr + sizeof(Datum_Info)) <= this->cur_frame_len) {
         Datum_Info* info = (Datum_Info*)&this->frame.data[data_ptr];
         data_ptr += sizeof(Datum_Info);
         if (info->length + data_ptr > this->cur_frame_len)

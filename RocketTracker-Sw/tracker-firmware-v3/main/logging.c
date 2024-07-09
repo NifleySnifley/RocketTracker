@@ -96,7 +96,7 @@ esp_err_t logger_write_bytes_raw(logger_t* logger, size_t start_address, size_t 
 }
 
 size_t logger_get_current_log_size(logger_t* logger) {
-    if (logger->log_start_address > logger->log_end_address) {
+    if (logger->log_start_address <= logger->log_end_address) {
         return logger->log_end_address - logger->log_start_address;
     } else {
         // Log is wrapped around the end of the buffer
@@ -116,12 +116,13 @@ esp_err_t logger_erase_log(logger_t* logger) {
         size_t end_addr = ((logger->log_end_address / LOG_FLASH_SECTOR_SIZE) + 1) * LOG_FLASH_SECTOR_SIZE;
         e |= esp_partition_erase_range(logger->log_partition, start_addr, end_addr - start_addr);
     } else {
+        ESP_LOGI("LOGGER", "Erasing wrapped log!");
         // Wrapped
         size_t start_addr = (logger->log_start_address / LOG_FLASH_SECTOR_SIZE) * LOG_FLASH_SECTOR_SIZE;
 
         size_t end_addr = ((logger->log_end_address / LOG_FLASH_SECTOR_SIZE) + 1) * LOG_FLASH_SECTOR_SIZE;
         e |= esp_partition_erase_range(logger->log_partition, 0, end_addr);
-        e |= esp_partition_erase_range(logger->log_partition, start_addr, LOG_MEMORY_SIZE_B);
+        e |= esp_partition_erase_range(logger->log_partition, start_addr, ((LOG_MEMORY_SIZE_B / LOG_FLASH_SECTOR_SIZE) + 1) * LOG_FLASH_SECTOR_SIZE);
     }
 
     if (e != ESP_OK) {
@@ -153,7 +154,10 @@ esp_err_t logger_flush(logger_t* logger) {
 }
 
 esp_err_t logger_refresh(logger_t* logger) {
-    size_t cur_end_address = logger->log_end_address;
+    size_t cur_end_address = logger->log_end_address - 1;
+    if (logger->log_end_address == 0) {
+        cur_end_address = LOG_MEMORY_SIZE_B;
+    }
 
     uint8_t lastb;
     bool lastb_set = false;
@@ -164,7 +168,7 @@ esp_err_t logger_refresh(logger_t* logger) {
         int tmp_len = min(sizeof(logger_tmp_buffer), LOG_MEMORY_SIZE_B - cur_end_address);
         esp_err_t e = logger_read_bytes_raw(logger, cur_end_address, tmp_len, logger_tmp_buffer);
         if (e != ESP_OK) return e;
-        ESP_LOGI("LOGGER", "Refresh read %d bytes starting at address %d.", tmp_len, cur_end_address);
+        // ESP_LOGI("LOGGER", "Refresh read %d bytes starting at address %d.", tmp_len, cur_end_address);
 
         for (int i = 0; i < tmp_len; ++i) {
             if (!lastb_set) {
@@ -224,9 +228,9 @@ esp_err_t logger_log_data_now(logger_t* logger, uint8_t* data, size_t data_lengt
         if (b == 0xFF) {
             log_cobs_buf[buf_idx++] = LOGGER_COBS_ESC;
             log_cobs_buf[buf_idx++] = LOGGER_COBS_ESC_FF;
-        } else if (b == 0x00) {
+        } else if (b == 0xAA) {
             log_cobs_buf[buf_idx++] = LOGGER_COBS_ESC;
-            log_cobs_buf[buf_idx++] = LOGGER_COBS_ESC_00;
+            log_cobs_buf[buf_idx++] = LOGGER_COBS_ESC_AA;
         } else {
             log_cobs_buf[buf_idx++] = b;
         }
@@ -242,9 +246,9 @@ esp_err_t logger_log_data_now(logger_t* logger, uint8_t* data, size_t data_lengt
         if (b == 0xFF) {
             log_cobs_buf[buf_idx++] = LOGGER_COBS_ESC;
             log_cobs_buf[buf_idx++] = LOGGER_COBS_ESC_FF;
-        } else if (b == 0x00) {
+        } else if (b == 0xAA) {
             log_cobs_buf[buf_idx++] = LOGGER_COBS_ESC;
-            log_cobs_buf[buf_idx++] = LOGGER_COBS_ESC_00;
+            log_cobs_buf[buf_idx++] = LOGGER_COBS_ESC_AA;
         } else {
             log_cobs_buf[buf_idx++] = b;
         }
@@ -274,7 +278,7 @@ esp_err_t logger_log_data_now(logger_t* logger, uint8_t* data, size_t data_lengt
     int bytes_to_end = min(LOG_MEMORY_SIZE_B - logger->log_end_address, write_len);
     int bytes_from_start = (logger->log_end_address + write_len - LOG_MEMORY_SIZE_B);
 
-    ESP_LOGI("LOGGER", "Writing log bytes, %d from start, %d to end (log_end_address = %d)", bytes_from_start, bytes_to_end, logger->log_end_address);
+    // ESP_LOGI("LOGGER", "Writing log bytes, %d from start, %d to end (log_end_address = %d)", bytes_from_start, bytes_to_end, logger->log_end_address);
 
     if (bytes_to_end > 0) {
         esp_err_t e = logger_write_bytes_raw(logger, logger->log_end_address, bytes_to_end, log_cobs_buf);

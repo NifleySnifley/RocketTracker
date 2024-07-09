@@ -9,12 +9,13 @@
 #define NVS_LOG_END "log_end"
 
 // Actual: 32000000 bytes (256Mbit)
-// #define LOG_MEMORY_SIZE_B 32000000
-#define LOG_MEMORY_SIZE_B 256
+#define LOG_MEMORY_SIZE_B 32000000
+// #define LOG_MEMORY_SIZE_B 256
+// #define LOG_MEMORY_SIZE_B (4096*100)
 #define LOG_FLASH_SECTOR_SIZE 4096
 
-#define LOGGER_COBS_ESC 0x0
-#define LOGGER_COBS_ESC_00 0x01
+#define LOGGER_COBS_ESC 0xAA
+#define LOGGER_COBS_ESC_AA 0x01
 #define LOGGER_COBS_ESC_FF 0x02
 
 size_t min(size_t a, size_t b);
@@ -53,9 +54,9 @@ typedef enum logging_state_t {
 typedef struct log_data_t {
     // Sensor data
     uint32_t lps_press_raw;
-    uint16_t lis_mag_raw[3];
-    uint16_t lsm_acc_raw[3];
-    uint16_t lsm_gyr_raw[3];
+    int16_t lis_mag_raw[3];
+    int16_t lsm_acc_raw[3];
+    int16_t lsm_gyr_raw[3];
     float adxl_acc_raw[3]; // TYPE TBD!!!
     // Processed data
     float orientation_quat[4];
