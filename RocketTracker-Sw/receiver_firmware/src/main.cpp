@@ -31,7 +31,7 @@ static const RFM97_LoRa_config RFM97_CFG_DEFAULT{
 	.bw_mode = SX1276_BANDWIDTH_125KHZ
 };
 
-RFM97_LoRa radio(spi0, RFM97CW_CS, RFM97CW_DIO0, RFM97CW_RST, RFM97CW_MOSI, RFM97CW_MISO, RFM97CW_SCK, true);
+RFM97_LoRa radio(spi0, RFM97CW_CS, RFM97CW_DIO0, RFM97CW_DIO3, RFM97CW_RST, RFM97CW_MOSI, RFM97CW_MISO, RFM97CW_SCK, true);
 // FrameManager lora_fmg;
 // FrameManager usb_fmg;
 uint8_t fmgr_buf1[256] = { 0 };
@@ -144,6 +144,7 @@ void telem_rx_cb() {
 	if (byte == 0) {
 		telem_txidx = 0;
 		telem_rawtx_state = 0;
+		telem_txidx = 0;
 		// printf("Zero rst\r\n");
 		return;
 	}

@@ -75,6 +75,7 @@ def sender_thread():
 
             packet = cobs_encode(int.to_bytes(
                 len(bdata), 2, byteorder='little') + bdata)
+            serialport.write(bytes.fromhex('0000'))
             serialport.write(packet)
             serialport.write(bytes.fromhex('0000'))
             tx_done.acquire()

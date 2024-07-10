@@ -195,6 +195,7 @@ enum class RFM97_RadioState {
 	TX_DMA,
 	TX_FINISHED,
 	RX_WAITING,
+	RX_IN_PROGRESS,
 	RX_DMA,
 	RX_FINISHED,
 	SLEEP,
@@ -212,7 +213,7 @@ typedef struct RFM97_LoRa_config {
 class RFM97_LoRa {
 private:
 	// GPIO connections
-	int rst, dio0;
+	int rst, dio0, dio3;
 	int srx, stx, cs, sck;
 	spi_inst_t* spi_inst;
 	bool use_dma = true;
@@ -231,7 +232,7 @@ public:
 	volatile uint8_t rxbuf[256];
 	volatile uint8_t lastRxLen;
 
-	RFM97_LoRa(spi_inst_t* SPI, int CS, int DIO0, int RST, int STX, int SRX, int SCK, bool use_dma = true);
+	RFM97_LoRa(spi_inst_t* SPI, int CS, int DIO0, int DIO3, int RST, int STX, int SRX, int SCK, bool use_dma = true);
 
 	bool messageAvailable();
 
@@ -375,6 +376,10 @@ public:
 
 	// Used by DMA controller
 	void ISR_B();
+
+	// Called by a ISR on DIO3
+	// Updates the radio's state machine based on radio IRQs
+	void ISR_C();
 
 	void startReceiving();
 

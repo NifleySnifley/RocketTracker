@@ -183,7 +183,7 @@ void RFM97_LoRa::initFIFO() {
 	write(SX1276_REG_FIFO_ADDR_PTR, 0x00);
 }
 
-RFM97_LoRa::RFM97_LoRa(spi_inst_t* SPI, int CS, int DIO0, int RST, int STX, int SRX, int SCK, bool use_dma) : spi_inst(SPI), cs(CS), rst(RST), dio0(DIO0), sck(SCK), stx(STX), srx(SRX), use_dma(use_dma) {}
+RFM97_LoRa::RFM97_LoRa(spi_inst_t* SPI, int CS, int DIO0, int DIO3, int RST, int STX, int SRX, int SCK, bool use_dma) : spi_inst(SPI), cs(CS), rst(RST), dio0(DIO0), dio3(DIO3), sck(SCK), stx(STX), srx(SRX), use_dma(use_dma) {}
 
 bool RFM97_LoRa::spiInit(uint baud) {
 	ASSURE(spi_init(spi_inst, baud));
@@ -302,7 +302,11 @@ void RFM97_LoRa::configure() {
 
 /// @param func ISR function to be called when DIO0 rises. the ISR MUST call onInterrupt() for proper behavior of the radio.
 void RFM97_LoRa::setISRA(gpio_irq_callback_t func) {
-	gpio_set_irq_enabled_with_callback(dio0, GPIO_IRQ_EDGE_RISE, true, func);
+	gpio_set_irq_callback(func);
+	gpio_set_irq_enabled(dio0, GPIO_IRQ_EDGE_RISE, true);
+	gpio_set_irq_enabled(dio3, GPIO_IRQ_EDGE_RISE, true);
+	// gpio_set_irq_enabled_with_callback(dio0, GPIO_IRQ_EDGE_RISE, true, func);
+	irq_set_enabled(IO_IRQ_BANK0, true);
 }
 
 /// @param func ISR function to be called when DMA completes. the ISR MUST call onInterrupt() for proper behavior of the radio.
@@ -591,30 +595,44 @@ void RFM97_LoRa::setOCP(bool enabled, uint8_t trim = 0x0b) {
 // Called by a ISR on DIO0
 // Updates the radio's state machine based on radio IRQs
 void RFM97_LoRa::ISR_A(uint gpio, uint32_t events) {
+	if (gpio == dio3) {
+		ISR_C();
+		return;
+	} else {
+		clearIRQ();
+		// printf("ISR_A\n");
+		switch (state) {
+			case RFM97_RadioState::TX_WAITING:
+				clearIRQ();
+				if (tx_state_go_rx) startReceiving();
+				else {
+					standby();
+					state = RFM97_RadioState::STANDBY;
+				}
+				break;
+				// case RFM97_RadioState::RX_FINISHED:
+			case RFM97_RadioState::RX_WAITING:
+			case RFM97_RadioState::RX_IN_PROGRESS:
+				if (read(SX1276_REG_IRQFLAGS) & (1 << 5)) {
+					clearIRQ();
+					// CRC error!!!
+				} else {
+					clearIRQ();
+					receive();
+				}
+				break;
+			default:
+				return;
+		};
+	}
+}
+
+// Called from ISR a
+void RFM97_LoRa::ISR_C() {
 	clearIRQ();
-	// printf("ISR_A\n");
-	switch (state) {
-		case RFM97_RadioState::TX_WAITING:
-			clearIRQ();
-			if (tx_state_go_rx) startReceiving();
-			else {
-				standby();
-				state = RFM97_RadioState::STANDBY;
-			}
-			break;
-			// case RFM97_RadioState::RX_FINISHED:
-		case RFM97_RadioState::RX_WAITING:
-			if (read(SX1276_REG_IRQFLAGS) & (1 << 5)) {
-				clearIRQ();
-				// CRC error!!!
-			} else {
-				clearIRQ();
-				receive();
-			}
-			break;
-		default:
-			return;
-	};
+	if (state == RFM97_RadioState::RX_WAITING) {
+		state = RFM97_RadioState::RX_IN_PROGRESS;
+	}
 }
 
 void RFM97_LoRa::ISR_B() {
@@ -637,6 +655,7 @@ void RFM97_LoRa::startReceiving() {
 	standby();
 	state = RFM97_RadioState::RX_WAITING;
 	configDIO(0, SX1276_DIO0_RX_DONE);
+	configDIO(3, SX1276_DIO3_VALID_HEADER);
 	setMode(SX1276_MODE_RXCONTINUOUS);
 }
 
