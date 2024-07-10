@@ -19,6 +19,8 @@
 #include "driver/usb_serial_jtag.h"
 #include "pb_decode.h"
 #include "esp_task_wdt.h"
+#include "adxl375.h"
+
 
 #include "max17048.h"
 #include "lps22hh_reg.h"
@@ -50,6 +52,7 @@ MAX17048_t battery_monitor;
 // Radio
 SemaphoreHandle_t radio_mutex; // Used to "hold" the radio during transmit/receive gaps
 sx127x* radio = NULL;
+spi_device_handle_t radio_spi_device;
 
 // Sensors
 stmdev_ctx_t lps22;
@@ -62,6 +65,7 @@ stmdev_ctx_t lsm6dsm;
 spi_device_handle_t lsm6dsm_device;
 
 // TODO: ADXL driver
+adxl375_handle_t adxl;
 spi_device_handle_t adxl_device;
 
 ////////////////// GLOBAL HANDLES //////////////////
@@ -510,6 +514,14 @@ static void init_sensor_spi() {
         .quadhd_io_num = -1,
         .max_transfer_sz = 32,
     };
+
+    gpio_reset_pin(PIN_SCK);
+    gpio_reset_pin(PIN_MOSI);
+    gpio_reset_pin(PIN_MISO);
+
+    // gpio_set_direction(PIN_MISO, GPIO_MODE_INPUT);
+    // gpio_pullup_en(PIN_MISO);
+
     //Initialize the SPI bus
     esp_err_t e = spi_bus_initialize(SENSORS_SPI, &buscfg, SPI_DMA_CH_AUTO);
     ESP_ERROR_CHECK(e);
@@ -519,15 +531,15 @@ static void init_sensor_spi() {
     gpio_reset_pin(PIN_LSM6DSM_CS);
     gpio_reset_pin(PIN_LIS3MDL_CS);
 
-    // gpio_set_direction(PIN_ADXL_CS, GPIO_MODE_OUTPUT);
-    // gpio_set_direction(PIN_LPS_CS, GPIO_MODE_OUTPUT);
-    // gpio_set_direction(PIN_LSM6DSM_CS, GPIO_MODE_OUTPUT);
-    // gpio_set_direction(PIN_LIS3MDL_CS, GPIO_MODE_OUTPUT);
+    gpio_set_direction(PIN_ADXL_CS, GPIO_MODE_OUTPUT);
+    gpio_set_direction(PIN_LPS_CS, GPIO_MODE_OUTPUT);
+    gpio_set_direction(PIN_LSM6DSM_CS, GPIO_MODE_OUTPUT);
+    gpio_set_direction(PIN_LIS3MDL_CS, GPIO_MODE_OUTPUT);
 
-    // gpio_set_level(PIN_ADXL_CS, 1);
-    // gpio_set_level(PIN_LPS_CS, 1);
-    // gpio_set_level(PIN_LSM6DSM_CS, 1);
-    // gpio_set_level(PIN_LIS3MDL_CS, 1);
+    gpio_set_level(PIN_ADXL_CS, 1);
+    gpio_set_level(PIN_LPS_CS, 1);
+    gpio_set_level(PIN_LSM6DSM_CS, 1);
+    gpio_set_level(PIN_LIS3MDL_CS, 1);
 }
 
 static void init_tl_spi() {
@@ -580,12 +592,15 @@ void set_logstate(logging_state_t state, int manual_hz) {
             break;
     }
 
-    ESP_LOGI("LOGGER", "Hz: %d", log_state_hz);
+
+    // ESP_LOGI("LOGGER", "Hz: %d", log_state_hz);
 
     if (log_state_hz == 0) {
+        gpio_set_level(PIN_LED_G, 0);
         if (esp_timer_is_active(logging_timer))
             ESP_ERROR_CHECK(esp_timer_stop(logging_timer));
     } else {
+        gpio_set_level(PIN_LED_G, 1);
         if (esp_timer_is_active(logging_timer)) {
             ESP_ERROR_CHECK(esp_timer_restart(logging_timer, 1000000 / log_state_hz));
         } else {
@@ -737,21 +752,9 @@ void radio_handle_interrupt_task(void* arg) {
     }
 }
 
-// void radio_cad_callback(sx127x* device, int cad_detected) {
-//     if (cad_detected == 0) {
-//         ESP_LOGI("RADIO", "CAD not detected");
-//         ESP_ERROR_CHECK(sx127x_set_opmod(SX127x_MODE_CAD, SX127x_MODULATION_LORA, device));
-//         return;
-//     }
-//     if (xSemaphoreTake(radio_mutex, pdMS_TO_TICKS(500)) != pdTRUE) {
-//         ESP_LOGE("RADIO", "Error acquiring radio lock for receive, receive aborted! (lockup?)");
-//     }
-//     // put into RX mode first to handle interrupt as soon as possible
-//     ESP_ERROR_CHECK(sx127x_set_opmod(SX127x_MODE_RX_CONT, SX127x_MODULATION_LORA, device));
-//     ESP_LOGI("RADIO", "CAD detected\n");
-// }
-
 void radio_rx_callback(sx127x* device, uint8_t* data, uint16_t data_length) {
+    gpio_set_level(PIN_LED_G, 0);
+
     // if (xSemaphoreTake(radio_mutex, pdMS_TO_TICKS(500)) != pdTRUE) {
     //     ESP_LOGE("RADIO", "Error acquiring radio for receive information!");
     // }
@@ -771,11 +774,14 @@ void radio_rx_callback(sx127x* device, uint8_t* data, uint16_t data_length) {
     } else {
         ESP_LOGW("LINK_LoRa", "CRC failed on incoming packet, was (%d), should be (%d)", fmgr_get_cur_frame_crc(&lora_incoming_fmgr), fmgr_calculate_crc(&lora_incoming_fmgr));
     }
+
+    // ESP_ERROR_CHECK(sx127x_set_opmod(SX127x_MODE_CAD, SX127x_MODULATION_LORA, device));
 }
 
 // This can't be called from an ISR... right?
 static void radio_txcomplete_callback(sx127x* device) {
     // ESP_LOGI("LINK_LoRa", "TX Completed.");
+    // ESP_ERROR_CHECK(sx127x_set_opmod(SX127x_MODE_CAD, SX127x_MODULATION_LORA, radio));
     ESP_ERROR_CHECK(sx127x_set_opmod(SX127x_MODE_RX_CONT, SX127x_MODULATION_LORA, radio));
 
     // Signal
@@ -783,6 +789,23 @@ static void radio_txcomplete_callback(sx127x* device) {
     gpio_set_level(PIN_LED_R, 0);
     // xSemaphoreGive(radio_mutex);
 }
+
+// void radio_cad_callback(sx127x* device, int cad_detected) {
+//     if (cad_detected == 0) {
+//         // ESP_LOGI("RADIO", "CAD not detected");
+//         ESP_ERROR_CHECK(sx127x_set_opmod(SX127x_MODE_CAD, SX127x_MODULATION_LORA, device));
+//         return;
+//     }
+
+//     gpio_set_level(PIN_LED_G, 1);
+
+//     // if (xSemaphoreTake(radio_mutex, pdMS_TO_TICKS(500)) != pdTRUE) {
+//     //     ESP_LOGE("RADIO", "Error acquiring radio lock for receive, receive aborted! (lockup?)");
+//     // }
+//     // put into RX mode first to handle interrupt as soon as possible
+//     ESP_ERROR_CHECK(sx127x_set_opmod(SX127x_MODE_RX_CONT, SX127x_MODULATION_LORA, device));
+//     ESP_LOGI("RADIO", "CAD detected\n");
+// }
 
 static void init_radio() {
     lora_txdone_sem = xSemaphoreCreateBinary();
@@ -798,8 +821,7 @@ static void init_radio() {
         .dummy_bits = 0,
         .mode = 0
     };
-    spi_device_handle_t spi_device;
-    ESP_ERROR_CHECK(spi_bus_add_device(TL_SPI, &dev_cfg, &spi_device));
+    ESP_ERROR_CHECK(spi_bus_add_device(TL_SPI, &dev_cfg, &radio_spi_device));
 
     gpio_reset_pin(PIN_RFM_RST);
     gpio_set_direction(PIN_RFM_RST, GPIO_MODE_OUTPUT);
@@ -808,7 +830,7 @@ static void init_radio() {
     gpio_set_level(PIN_RFM_RST, 1);
     vTaskDelay(pdMS_TO_TICKS(10));
 
-    ESP_ERROR_CHECK(sx127x_create(spi_device, &radio));
+    ESP_ERROR_CHECK(sx127x_create(radio_spi_device, &radio));
     ESP_ERROR_CHECK(sx127x_set_opmod(SX127x_MODE_SLEEP, SX127x_MODULATION_LORA, radio));
     ESP_ERROR_CHECK(sx127x_set_frequency(9.14e+8, radio)); // 915MHz
     ESP_ERROR_CHECK(sx127x_lora_reset_fifo(radio));
@@ -825,9 +847,10 @@ static void init_radio() {
     // sx127x_lora_cad_set_callback(radio_cad_callback, radio);
 
     ESP_ERROR_CHECK(sx127x_set_opmod(SX127x_MODE_RX_CONT, SX127x_MODULATION_LORA, radio));
+    // ESP_ERROR_CHECK(sx127x_set_opmod(SX127x_MODE_CAD, SX127x_MODULATION_LORA, radio));
 
 
-    BaseType_t task_code = xTaskCreatePinnedToCore(radio_handle_interrupt_task, "handle interrupt", 8196, radio, 2, &radio_handle_interrupt, xPortGetCoreID());
+    BaseType_t task_code = xTaskCreatePinnedToCore(radio_handle_interrupt_task, "handle interrupt", 8196, radio, 1, &radio_handle_interrupt, xPortGetCoreID());
     if (task_code != pdPASS) {
         ESP_LOGE("RADIO", "Can't create task: %d", task_code);
         sx127x_destroy(radio);
@@ -840,7 +863,6 @@ static void init_radio() {
     gpio_pulldown_en((gpio_num_t)PIN_RFM_D0);
     gpio_pullup_dis((gpio_num_t)PIN_RFM_D0);
     gpio_set_intr_type((gpio_num_t)PIN_RFM_D0, GPIO_INTR_POSEDGE);
-    gpio_install_isr_service(0);
     gpio_isr_handler_add((gpio_num_t)PIN_RFM_D0, radio_handle_interrupt_fromisr, (void*)radio);
 
     ESP_ERROR_CHECK(sx127x_tx_set_pa_config(SX127x_PA_PIN_BOOST, 20, radio));
@@ -867,10 +889,7 @@ static void init_radio() {
 // }
 
 static void radio_tx(uint8_t* data, int len) {
-    // if (xSemaphoreTake(radio_mutex, pdMS_TO_TICKS(500)) != pdTRUE) {
-    //     ESP_LOGE("RADIO", "Error acquiring radio mutex! (lockup?)");
-    //     return;
-    // }
+    // How to not TX while RXing...
     gpio_set_level(PIN_LED_R, 1);
 
     sx127x_tx_header_t header = {
@@ -879,8 +898,10 @@ static void radio_tx(uint8_t* data, int len) {
     ESP_ERROR_CHECK(sx127x_lora_tx_set_explicit_header(&header, radio));
     if (len > 255) {
         ESP_LOGE("RADIO", "Message length overrun!");
+        gpio_set_level(PIN_LED_R, 0);
         return;
     }
+
     ESP_ERROR_CHECK(sx127x_lora_tx_set_for_transmission(data, (uint8_t)len, radio));
     ESP_ERROR_CHECK(sx127x_set_opmod(SX127x_MODE_TX, SX127x_MODULATION_LORA, radio));
 }
@@ -1005,12 +1026,14 @@ static void init_lis3mdl() {
 
     /* Enable Block Data Update */
     lis3mdl_block_data_update_set(&lis3mdl, PROPERTY_ENABLE);
+    // lis3mdl_spi_mode_set(&lis3mdl, LIS3MDL_SPI_4_WIRE)
+
     /* Set Output Data Rate */
-    lis3mdl_data_rate_set(&lis3mdl, LIS3MDL_HP_300Hz);
+    lis3mdl_data_rate_set(&lis3mdl, LIS3MDL_HP_300Hz); // lower noise from HP?
     /* Set full scale */
-    lis3mdl_full_scale_set(&lis3mdl, LIS3MDL_16_GAUSS);
+    lis3mdl_full_scale_set(&lis3mdl, LIS3MDL_4_GAUSS);
     /* Enable temperature sensor */
-    lis3mdl_temperature_meas_set(&lis3mdl, PROPERTY_ENABLE);
+    lis3mdl_temperature_meas_set(&lis3mdl, PROPERTY_DISABLE);
     /* Set device in continuous mode */
     lis3mdl_operating_mode_set(&lis3mdl, LIS3MDL_CONTINUOUS_MODE);
 }
@@ -1059,23 +1082,83 @@ static void init_lsm6dsm() {
     /* Set full scale */
     // TODO: What's best for orientation filter??
     // FIX: Keep this for Low-G stuff, switch over to the ADXL when this accelerometer has been exceeded 
-    lsm6dsm_xl_full_scale_set(&lsm6dsm, LSM6DSM_8g);
+    lsm6dsm_xl_full_scale_set(&lsm6dsm, LSM6DSM_16g);
     lsm6dsm_gy_full_scale_set(&lsm6dsm, LSM6DSM_2000dps);
 
     /* Configure filtering chain(No aux interface)
      * Accelerometer - analog filter
      */
-    lsm6dsm_xl_filter_analog_set(&lsm6dsm, LSM6DSM_XL_ANA_BW_1k5Hz);
-    /* Accelerometer - LPF1 path (LPF2 not used) */
-    //lsm6dsm_xl_lp1_bandwidth_set(&dev_ctx, LSM6DSM_XL_LP1_ODR_DIV_4);
+     // lsm6dsm_xl_filter_analog_set(&lsm6dsm, LSM6DSM_XL_ANA_BW_1k5Hz);
+     /* Accelerometer - LPF1 path (LPF2 not used) */
+    // lsm6dsm_xl_lp1_bandwidth_set(&lsm6dsm, LSM6DSM_XL_LP1_ODR_DIV_2);
     /* Accelerometer - LPF1 + LPF2 path */
-    lsm6dsm_xl_lp2_bandwidth_set(&lsm6dsm,
-        LSM6DSM_XL_LOW_NOISE_LP_ODR_DIV_100);
-    /* Accelerometer - High Pass / Slope path */
-    //lsm6dsm_xl_reference_mode_set(&dev_ctx, PROPERTY_DISABLE);
-    //lsm6dsm_xl_hp_bandwidth_set(&dev_ctx, LSM6DSM_XL_HP_ODR_DIV_100);
-    /* Gyroscope - filtering chain */
-    lsm6dsm_gy_band_pass_set(&lsm6dsm, LSM6DSM_HP_260mHz_LP1_STRONG);
+
+   // NOTE: No LPF!!!
+   // lsm6dsm_xl_lp2_bandwidth_set(&lsm6dsm,
+   //     LSM6DSM_XL_LOW_NOISE_LP_ODR_DIV_9);
+
+   /* Accelerometer - High Pass / Slope path */
+   //lsm6dsm_xl_reference_mode_set(&dev_ctx, PROPERTY_DISABLE);
+   //lsm6dsm_xl_hp_bandwidth_set(&dev_ctx, LSM6DSM_XL_HP_ODR_DIV_100);
+   /* Gyroscope - filtering chain */
+    // lsm6dsm_gy_band_pass_set(&lsm6dsm, LSM6DSM_HP_260mHz_LP1_STRONG);
+    // No gyro bandpass
+}
+
+static IRAM_ATTR void adxl375_isr(void* arg) {
+    // TODO: Integrate with flight phase det
+    // FIXME: Make sure the polling read doesn't clear the interrupt source flags
+}
+
+static void init_adxl375() {
+    spi_device_interface_config_t devcfg = {
+        // TODO: Can this be increased on a per-device basis?
+        .clock_speed_hz = SENSORS_SPI_FREQ,
+        .mode = 3, // CPOL=1, CPHA=1
+        .spics_io_num = PIN_ADXL_CS,
+        .queue_size = 7,
+        .address_bits = 8,
+        .command_bits = 0,
+        .dummy_bits = 0,
+    };
+
+    esp_err_t e = spi_bus_add_device(SENSORS_SPI, &devcfg, &adxl_device);
+    ESP_ERROR_CHECK(e);
+
+    platform_delay(10);
+
+    e = ESP_ERR_NOT_FOUND;
+
+    e = adxl375_init(&adxl, &adxl_device, PIN_ADXL_CS);
+    if (e != ESP_OK) {
+        ESP_LOGE("ADXL", "Error initializing sensor");
+        return;
+    }
+
+    adxl375_set_interrupts_pin2(&adxl, 0); // All interrupts on pin 1
+    adxl375_enable_interrupts(&adxl, ADXL_INT_ACT | ADXL_INT_INACT);
+
+    gpio_reset_pin(PIN_ADXL_INT1);
+    gpio_set_direction(PIN_ADXL_INT1, GPIO_MODE_INPUT);
+
+    gpio_set_intr_type(PIN_ADXL_INT1, GPIO_INTR_POSEDGE);
+    gpio_isr_handler_add(PIN_ADXL_INT1, adxl375_isr, (void*)&adxl);
+
+
+    adxl375_set_autosleep(&adxl, false);
+
+    // TODO: Determine acceptable act threshold for flight phase detection
+    adxl375_set_act_mode(&adxl, false, true, true, true);
+    adxl375_set_thresh_act(&adxl, 100);
+
+    // TODO: Determine acceptable inact threshold for flight phase detection
+    adxl375_set_inact_mode(&adxl, false, true, true, true);
+    adxl375_set_thresh_inact(&adxl, 100);
+
+    // TODO: Nice interrupt handling (need freertos??? nah flight phase det is lightweight... log rate set isn't though)
+
+    adxl375_set_bw_rate(&adxl, ADXL_RATE_200, false);
+    adxl375_set_mode(&adxl, ADXL_POWER_MEASURE);
 }
 
 #define GPS_UART_RX_BUF_SIZE        (1024)
@@ -1239,6 +1322,8 @@ static volatile float magnetic_mG[3];
 static volatile float acceleration_g[3];
 static volatile float angular_rate_dps[3];
 static volatile float temperature_degC;
+static volatile float adxl_acceleration_g[3];
+// TODO: Calibrate all sensors, G-scales, offsets, etc.
 
 
 esp_timer_handle_t sensor_timer;
@@ -1247,7 +1332,8 @@ void sensors_routine(void* arg) {
     static int16_t data_raw_magnetic[3];
     static int16_t data_raw_acceleration[3];
     static int16_t data_raw_angular_rate[3];
-    static int16_t data_raw_temperature;
+    static int16_t data_raw_acceleration_adxl[3]; // TODO: Conversion?? 
+    // static int16_t data_raw_temperature;
 
     ///////////////////////// LPS22 /////////////////////////
     lps22hh_reg_t lps_reg;
@@ -1271,21 +1357,22 @@ void sensors_routine(void* arg) {
         /* Read magnetic field data */
         memset(data_raw_magnetic, 0x00, 3 * sizeof(int16_t));
         lis3mdl_magnetic_raw_get(&lis3mdl, data_raw_magnetic);
-        magnetic_mG[0] = 1000 * lis3mdl_from_fs16_to_gauss(
+        magnetic_mG[0] = 1000 * lis3mdl_from_fs4_to_gauss(
             data_raw_magnetic[0]);
-        magnetic_mG[1] = 1000 * lis3mdl_from_fs16_to_gauss(
+        magnetic_mG[1] = 1000 * lis3mdl_from_fs4_to_gauss(
             data_raw_magnetic[1]);
-        magnetic_mG[2] = 1000 * lis3mdl_from_fs16_to_gauss(
+        magnetic_mG[2] = 1000 * lis3mdl_from_fs4_to_gauss(
             data_raw_magnetic[2]);
 
-        memset(&data_raw_temperature, 0x00, sizeof(int16_t));
-        lis3mdl_temperature_raw_get(&lis3mdl, &data_raw_temperature);
-        temperature_degC = lis3mdl_from_lsb_to_celsius(data_raw_temperature);
+        // memset(&data_raw_temperature, 0x00, sizeof(int16_t));
+        // lis3mdl_temperature_raw_get(&lis3mdl, &data_raw_temperature);
+        // temperature_degC = lis3mdl_from_lsb_to_celsius(data_raw_temperature);
 
         // log_data.lis_mag_raw
         memcpy(log_data.lis_mag_raw, data_raw_magnetic, sizeof(data_raw_magnetic));
         log_data.flags |= LOG_FLAG_MAG_FRESH;
     }
+    lis3mdl_operating_mode_set(&lis3mdl, LIS3MDL_CONTINUOUS_MODE); // THIS FIXES IT!!!
 
     ///////////////////////// LSM6DSM /////////////////////////
     lsm6dsm_reg_t lsm_reg;
@@ -1297,11 +1384,11 @@ void sensors_routine(void* arg) {
         memset(data_raw_acceleration, 0x00, 3 * sizeof(int16_t));
         lsm6dsm_acceleration_raw_get(&lsm6dsm, data_raw_acceleration);
         acceleration_g[0] =
-            lsm6dsm_from_fs8g_to_mg(data_raw_acceleration[0]) * 0.001f;
+            lsm6dsm_from_fs16g_to_mg(data_raw_acceleration[0]) * 0.001f;
         acceleration_g[1] =
-            lsm6dsm_from_fs8g_to_mg(data_raw_acceleration[1]) * 0.001f;
+            lsm6dsm_from_fs16g_to_mg(data_raw_acceleration[1]) * 0.001f;
         acceleration_g[2] =
-            lsm6dsm_from_fs8g_to_mg(data_raw_acceleration[2]) * 0.001f;
+            lsm6dsm_from_fs16g_to_mg(data_raw_acceleration[2]) * 0.001f;
 
         memcpy(log_data.lsm_acc_raw, data_raw_acceleration, sizeof(data_raw_acceleration));
         log_data.flags |= LOG_FLAG_LSM_ACC_FRESH;
@@ -1322,8 +1409,33 @@ void sensors_routine(void* arg) {
         log_data.flags |= LOG_FLAG_LSM_GYR_FRESH;
     }
 
-    // TODO: ADXL! Read 200g accel data
-    // TODO: Fusion orientation filter
+    uint8_t adxl_intsrcs;
+    // TODO: Make sure this can't clear the int source bits that might be received by the ISR
+    adxl375_get_int_source(&adxl, &adxl_intsrcs);
+    if (adxl_intsrcs & ADXL_INT_DRDY) {
+        /* Read angular rate field data */
+        memset(data_raw_acceleration_adxl, 0x00, 3 * sizeof(int16_t));
+        adxl375_get_acceleration_raw(&adxl, data_raw_acceleration_adxl);
+
+        adxl_acceleration_g[0] = (data_raw_acceleration_adxl[0] * 49) * 0.001f;
+        adxl_acceleration_g[1] = (data_raw_acceleration_adxl[1] * 49) * 0.001f;
+        adxl_acceleration_g[2] = (data_raw_acceleration_adxl[2] * 49) * 0.001f;
+
+        memcpy(log_data.adxl_acc_raw, data_raw_acceleration_adxl, sizeof(data_raw_acceleration_adxl));
+        log_data.flags |= LOG_FLAG_ADXL_ACC_FRESH;
+    }
+
+
+
+
+
+    // TODO: Align axes!!!!!! (x,y,z direction convention, z-up antenna direction, x board axis, y out of the board front)
+    // Future have a configuration for mounting direction
+
+
+
+
+    // TODO: Fusion orientation filter & calibration
     // TODO: Kalman altitude filter
 }
 
@@ -1346,7 +1458,13 @@ void debug_output_task(void* arg) {
         ESP_LOGI("DEBUG-LIS3MDL",
             "Magnetic Field [mG]:  %4.2f  %4.2f  %4.2f",
             magnetic_mG[0], magnetic_mG[1], magnetic_mG[2]);
-        ESP_LOGI("DEBUG-LIS3MDL", "Temperature [C]:  %4.2f\n", temperature_degC);
+        // ESP_LOGI("DEBUG-LIS3MDL", "Temperature [C]:  %4.2f\n", temperature_degC);
+#endif
+#if DEBUG_MON_ADXL
+        ESP_LOGI("DEBUG-ADXL",
+            "Acceleration [200g]:  %4.2f  %4.2f  %4.2f",
+            adxl_acceleration_g[0], adxl_acceleration_g[1], adxl_acceleration_g[2]);
+        // ESP_LOGI("DEBUG-LIS3MDL", "Temperature [C]:  %4.2f\n", temperature_degC);
 #endif
     }
 }
@@ -1398,6 +1516,8 @@ static void init_nvs() {
 static bool s_led_state = false;
 
 void app_main(void) {
+    gpio_install_isr_service(0);
+
     fmgr_mutex = xSemaphoreCreateMutex();
 
     fmgr_init(&lora_outgoing_fmgr, 255);
@@ -1425,6 +1545,9 @@ void app_main(void) {
 
     init_battmon();
 
+    ESP_LOGI("SYS", "Initializing ADXL375");
+    init_adxl375();
+
     ESP_LOGI("SYS", "Initializing LSM6DSM");
     init_lsm6dsm();
 
@@ -1433,8 +1556,6 @@ void app_main(void) {
 
     ESP_LOGI("SYS", "Initializing LPS22");
     init_lps22();
-
-    // TODO: ADXL375
 
     init_gps();
 
@@ -1467,7 +1588,7 @@ void app_main(void) {
     while (1) {
         /* Toggle the LED state */
         s_led_state = !s_led_state;
-        gpio_set_level(PIN_LED_G, s_led_state);
+        // gpio_set_level(PIN_LED_G, s_led_state);
         // gpio_set_level(PIN_LED_R, !s_led_state);
         vTaskDelay(pdMS_TO_TICKS(500));
     }

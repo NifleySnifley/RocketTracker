@@ -370,19 +370,27 @@ def monitor(args):
 def ping(args):
     init_cli(args)
 
-    print("Pinged")
+    n = 1
+    if (args.repeat):
+        n = 100
 
-    d = Datum(protocol.CMD_Ping)
-    d.load_protobuf(protocol.Command_Ping(link=protocol.USBSerial))
+    for i in range(n):
+        if i > 0:
+            time.sleep(0.666)
 
-    tx_queue.put(d)
+        d = Datum(protocol.CMD_Ping)
+        d.load_protobuf(protocol.Command_Ping(link=protocol.USBSerial))
 
-    pong = wait_for_datum([protocol.RESP_Ping], 1.5)
-    if (pong is None):
-        print("Error: timed out")
-    else:
-        print(
-            f"Got pong! connected over link type '{protocol.LinkID.DESCRIPTOR.values_by_number[pong.to_protobuf().link].name}'")
+        tx_queue.put(d)
+        print("Pinged")
+
+        if i == 0:
+            pong = wait_for_datum([protocol.RESP_Ping], 1.5)
+            if (pong is None):
+                print("Error: timed out")
+            else:
+                print(
+                    f"Got pong! connected over link type '{protocol.LinkID.DESCRIPTOR.values_by_number[pong.to_protobuf().link].name}'")
 
 
 def receiver_config(args):
@@ -452,6 +460,8 @@ parser_monitor.set_defaults(func=monitor)
 
 parser_ping = subparsers.add_parser('ping')
 parser_ping.set_defaults(func=ping)
+parser_ping.add_argument('-r', '--repeat', action='store_true')
+
 
 # TODO: Add proper help/usage for __ALL__ commands and subcommands!!!
 parser_log = subparsers.add_parser('log')

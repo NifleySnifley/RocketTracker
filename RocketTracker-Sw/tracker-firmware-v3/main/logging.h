@@ -57,7 +57,7 @@ typedef struct log_data_t {
     int16_t lis_mag_raw[3];
     int16_t lsm_acc_raw[3];
     int16_t lsm_gyr_raw[3];
-    float adxl_acc_raw[3]; // TYPE TBD!!!
+    int16_t adxl_acc_raw[3]; // TYPE TBD!!!
     // Processed data
     float orientation_quat[4];
     float filtered_altitude_m;

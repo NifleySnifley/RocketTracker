@@ -45,7 +45,12 @@
         "usb_serial_jtag.h": "c",
         "random": "c",
         "limits": "c",
-        "chrono": "c"
+        "chrono": "c",
+        "adxl375.h": "c",
+        "lps22hh_reg.h": "c",
+        "numbers": "c",
+        "spi_master.h": "c",
+        "sx127x_spi.h": "c"
     },
     "editor.tabSize": 4,
     "editor.insertSpaces": true,
