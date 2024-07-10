@@ -88,6 +88,8 @@ esp_timer_handle_t logging_timer;
 #define LOGDL_NOTIFY_ACK 0x02 // TODO: Use this to receive a acknowledgement for each segment in the future
 static TaskHandle_t log_download_task_handle;
 
+static SemaphoreHandle_t hold_tx_sem;
+
 nvs_handle_t nvs_config_handle;
 
 static TaskHandle_t telemetry_task;
@@ -150,28 +152,33 @@ void link_decode_datum(int i, DatumTypeID id, int len, uint8_t* data, bool is_us
         resp.has_error = false;
 
         if (pb_decode(&istream, Command_EraseLog_fields, &cmd)) {
-            if (cmd.type == EraseType_Erase_Log) {
-                ESP_LOGI("LINK", "Erasing log as commanded.");
-                esp_err_t e = logger_erase_log(&logger);
-                if (e != ESP_OK) {
-                    ESP_LOGE("LINK", "Error %s erasing log!", esp_err_to_name(e));
-                    resp.has_error = true;
+            if (xSemaphoreTake(hold_tx_sem, pdMS_TO_TICKS(1000)) == pdTRUE) {
+                if (cmd.type == EraseType_Erase_Log) {
+                    ESP_LOGI("LINK", "Erasing log as commanded.");
+                    esp_err_t e = logger_erase_log(&logger);
+                    if (e != ESP_OK) {
+                        ESP_LOGE("LINK", "Error %s erasing log!", esp_err_to_name(e));
+                        resp.has_error = true;
+                    }
+                    ESP_LOGI("LINK", "Logger erase done");
+                    resp.error = e;
+                    link_send_datum(DatumTypeID_RESP_EraseLog, Resp_BasicError_fields, &resp);
                 }
-                ESP_LOGI("LINK", "Logger erase done");
-                resp.error = e;
-                link_send_datum(DatumTypeID_RESP_EraseLog, Resp_BasicError_fields, &resp);
-            }
 
-            if (cmd.type == EraseType_Erase_Clean) {
-                ESP_LOGI("LINK", "Cleaning log as commanded.");
-                esp_err_t e = logger_clean_log(&logger);
-                if (e != ESP_OK) {
-                    ESP_LOGE("LINK", "Error %s cleaning log!", esp_err_to_name(e));
-                    resp.has_error = true;
+                if (cmd.type == EraseType_Erase_Clean) {
+                    ESP_LOGI("LINK", "Cleaning log as commanded.");
+                    esp_err_t e = logger_clean_log(&logger);
+                    if (e != ESP_OK) {
+                        ESP_LOGE("LINK", "Error %s cleaning log!", esp_err_to_name(e));
+                        resp.has_error = true;
+                    }
+                    ESP_LOGI("LINK", "Logger clean done");
+                    resp.error = e;
+                    link_send_datum(DatumTypeID_RESP_EraseLog, Resp_BasicError_fields, &resp);
                 }
-                ESP_LOGI("LINK", "Logger clean done");
-                resp.error = e;
-                link_send_datum(DatumTypeID_RESP_EraseLog, Resp_BasicError_fields, &resp);
+                xSemaphoreGive(hold_tx_sem);
+            } else {
+                ESP_LOGE("LINK", "Error stopping TX for erase/clean");
             }
         } else {
             ESP_LOGW("LINK", "Failed to parse Command_EraseLog");
@@ -759,6 +766,13 @@ void radio_rx_callback(sx127x* device, uint8_t* data, uint16_t data_length) {
     //     ESP_LOGE("RADIO", "Error acquiring radio for receive information!");
     // }
 
+    if (xSemaphoreTake(hold_tx_sem, 0) != pdTRUE) {
+        ESP_LOGE("RADIO", "Aborted Rx because bus is held.");
+        return;
+    } else {
+        xSemaphoreGive(hold_tx_sem);
+    }
+
     int16_t rssi;
     ESP_ERROR_CHECK(sx127x_rx_get_packet_rssi(device, &rssi));
     float snr;
@@ -889,21 +903,26 @@ static void init_radio() {
 // }
 
 static void radio_tx(uint8_t* data, int len) {
-    // How to not TX while RXing...
-    gpio_set_level(PIN_LED_R, 1);
+    if (xSemaphoreTake(hold_tx_sem, pdMS_TO_TICKS(500)) == pdTRUE) {
+        // How to not TX while RXing...
+        gpio_set_level(PIN_LED_R, 1);
 
-    sx127x_tx_header_t header = {
-       .enable_crc = true,
-       .coding_rate = SX127x_CR_4_5 };
-    ESP_ERROR_CHECK(sx127x_lora_tx_set_explicit_header(&header, radio));
-    if (len > 255) {
-        ESP_LOGE("RADIO", "Message length overrun!");
-        gpio_set_level(PIN_LED_R, 0);
-        return;
+        sx127x_tx_header_t header = {
+           .enable_crc = true,
+           .coding_rate = SX127x_CR_4_5 };
+        ESP_ERROR_CHECK(sx127x_lora_tx_set_explicit_header(&header, radio));
+        if (len > 255) {
+            ESP_LOGE("RADIO", "Message length overrun!");
+            gpio_set_level(PIN_LED_R, 0);
+            return;
+        }
+
+        ESP_ERROR_CHECK(sx127x_lora_tx_set_for_transmission(data, (uint8_t)len, radio));
+        ESP_ERROR_CHECK(sx127x_set_opmod(SX127x_MODE_TX, SX127x_MODULATION_LORA, radio));
+        xSemaphoreGive(hold_tx_sem);
+    } else {
+        ESP_LOGE("RADIO", "Held too long, Tx failed.");
     }
-
-    ESP_ERROR_CHECK(sx127x_lora_tx_set_for_transmission(data, (uint8_t)len, radio));
-    ESP_ERROR_CHECK(sx127x_set_opmod(SX127x_MODE_TX, SX127x_MODULATION_LORA, radio));
 }
 
 static int32_t sensor_platform_write(void* handle, uint8_t Reg, const uint8_t* Bufp, uint16_t len) {
@@ -1519,6 +1538,7 @@ void app_main(void) {
     gpio_install_isr_service(0);
 
     fmgr_mutex = xSemaphoreCreateMutex();
+    hold_tx_sem = xSemaphoreCreateMutex();
 
     fmgr_init(&lora_outgoing_fmgr, 255);
     fmgr_init(&lora_incoming_fmgr, 255);
