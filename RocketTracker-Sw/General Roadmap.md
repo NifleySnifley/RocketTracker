@@ -1,6 +1,8 @@
 ## Fixes:
 
-- [ ] Identify where there are critical regions in the code and mark them accordingly, if neccesary
+- [ ] Identify where there are critical regions in the code and mark them accordingly, if neccesary!!!!!
+- [ ] Make a way to turn off telemetry for stuff like log download & log deletion, like a flag or something for "telemetry hold"
+- [ ] Investigate places where there could be race conditions, etc.
 
 ## Improvements:
 
@@ -17,6 +19,10 @@
 - [x] Flight phase detection & autologging
   
   - [ ] Landed detection
+
+- [ ] **Live altitude**
+
+- [ ] **Live autolog status updates!**
 
 - [ ] Configuration parameters, unified set, get, list, etc. interface
   

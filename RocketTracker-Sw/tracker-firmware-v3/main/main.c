@@ -94,11 +94,12 @@ static TaskHandle_t log_download_task_handle;
 esp_timer_handle_t flight_timer;
 esp_timer_handle_t log_led_timer;
 
-static SemaphoreHandle_t hold_tx_sem;
+static SemaphoreHandle_t tl_spi_hold_sem;
 
 nvs_handle_t nvs_config_handle;
 
 static TaskHandle_t telemetry_task;
+static bool telemetry_enable = true;
 
 //////////////// PREDEFS
 void link_send_datum(DatumTypeID type, const pb_msgdesc_t* fields, const void* src_struct);
@@ -110,6 +111,7 @@ void link_flush();
 static void flight_timer_callback(void* arg);
 void start_autolog();
 void stop_autolog();
+// static void radio_tx_blocking(uint8_t* data, int len);
 
 // USB
 static bool usb_active = false;
@@ -184,11 +186,13 @@ void link_decode_datum(int i, DatumTypeID id, int len, uint8_t* data, bool is_us
         resp.has_error = false;
 
         if (pb_decode(&istream, Command_EraseLog_fields, &cmd)) {
-            if (xSemaphoreTake(hold_tx_sem, pdMS_TO_TICKS(1000)) == pdTRUE) {
+            if (xSemaphoreTake(tl_spi_hold_sem, pdMS_TO_TICKS(1000)) == pdTRUE) {
+                telemetry_enable = false;
                 set_logstate(LOGSTATE_LOGGING_STOPPED, 0);
                 if (cmd.type == EraseType_Erase_Log) {
                     ESP_LOGI("LINK", "Erasing log as commanded.");
                     esp_err_t e = logger_erase_log(&logger);
+                    e |= logger_flush(&logger);
                     if (e != ESP_OK) {
                         ESP_LOGE("LINK", "Error %s erasing log!", esp_err_to_name(e));
                         resp.has_error = true;
@@ -201,6 +205,7 @@ void link_decode_datum(int i, DatumTypeID id, int len, uint8_t* data, bool is_us
                 if (cmd.type == EraseType_Erase_Clean) {
                     ESP_LOGI("LINK", "Cleaning log as commanded.");
                     esp_err_t e = logger_clean_log(&logger);
+                    e |= logger_flush(&logger);
                     if (e != ESP_OK) {
                         ESP_LOGE("LINK", "Error %s cleaning log!", esp_err_to_name(e));
                         resp.has_error = true;
@@ -208,10 +213,10 @@ void link_decode_datum(int i, DatumTypeID id, int len, uint8_t* data, bool is_us
                     ESP_LOGI("LINK", "Logger clean done");
                     resp.error = e;
                     link_send_datum(DatumTypeID_RESP_EraseLog, Resp_BasicError_fields, &resp);
-                    // link_flush();
                 }
-                xSemaphoreGive(hold_tx_sem);
+                xSemaphoreGive(tl_spi_hold_sem);
                 link_flush();
+                telemetry_enable = true;
             } else {
                 ESP_LOGE("LINK", "Error stopping TX for erase/clean");
             }
@@ -226,6 +231,7 @@ void link_decode_datum(int i, DatumTypeID id, int len, uint8_t* data, bool is_us
             // Link info is unneccesary
             resp.link = is_usb ? LinkID_USBSerial : LinkID_LoRa;
             link_send_datum(DatumTypeID_RESP_Ping, Resp_Ping_fields, &resp);
+            link_flush();
         }
     } else if (id == DatumTypeID_CMD_ConfigureLogging) {
         Command_ConfigureLogging cmd;
@@ -256,6 +262,7 @@ void link_decode_datum(int i, DatumTypeID id, int len, uint8_t* data, bool is_us
 
             // Link info is unneccesary
             link_send_datum(DatumTypeID_RESP_ConfigureLogging, Resp_BasicError_fields, &resp);
+            link_flush();
         }
         link_flush();
     } else if (id == DatumTypeID_CMD_LogStatus) {
@@ -306,16 +313,21 @@ void link_usb_decode_datum(int i, DatumTypeID id, int len, uint8_t* data) {
     link_decode_datum(i, id, len, data, true);
 }
 
+uint8_t tx_buffer[256];
 void lora_link_flush() {
     int size, ndatum;
+    xSemaphoreTakeRecursive(fmgr_mutex, portMAX_DELAY);
+
     ndatum = fmgr_get_n_datum_encoded(&lora_outgoing_fmgr);
 
     fmgr_set_frame_id(&lora_outgoing_fmgr, TalkerID_Tracker_V3);
     uint8_t* data = fmgr_get_frame(&lora_outgoing_fmgr, &size);
-    // ESP_LOGI("LINK_LoRa", "Starting TX: %d datum. %d bytes.", ndatum, size);
-
-    radio_tx(data, size);
+    memcpy(tx_buffer, data, size);
     fmgr_reset(&lora_outgoing_fmgr);
+    ESP_LOGI("LINK_LoRa", "Starting TX: %d datum. %d bytes.", ndatum, size);
+    xSemaphoreGiveRecursive(fmgr_mutex);
+
+    radio_tx(tx_buffer, size);
 }
 
 static void usb_receive_task(void* args) {
@@ -422,13 +434,17 @@ void link_flush() {
      // printf("Flush eeeeEeEEE!\n");
      // const char* msg = "Flush eeeeEeEEE!\n";
      // usb_serial_jtag_write_bytes(msg, strlen(msg), portMAX_DELAY);
+    xSemaphoreTakeRecursive(fmgr_mutex, portMAX_DELAY);
     int n_lora_datum = fmgr_get_n_datum_encoded(&lora_outgoing_fmgr);
     int n_usb_datum = fmgr_get_n_datum_encoded(&usb_outgoing_fmgr);
+    xSemaphoreGiveRecursive(fmgr_mutex);
+
     int size;
 
     // Use USB active!
     if (USB_AVAILABLE) {
         // ESP_LOGI("LINK_USB", "Sending datum (%d USB, %d LoRa)", n_usb_datum, n_lora_datum);
+        xSemaphoreTakeRecursive(fmgr_mutex, portMAX_DELAY);
 
         if (n_lora_datum > 0) {
             fmgr_set_frame_id(&lora_outgoing_fmgr, TalkerID_Tracker_V3);
@@ -449,6 +465,8 @@ void link_flush() {
             }
             fmgr_reset(&usb_outgoing_fmgr);
         }
+
+        xSemaphoreGiveRecursive(fmgr_mutex);
     } else {
         if (n_lora_datum > 0) {
             lora_link_flush();
@@ -457,8 +475,9 @@ void link_flush() {
 }
 
 void link_send_datum(DatumTypeID type, const pb_msgdesc_t* fields, const void* src_struct) {
-    xSemaphoreTake(fmgr_mutex, portMAX_DELAY);
+    xSemaphoreTakeRecursive(fmgr_mutex, portMAX_DELAY);
     // DONE: Switch between USB and LoRa accordingly
+    ESP_LOGI("LINK", "Sending datum %d", (int)type);
 
     if (USB_AVAILABLE) {
         // Send with USB link
@@ -476,6 +495,7 @@ void link_send_datum(DatumTypeID type, const pb_msgdesc_t* fields, const void* s
                 }
             }
         }
+
         // This is USB, make it fast!
         link_flush();
 
@@ -489,7 +509,7 @@ void link_send_datum(DatumTypeID type, const pb_msgdesc_t* fields, const void* s
             lora_link_flush();
 
             // Wait for TX done!
-            xSemaphoreTake(lora_txdone_sem, portMAX_DELAY);
+            // xSemaphoreTake(lora_txdone_sem, portMAX_DELAY);
 
             if (!fmgr_encode_datum(&lora_outgoing_fmgr, type, fields, src_struct)) {
                 while (1) {
@@ -500,7 +520,7 @@ void link_send_datum(DatumTypeID type, const pb_msgdesc_t* fields, const void* s
         }
     }
 
-    xSemaphoreGive(fmgr_mutex);
+    xSemaphoreGiveRecursive(fmgr_mutex);
 }
 
 static bool usb_write_byte(uint8_t b, TickType_t wait) {
@@ -728,6 +748,7 @@ static void log_download_task(void* arg) {
         uint32_t not_val;
         xTaskNotifyWait(0, 0, &not_val, portMAX_DELAY);
         if (not_val == LOGDL_NOTIFY_START) {
+            telemetry_enable = false;
             size_t current_address = logger.log_start_address;
 
             uint16_t total_crc = 0;
@@ -793,6 +814,7 @@ static void log_download_task(void* arg) {
             ESP_LOGI("LOGGER", "Log download completed! %d segments sent, error code: %s, full crc xor: %d", n_segments, esp_err_to_name(e), total_crc);
             link_send_datum(DatumTypeID_ACK_Download_Complete, Acknowledgement_Download_Complete_fields, &ack);
             link_flush();
+            telemetry_enable = true;
 
         } else {
             continue;
@@ -819,35 +841,34 @@ void radio_rx_callback(sx127x* device, uint8_t* data, uint16_t data_length) {
     //     ESP_LOGE("RADIO", "Error acquiring radio for receive information!");
     // }
 
-    if (xSemaphoreTake(hold_tx_sem, 0) != pdTRUE) {
+    if (xSemaphoreTake(tl_spi_hold_sem, 1000) != pdTRUE) {
         ESP_LOGE("RADIO", "Aborted Rx because bus is held.");
         return;
     } else {
-        xSemaphoreGive(hold_tx_sem);
+        int16_t rssi;
+        ESP_ERROR_CHECK(sx127x_rx_get_packet_rssi(device, &rssi));
+        float snr;
+        ESP_ERROR_CHECK(sx127x_lora_rx_get_packet_snr(device, &snr));
+        // int32_t frequency_error;
+        // ESP_ERROR_CHECK(sx127x_rx_get_frequency_error(device, &frequency_error));
+
+        // xSemaphoreGive(radio_mutex);
+        xSemaphoreGive(tl_spi_hold_sem);
+
+        fmgr_load_frame(&lora_incoming_fmgr, data, data_length);
+        if (fmgr_check_crc(&lora_incoming_fmgr)) {
+            fmgr_decode_frame(&lora_incoming_fmgr, link_lora_decode_datum);
+        } else {
+            ESP_LOGW("LINK_LoRa", "CRC failed on incoming packet, was (%d), should be (%d)", fmgr_get_cur_frame_crc(&lora_incoming_fmgr), fmgr_calculate_crc(&lora_incoming_fmgr));
+        }
+
+        // ESP_ERROR_CHECK(sx127x_set_opmod(SX127x_MODE_CAD, SX127x_MODULATION_LORA, device));
     }
-
-    int16_t rssi;
-    ESP_ERROR_CHECK(sx127x_rx_get_packet_rssi(device, &rssi));
-    float snr;
-    ESP_ERROR_CHECK(sx127x_lora_rx_get_packet_snr(device, &snr));
-    // int32_t frequency_error;
-    // ESP_ERROR_CHECK(sx127x_rx_get_frequency_error(device, &frequency_error));
-
-    // xSemaphoreGive(radio_mutex);
-
-    fmgr_load_frame(&lora_incoming_fmgr, data, data_length);
-    if (fmgr_check_crc(&lora_incoming_fmgr)) {
-        fmgr_decode_frame(&lora_incoming_fmgr, link_lora_decode_datum);
-    } else {
-        ESP_LOGW("LINK_LoRa", "CRC failed on incoming packet, was (%d), should be (%d)", fmgr_get_cur_frame_crc(&lora_incoming_fmgr), fmgr_calculate_crc(&lora_incoming_fmgr));
-    }
-
-    // ESP_ERROR_CHECK(sx127x_set_opmod(SX127x_MODE_CAD, SX127x_MODULATION_LORA, device));
 }
 
 // This can't be called from an ISR... right?
 static void radio_txcomplete_callback(sx127x* device) {
-    // ESP_LOGI("LINK_LoRa", "TX Completed.");
+    ESP_LOGI("LINK_LoRa", "TX Completed.");
     // ESP_ERROR_CHECK(sx127x_set_opmod(SX127x_MODE_CAD, SX127x_MODULATION_LORA, radio));
     ESP_ERROR_CHECK(sx127x_set_opmod(SX127x_MODE_RX_CONT, SX127x_MODULATION_LORA, radio));
 
@@ -876,6 +897,7 @@ static void radio_txcomplete_callback(sx127x* device) {
 
 static void init_radio() {
     lora_txdone_sem = xSemaphoreCreateBinary();
+    xSemaphoreGive(lora_txdone_sem);
     // radio_mutex = xSemaphoreCreateBinary();
     // xSemaphoreGive(radio_mutex);
 
@@ -956,8 +978,10 @@ static void init_radio() {
 // }
 
 static void radio_tx(uint8_t* data, int len) {
-    if (xSemaphoreTake(hold_tx_sem, pdMS_TO_TICKS(500)) == pdTRUE) {
+    if (xSemaphoreTake(tl_spi_hold_sem, pdMS_TO_TICKS(5)) == pdTRUE) {
         // How to not TX while RXing...
+        xSemaphoreTake(lora_txdone_sem, portMAX_DELAY);
+
         gpio_set_level(PIN_LED_R, 1);
 
         sx127x_tx_header_t header = {
@@ -967,16 +991,25 @@ static void radio_tx(uint8_t* data, int len) {
         if (len > 255) {
             ESP_LOGE("RADIO", "Message length overrun!");
             gpio_set_level(PIN_LED_R, 0);
+            xSemaphoreGive(tl_spi_hold_sem);
             return;
         }
 
+
+        ESP_LOGI("RADIO", "Actually TXing");
+
         ESP_ERROR_CHECK(sx127x_lora_tx_set_for_transmission(data, (uint8_t)len, radio));
         ESP_ERROR_CHECK(sx127x_set_opmod(SX127x_MODE_TX, SX127x_MODULATION_LORA, radio));
-        xSemaphoreGive(hold_tx_sem);
+        xSemaphoreGive(tl_spi_hold_sem);
     } else {
         ESP_LOGE("RADIO", "Held too long, Tx failed.");
     }
 }
+
+// static void radio_tx_blocking(uint8_t* data, int len) {
+//     radio_tx(data, len);
+//     xSemaphoreTake(lora_txdone_sem, portMAX_DELAY);
+// }
 
 static int32_t sensor_platform_write(void* handle, uint8_t Reg, const uint8_t* Bufp, uint16_t len) {
     spi_device_handle_t* dev = (spi_device_handle_t*)handle;
@@ -1437,7 +1470,8 @@ static void battmon_task(void* arg) {
                 datum.battery_voltage = vbatt;
                 datum.percentage = soc;
 
-                link_send_datum(DatumTypeID_INFO_Battery, Battery_fields, &datum);
+                if (telemetry_enable)
+                    link_send_datum(DatumTypeID_INFO_Battery, Battery_fields, &datum);
             }
             vTaskDelay(battmon_delay_ticks);
         }
@@ -1597,15 +1631,16 @@ void debug_output_task(void* arg) {
         // ESP_LOGI("DEBUG-LIS3MDL", "Temperature [C]:  %4.2f\n", temperature_degC);
 #endif
     }
-    }
+}
 
 static void telemetry_tx_task(void* arg) {
     while (1) {
         BaseType_t res = xTaskNotifyWait(0, 0, NULL, portMAX_DELAY);
-
-        // Flush link every 1 second
-        link_send_datum(DatumTypeID_INFO_GPS, GPS_fields, &current_gps);
-        link_flush();
+        if (telemetry_enable) {
+            // Flush link every 1 second
+            link_send_datum(DatumTypeID_INFO_GPS, GPS_fields, &current_gps);
+            link_flush();
+        }
     }
 }
 
@@ -1618,10 +1653,12 @@ static void once_per_second() {
     if ((seconds % 5) == 0 && (log_state_hz != 0)) {
         ESP_LOGI("LOGGER", "Flushing NVS");
         logger_flush(&logger);
-        // TODO: logger alerts!
-        LogStatus stat;
-        get_logstatus(&stat);
-        link_send_datum(DatumTypeID_INFO_LogStatus, LogStatus_fields, &stat);
+
+        if (telemetry_enable) {
+            LogStatus stat;
+            get_logstatus(&stat);
+            link_send_datum(DatumTypeID_INFO_LogStatus, LogStatus_fields, &stat);
+        }
     }
 
     seconds += 1;
@@ -1648,8 +1685,8 @@ static bool s_led_state = false;
 void app_main(void) {
     gpio_install_isr_service(0);
 
-    fmgr_mutex = xSemaphoreCreateMutex();
-    hold_tx_sem = xSemaphoreCreateMutex();
+    fmgr_mutex = xSemaphoreCreateRecursiveMutex();
+    tl_spi_hold_sem = xSemaphoreCreateMutex();
     sensors_mutex = xSemaphoreCreateMutex();
 
     fmgr_init(&lora_outgoing_fmgr, 255);
