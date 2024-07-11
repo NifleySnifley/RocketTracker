@@ -721,6 +721,7 @@ bool RFM97_LoRa::applyConfig(RFM97_LoRa_config cfg) {
 
 void RFM97_LoRa::wait_for_safe_state() {
 	while (!(state == RFM97_RadioState::RX_WAITING || state == RFM97_RadioState::STANDBY)) {
-		__wfe();
+		// __wfe();
+		sleep_ms(5);
 	};
 }
