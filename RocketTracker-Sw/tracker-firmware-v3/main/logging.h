@@ -68,7 +68,6 @@ typedef struct log_data_t {
     uint8_t flags;
 } log_data_t;
 
-// TODO: Implement COBS for log data aswell
 // Instead of 0 being the delimiter, make 0xFF the delimiter!!
 // That way, whenever 0xFF is seen, it is known that that 0xFF marks the start of clean erased flash memory
 // As a result, NVS only needs to be written once per second or so, and then a simple search can be done to find the logical end of the log!
@@ -79,14 +78,12 @@ esp_err_t logger_init(logger_t* logger, esp_flash_t* flash);
 // 3.75 <- DONE
 esp_err_t logger_refresh(logger_t* logger);
 
-// TODO:
 // LATER (handle ring buffer/wrapping)
 esp_err_t logger_log_data_now(logger_t* logger, uint8_t* data, size_t data_length);
 
 // DONE
 esp_err_t logger_flush(logger_t* logger);
 
-// TODO:
 // LATER
 // Pass starting state of first address through state
 // Leave the log in COBS format! that way log data delimiters are saved

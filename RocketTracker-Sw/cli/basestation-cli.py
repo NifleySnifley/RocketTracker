@@ -12,6 +12,8 @@ import lib.proto.protocol_pb2 as protocol
 from threading import Thread
 from distutils.util import strtobool
 import pickle
+import json
+
 
 serialport: Serial | None = None
 rx_queue: Queue[Datum] = Queue()
@@ -154,7 +156,7 @@ def log_stop(args):
 def log_start(args):
     init_cli(args)
 
-    print("Starting Logging")
+    print("Starting logging")
     command = protocol.Command_ConfigureLogging(
         setting=protocol.ManualHz, parameter=args.hz)
 
@@ -173,11 +175,33 @@ def log_start(args):
         print(f"Successfully started logging at {args.hz}Hz")
 
 
+def log_arm(args):
+    init_cli(args)
+
+    print("Arming automatic logging")
+    command = protocol.Command_ConfigureLogging(
+        setting=protocol.Armed)
+
+    d = Datum(protocol.CMD_ConfigureLogging)
+    d.load_protobuf(command)
+
+    tx_queue.put(d)
+
+    resp = wait_for_datum([protocol.RESP_ConfigureLogging], 5.0)
+    # print(resp)
+    if (resp is None):
+        print("Error: timed out")
+    elif ("error" in resp.to_dict()):
+        print(f"Error arming automatic logging: {resp.to_dict()['error']}")
+    else:
+        print(f"Successfully armed logging")
+
+
 def log_delete(args):
     init_cli(args)
 
     confirm = strtobool(
-        input("Are you sure you want to erase the current log? all data will be lost\n[y/n]:"))
+        input("Are you sure you want to erase the current log? all data will be lost\nThis may take a while\n[y/n]:"))
     if (confirm):
         command = protocol.Command_EraseLog(type=protocol.Erase_Log)
 
@@ -186,7 +210,7 @@ def log_delete(args):
 
         tx_queue.put(d)
 
-        resp = wait_for_datum([protocol.RESP_EraseLog], 5.0)
+        resp = wait_for_datum([protocol.RESP_EraseLog], 400.0)
         # print(resp)
         if (resp is None):
             print("Error: timed out")
@@ -366,6 +390,10 @@ def monitor(args):
         d = wait_for_datum(None, 1.5)
         if d is not None:
             print(d)
+            # if (args.log)
+            # args.log.writelines([f"{d.to_dict()}"])
+
+    args.log.close()
 
 
 def ping(args):
@@ -457,12 +485,13 @@ parser_rxconfig.add_argument(
     '-p', '--power', type=int, choices=[3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 20])
 
 parser_monitor = subparsers.add_parser('monitor')
+parser_monitor.add_argument(
+    '-l', '--log', type=argparse.FileType('w'))
 parser_monitor.set_defaults(func=monitor)
 
 parser_ping = subparsers.add_parser('ping')
 parser_ping.set_defaults(func=ping)
 parser_ping.add_argument('-r', '--repeat', action='store_true')
-
 
 # TODO: Add proper help/usage for __ALL__ commands and subcommands!!!
 parser_log = subparsers.add_parser('log')
@@ -478,7 +507,11 @@ parser_log_mark.add_argument('data', nargs='?', default='DEADBEEF')
 
 parser_log_start = log_subparsers.add_parser('start')
 parser_log_start.set_defaults(func=log_start)
-parser_log_start.add_argument("hz", type=argparse_restricted_int(0, 200))
+parser_log_start.add_argument(
+    "hz", type=argparse_restricted_int(0, 200))
+
+parser_log_arm = log_subparsers.add_parser('arm')
+parser_log_arm.set_defaults(func=log_arm)
 
 parser_log_delete = log_subparsers.add_parser('delete')
 parser_log_delete.set_defaults(func=log_delete)
@@ -492,9 +525,12 @@ parser_log_status.set_defaults(func=log_status)
 parser_log_download = log_subparsers.add_parser('download')
 parser_log_download.add_argument(
     '-o', '--outfile', required=True, type=argparse.FileType('wb'))
-parser_log_download.add_argument(
-    '-f', '--format', required=True, type=str, choices=['rlog', 'csv', 'json'])
+# TODO: Log parsing and output formats!
+# parser_log_download.add_argument(
+# '-f', '--format', required=True, type=str, choices=['rlog', 'csv', 'json'])
 parser_log_download.set_defaults(func=log_download)
+
+# TODO: Monitor (receiver) logging
 
 opts = parser.parse_args()
 opts.func(opts)

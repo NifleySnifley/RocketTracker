@@ -216,7 +216,7 @@ esp_err_t logger_log_data_now(logger_t* logger, uint8_t* data, size_t data_lengt
     int64_t timestamp = util_time_us();
     uint8_t* ts_bytes = (uint8_t*)(&timestamp);
 
-    // TODO: Detect log full/unable to write!
+    // DONE: Detect log full/unable to write!
 
     // Encode timestamp
     for (int i = 0; i < sizeof(timestamp); ++i) {
@@ -257,7 +257,7 @@ esp_err_t logger_log_data_now(logger_t* logger, uint8_t* data, size_t data_lengt
     // Frame spacer!
     log_cobs_buf[buf_idx++] = 0xFF;
 
-    // TODO: Write to flash "ring buffer"
+    // DONE: Write to flash "ring buffer"
     size_t write_len = buf_idx;
 
     size_t end_ptr = (logger->log_end_address + write_len + 1) % LOG_MEMORY_SIZE_B;
