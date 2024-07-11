@@ -4,10 +4,6 @@ from google.protobuf import message
 MTMAP = {
     CMD_Ping: "CMD_Ping",
     RESP_Ping: "RESP_Ping",
-    CMD_StartLog: "CMD_StartLog",
-    RESP_StartLog: "RESP_StartLog",
-    CMD_StopLog: "CMD_StopLog",
-    RESP_StopLog: "RESP_StopLog",
     STATUS_RadioRxStatus: "RX_RadioStatus",
     INFO_Alert: "INFO_Alert",
     INFO_Altitude: "INFO_Altitude",
@@ -39,7 +35,7 @@ MTID_TO_TYPE = {
     msgtype_str(INFO_Altitude): Altitude,
     msgtype_str(INFO_Battery): Battery,
     msgtype_str(INFO_Orientation): Orientation,
-    msgtype_str(INFO_Raw): Raw,
+    msgtype_str(INFO_Raw): None,
     msgtype_str(STATUS_RadioRxStatus): RadioRxStatus,
     msgtype_str(INFO_Blank): None
 }

@@ -20,6 +20,7 @@
 #include "pb_decode.h"
 #include "esp_task_wdt.h"
 #include "adxl375.h"
+#include "driver/ledc.h"
 
 
 #include "max17048.h"
@@ -64,9 +65,11 @@ spi_device_handle_t lis3mdl_device;
 stmdev_ctx_t lsm6dsm;
 spi_device_handle_t lsm6dsm_device;
 
-// TODO: ADXL driver
 adxl375_handle_t adxl;
 spi_device_handle_t adxl_device;
+TaskHandle_t adxl_int_handler;
+
+static SemaphoreHandle_t sensors_mutex;
 
 ////////////////// GLOBAL HANDLES //////////////////
 fmgr_t lora_outgoing_fmgr;
@@ -88,6 +91,9 @@ esp_timer_handle_t logging_timer;
 #define LOGDL_NOTIFY_ACK 0x02 // TODO: Use this to receive a acknowledgement for each segment in the future
 static TaskHandle_t log_download_task_handle;
 
+esp_timer_handle_t flight_timer;
+esp_timer_handle_t log_led_timer;
+
 static SemaphoreHandle_t hold_tx_sem;
 
 nvs_handle_t nvs_config_handle;
@@ -101,11 +107,22 @@ static esp_err_t usb_tx(uint8_t* data, int len);
 void set_logstate(logging_state_t state, int manual_hz);
 static void log_download_task(void* arg);
 void link_flush();
+static void flight_timer_callback(void* arg);
+void start_autolog();
+void stop_autolog();
 
 // USB
 static bool usb_active = false;
 #define USB_AVAILABLE (usb_serial_jtag_is_connected() && usb_active)
 
+#define LED_G_CHANNEL LEDC_CHANNEL_0
+#define LED_G_TIMER LEDC_TIMER_0
+
+bool log_led_state = false;
+void log_led_toggle() {
+    gpio_set_level(PIN_LED_G, log_led_state);
+    log_led_state = !log_led_state;
+}
 
 ////////////////// INIT FUNCTIONS //////////////////
 static void init_leds(void) {
@@ -115,6 +132,22 @@ static void init_leds(void) {
     /* Set the GPIO as a push/pull output */
     gpio_set_direction(PIN_LED_G, GPIO_MODE_OUTPUT);
     gpio_set_direction(PIN_LED_R, GPIO_MODE_OUTPUT);
+
+    const esp_timer_create_args_t args = {
+        .callback = &log_led_toggle,
+        .name = "log_led"
+    };
+
+    ESP_ERROR_CHECK(esp_timer_create(&args, &log_led_timer));
+}
+
+void get_logstatus(LogStatus* stat) {
+    stat->cur_logging_hz = log_state_hz;
+    stat->is_armed = log_state == LOGSTATE_LOGGING_AUTO_ARMED;
+    stat->is_auto = log_state == LOGSTATE_LOGGING_AUTO_ARMED || log_state == LOGSTATE_LOGGING_AUTO_FLIGHT || log_state == LOGSTATE_LOGGING_AUTO_LANDED || log_state == LOGSTATE_LOGGING_AUTO_LIFTOFF;
+    stat->has_cur_logging_hz = true;
+    stat->log_maxsize = LOG_MEMORY_SIZE_B;
+    stat->log_size = logger_get_current_log_size(&logger);
 }
 
 static void init_i2c() {
@@ -146,13 +179,13 @@ void link_decode_datum(int i, DatumTypeID id, int len, uint8_t* data, bool is_us
         ESP_ERROR_CHECK(logger_read_bytes_raw(&logger, 0, sizeof(buf), buf));
         ESP_LOG_BUFFER_HEX("FLASH CONTENTS", buf, sizeof(buf));
     } else if (id == DatumTypeID_CMD_EraseLog) {
-        // TODO: Only allow erase over USB for safety
         Command_EraseLog cmd;
         Resp_BasicError resp;
         resp.has_error = false;
 
         if (pb_decode(&istream, Command_EraseLog_fields, &cmd)) {
             if (xSemaphoreTake(hold_tx_sem, pdMS_TO_TICKS(1000)) == pdTRUE) {
+                set_logstate(LOGSTATE_LOGGING_STOPPED, 0);
                 if (cmd.type == EraseType_Erase_Log) {
                     ESP_LOGI("LINK", "Erasing log as commanded.");
                     esp_err_t e = logger_erase_log(&logger);
@@ -175,8 +208,10 @@ void link_decode_datum(int i, DatumTypeID id, int len, uint8_t* data, bool is_us
                     ESP_LOGI("LINK", "Logger clean done");
                     resp.error = e;
                     link_send_datum(DatumTypeID_RESP_EraseLog, Resp_BasicError_fields, &resp);
+                    // link_flush();
                 }
                 xSemaphoreGive(hold_tx_sem);
+                link_flush();
             } else {
                 ESP_LOGE("LINK", "Error stopping TX for erase/clean");
             }
@@ -211,7 +246,7 @@ void link_decode_datum(int i, DatumTypeID id, int len, uint8_t* data, bool is_us
                     resp.error = 1;
                 }
             } else if (cmd.setting == LoggingMode_Armed) {
-                set_logstate(LOGSTATE_LOGGING_AUTO_ARMED, 0);
+                start_autolog();
             } else {
                 resp.has_error = true;
                 resp.error = 2;
@@ -222,17 +257,14 @@ void link_decode_datum(int i, DatumTypeID id, int len, uint8_t* data, bool is_us
             // Link info is unneccesary
             link_send_datum(DatumTypeID_RESP_ConfigureLogging, Resp_BasicError_fields, &resp);
         }
+        link_flush();
     } else if (id == DatumTypeID_CMD_LogStatus) {
         ESP_LOGI("LINK", "Sending log status");
         LogStatus resp;
-        resp.cur_logging_hz = log_state_hz;
-        resp.is_armed = log_state == LOGSTATE_LOGGING_AUTO_ARMED;
-        resp.is_auto = log_state == LOGSTATE_LOGGING_AUTO_ARMED || log_state == LOGSTATE_LOGGING_AUTO_FLIGHT || log_state == LOGSTATE_LOGGING_AUTO_LANDED || log_state == LOGSTATE_LOGGING_AUTO_LIFTOFF;
-        resp.has_cur_logging_hz = true;
-        resp.log_maxsize = LOG_MEMORY_SIZE_B;
-        resp.log_size = logger_get_current_log_size(&logger);
+        get_logstatus(&resp);
 
         link_send_datum(DatumTypeID_INFO_LogStatus, LogStatus_fields, &resp);
+        link_flush();
     } else if (id == DatumTypeID_CMD_DownloadLog) {
         Resp_BasicError resp = {
             .error = 0,
@@ -299,7 +331,6 @@ static void usb_receive_task(void* args) {
 
     while (1) {
         // Blocking read 1 byte
-        // TODO: Maybe read into a longer buffer? prolly not neccesary though...
         uint8_t byte;
         int nread = usb_serial_jtag_read_bytes(&byte, 1, pdMS_TO_TICKS(USB_TIMEOUT_MS));
         if (nread != 1) {
@@ -571,43 +602,58 @@ static void log_timer_task() {
     esp_err_t e = logger_log_data_now(&logger, (uint8_t*)&log_data, sizeof(log_data));
     log_data.flags = 0; // Clear flags
     if (e != ESP_OK) {
-        ESP_LOGE("LOGGER", "Error logging data in timer task! stopping logging");
-        set_logstate(LOGSTATE_LOGGING_STOPPED, 0);
+        ESP_LOGE("LOGGER", "Error logging data in timer task!");
+        esp_timer_restart(log_led_timer, 1000000 / 16);
+
+        // set_logstate(LOGSTATE_LOGGING_STOPPED, 0);
     }
 }
 
 void set_logstate(logging_state_t state, int manual_hz) {
+    if (esp_timer_is_active(log_led_timer)) esp_timer_stop(log_led_timer);
     log_state = state;
     switch (state) {
         case LOGSTATE_LOGGING_STOPPED:
-            log_state_hz = (manual_hz < 0) ? 0 : manual_hz;
+            log_state_hz = 0;
+            if (state == LOGSTATE_LOGGING_AUTO_ARMED || state == LOGSTATE_LOGGING_AUTO_FLIGHT || state == LOGSTATE_LOGGING_AUTO_LANDED || state == LOGSTATE_LOGGING_AUTO_LIFTOFF)
+                stop_autolog();
+
+            gpio_set_level(PIN_LED_G, 0);
             break;
         case LOGSTATE_LOGGING_MANUAL_HZ:
-            log_state_hz = manual_hz;
+            log_state_hz = (manual_hz < 0) ? 0 : manual_hz;
+
+            gpio_set_level(PIN_LED_G, 1);
             break;
         case LOGSTATE_LOGGING_AUTO_ARMED:
+            // Blink at 3Hz
+            ESP_ERROR_CHECK(esp_timer_start_periodic(log_led_timer, 1000000 / 6));
+
             log_state_hz = LOG_HZ_AUTO_ARMED;
             break;
         case LOGSTATE_LOGGING_AUTO_FLIGHT:
             log_state_hz = LOG_HZ_AUTO_FLIGHT;
+
+            gpio_set_level(PIN_LED_G, 1);
             break;
         case LOGSTATE_LOGGING_AUTO_LANDED:
             log_state_hz = LOG_HZ_AUTO_LANDED;
+
+            gpio_set_level(PIN_LED_G, 1);
             break;
         case LOGSTATE_LOGGING_AUTO_LIFTOFF:
             log_state_hz = LOG_HZ_AUTO_LIFTOFF;
+
+            gpio_set_level(PIN_LED_G, 1);
             break;
     }
 
-
-    // ESP_LOGI("LOGGER", "Hz: %d", log_state_hz);
+    ESP_LOGI("LOGGER", "Hz: %d", log_state_hz);
 
     if (log_state_hz == 0) {
-        gpio_set_level(PIN_LED_G, 0);
         if (esp_timer_is_active(logging_timer))
             ESP_ERROR_CHECK(esp_timer_stop(logging_timer));
     } else {
-        gpio_set_level(PIN_LED_G, 1);
         if (esp_timer_is_active(logging_timer)) {
             ESP_ERROR_CHECK(esp_timer_restart(logging_timer, 1000000 / log_state_hz));
         } else {
@@ -658,6 +704,14 @@ static void init_logging() {
 
     // Would need larger stack, but for now it's just using static buffers;
     xTaskCreate(log_download_task, "log_dl_task", 1024 * 8, NULL, 10, &log_download_task_handle);
+
+    // flight_timer = xTimerCreate("flight_timer", pdMS_TO_TICKS(1000 * LIFTOFF_DURATION), pdFALSE, (void*)0, flight_timer_callback);
+    const esp_timer_create_args_t flight_timer_args = {
+        .callback = &flight_timer_callback,
+        .name = "flight_timer"
+    };
+
+    ESP_ERROR_CHECK(esp_timer_create(&flight_timer_args, &flight_timer));
 }
 
 // TODO: Make a special extension to the frame manager to reduce the amount of memcpys?
@@ -709,7 +763,6 @@ static void log_download_task(void* arg) {
 
                 uint16_t frame_crc = fmgr_util_crc16(download_segment.data.bytes, segment_length);
                 download_segment.segment_crc16 = frame_crc;
-                // TODO: Keep running CRC! in total_crc, this is a bad hack (but might work... admittedly!)
                 total_crc ^= frame_crc;
 
                 if (e != ESP_OK) {
@@ -760,7 +813,7 @@ void radio_handle_interrupt_task(void* arg) {
 }
 
 void radio_rx_callback(sx127x* device, uint8_t* data, uint16_t data_length) {
-    gpio_set_level(PIN_LED_G, 0);
+    // gpio_set_level(PIN_LED_G, 0);
 
     // if (xSemaphoreTake(radio_mutex, pdMS_TO_TICKS(500)) != pdTRUE) {
     //     ESP_LOGE("RADIO", "Error acquiring radio for receive information!");
@@ -864,7 +917,7 @@ static void init_radio() {
     // ESP_ERROR_CHECK(sx127x_set_opmod(SX127x_MODE_CAD, SX127x_MODULATION_LORA, radio));
 
 
-    BaseType_t task_code = xTaskCreatePinnedToCore(radio_handle_interrupt_task, "handle interrupt", 8196, radio, 1, &radio_handle_interrupt, xPortGetCoreID());
+    BaseType_t task_code = xTaskCreatePinnedToCore(radio_handle_interrupt_task, "handle interrupt", 8196, radio, 3, &radio_handle_interrupt, xPortGetCoreID());
     if (task_code != pdPASS) {
         ESP_LOGE("RADIO", "Can't create task: %d", task_code);
         sx127x_destroy(radio);
@@ -1124,9 +1177,71 @@ static void init_lsm6dsm() {
     // No gyro bandpass
 }
 
-static IRAM_ATTR void adxl375_isr(void* arg) {
-    // TODO: Integrate with flight phase det
-    // FIXME: Make sure the polling read doesn't clear the interrupt source flags
+void start_autolog() {
+    // This uses AC mode, expecting the rocket to be in steady-state (on the launch rod) when armed
+    xSemaphoreTake(sensors_mutex, portMAX_DELAY);
+    adxl375_set_thresh_act(&adxl, LIFTOFF_ACC_THRESHOLD_G * 1000);
+    adxl375_set_act_mode(&adxl, false, true, true, true);
+    adxl375_set_act_mode(&adxl, true, true, true, true);
+    adxl375_enable_interrupts(&adxl, ADXL_INT_ACT);
+
+    // TODO: Determine acceptable inact threshold for flight phase detection
+    // FIXME: Inact might not work, because:
+    // - Falling can be 0g
+    // - Accelerometer will still have gravitational acceleration during landing
+    // Implement a solution in sensor_task that checks the deltas of acceleration values, if they are changing under the noise threshold, we're good
+
+    // Probably want to switch it to AC mode because 
+    // adxl375_set_inact_mode(&adxl, false, true, true, true);
+    // adxl375_set_thresh_inact(&adxl, LAND_THRESHOLD_G * 1000);
+    // adxl375_set_time_inact(&adxl, LAND_TIME);
+    xSemaphoreGive(sensors_mutex);
+
+    set_logstate(LOGSTATE_LOGGING_AUTO_ARMED, 0);
+}
+
+void stop_autolog() {
+    if (esp_timer_is_active(flight_timer)) esp_timer_stop(flight_timer);
+    xSemaphoreTake(sensors_mutex, portMAX_DELAY);
+    adxl375_set_act_mode(&adxl, false, false, false, false);
+    adxl375_enable_interrupts(&adxl, 0);
+    xSemaphoreGive(sensors_mutex);
+}
+
+// TODO: LOGSTATE_LOGGING_AUTO_FLIGHT -> LOGSTATE_LOGGING_AUTO_LANDED
+static void flight_timer_callback(void* arg) {
+    if (log_state == LOGSTATE_LOGGING_AUTO_LIFTOFF)
+        set_logstate(LOGSTATE_LOGGING_AUTO_FLIGHT, 0);
+}
+
+static void adxl_int_worker(void* arg) {
+    while (1) {
+        xTaskNotifyWait(0, 0, NULL, portMAX_DELAY);
+        xSemaphoreTake(sensors_mutex, portMAX_DELAY);
+        // At ADXL ISR right now
+        uint8_t intsrc;
+        adxl375_get_int_source(&adxl, &intsrc);
+
+        switch (log_state) {
+            case LOGSTATE_LOGGING_AUTO_ARMED:
+                if (intsrc & ADXL_INT_ACT) {
+                    set_logstate(LOGSTATE_LOGGING_AUTO_LIFTOFF, 0);
+                    // DONE: Start flight timer to switch to LOGSTATE_LOGGING_AUTO_FLIGHT
+                    ESP_ERROR_CHECK(esp_timer_start_once(flight_timer, 1000000 * LIFTOFF_DURATION));
+                }
+                break;
+                // TODO: Inact interrupt for LANDED
+            default:
+                break;
+        }
+        xSemaphoreGive(sensors_mutex);
+    }
+}
+
+// TODO: make this do nothing when not autolog
+// Handles LOGSTATE_LOGGING_AUTO_ARMED -> LOGSTATE_LOGGING_AUTO_LIFTOFF transition for autolog
+static IRAM_ATTR void adxl_isr(void* arg) {
+    xTaskNotifyFromISR(adxl_int_handler, 0, eNoAction, NULL);
 }
 
 static void init_adxl375() {
@@ -1156,28 +1271,22 @@ static void init_adxl375() {
 
     adxl375_set_interrupts_pin2(&adxl, 0); // All interrupts on pin 1
     adxl375_enable_interrupts(&adxl, ADXL_INT_ACT | ADXL_INT_INACT);
+    adxl375_set_act_mode(&adxl, false, false, false, false);
+    adxl375_set_inact_mode(&adxl, false, false, false, false);
+
 
     gpio_reset_pin(PIN_ADXL_INT1);
     gpio_set_direction(PIN_ADXL_INT1, GPIO_MODE_INPUT);
 
     gpio_set_intr_type(PIN_ADXL_INT1, GPIO_INTR_POSEDGE);
-    gpio_isr_handler_add(PIN_ADXL_INT1, adxl375_isr, (void*)&adxl);
-
+    gpio_isr_handler_add(PIN_ADXL_INT1, adxl_isr, (void*)&adxl);
 
     adxl375_set_autosleep(&adxl, false);
 
-    // TODO: Determine acceptable act threshold for flight phase detection
-    adxl375_set_act_mode(&adxl, false, true, true, true);
-    adxl375_set_thresh_act(&adxl, 100);
-
-    // TODO: Determine acceptable inact threshold for flight phase detection
-    adxl375_set_inact_mode(&adxl, false, true, true, true);
-    adxl375_set_thresh_inact(&adxl, 100);
-
-    // TODO: Nice interrupt handling (need freertos??? nah flight phase det is lightweight... log rate set isn't though)
-
     adxl375_set_bw_rate(&adxl, ADXL_RATE_200, false);
     adxl375_set_mode(&adxl, ADXL_POWER_MEASURE);
+
+    xTaskCreate(adxl_int_worker, "adxl_int", 1024 * 2, NULL, 2, &adxl_int_handler);
 }
 
 #define GPS_UART_RX_BUF_SIZE        (1024)
@@ -1246,7 +1355,7 @@ void gps_uart_task(void* args) {
                                         current_gps.sats_used = gpgga->n_satellites;
                                         current_gps.utc_time = gpgga->time.tm_sec + 100000 * gpgga->time.tm_min + 10000000 * gpgga->time.tm_hour; // TODO: Add day/year/etc?
 
-                                        // TODO: Check that GGA works as the primary message
+                                        // DONE: Check that GGA works as the primary message
                                         log_data.gps_lat = current_gps.lat;
                                         log_data.gps_lon = current_gps.lon;
                                         log_data.gps_lon = current_gps.alt;
@@ -1315,7 +1424,6 @@ static void init_gps() {
     xTaskCreate(&gps_uart_task, "gps_uart_task", 1024 * 4, NULL, 10, NULL);
 }
 
-// TODO: Create mutex for fmgr
 static void battmon_task(void* arg) {
     int battmon_delay_ticks = pdMS_TO_TICKS(1000.0f / BATT_MON_HZ);
     while (true) {
@@ -1351,99 +1459,102 @@ void sensors_routine(void* arg) {
     static int16_t data_raw_magnetic[3];
     static int16_t data_raw_acceleration[3];
     static int16_t data_raw_angular_rate[3];
-    static int16_t data_raw_acceleration_adxl[3]; // TODO: Conversion?? 
+    static int16_t data_raw_acceleration_adxl[3];
     // static int16_t data_raw_temperature;
 
-    ///////////////////////// LPS22 /////////////////////////
-    lps22hh_reg_t lps_reg;
-    lps22hh_read_reg(&lps22, LPS22HH_STATUS, (uint8_t*)&lps_reg, 1);
 
-    if (lps_reg.status.p_da) {
-        memset(&data_raw_pressure, 0x00, sizeof(uint32_t));
-        lps22hh_pressure_raw_get(&lps22, &data_raw_pressure);
-        pressure_hPa = lps22hh_from_lsb_to_hpa(data_raw_pressure);
+    if (xSemaphoreTake(sensors_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
 
-        log_data.lps_press_raw = data_raw_pressure;
-        log_data.flags |= LOG_FLAG_PRESS_FRESH;
+        ///////////////////////// LPS22 /////////////////////////
+        lps22hh_reg_t lps_reg;
+        lps22hh_read_reg(&lps22, LPS22HH_STATUS, (uint8_t*)&lps_reg, 1);
+
+        if (lps_reg.status.p_da) {
+            memset(&data_raw_pressure, 0x00, sizeof(uint32_t));
+            lps22hh_pressure_raw_get(&lps22, &data_raw_pressure);
+            pressure_hPa = lps22hh_from_lsb_to_hpa(data_raw_pressure);
+
+            log_data.lps_press_raw = data_raw_pressure;
+            log_data.flags |= LOG_FLAG_PRESS_FRESH;
+        }
+
+        ///////////////////////// LIS3MDL /////////////////////////
+        uint8_t reg;
+        /* Read output only if new value is available */
+        lis3mdl_mag_data_ready_get(&lis3mdl, &reg);
+
+        if (reg) {
+            /* Read magnetic field data */
+            memset(data_raw_magnetic, 0x00, 3 * sizeof(int16_t));
+            lis3mdl_magnetic_raw_get(&lis3mdl, data_raw_magnetic);
+            magnetic_mG[0] = 1000 * lis3mdl_from_fs4_to_gauss(
+                data_raw_magnetic[0]);
+            magnetic_mG[1] = 1000 * lis3mdl_from_fs4_to_gauss(
+                data_raw_magnetic[1]);
+            magnetic_mG[2] = 1000 * lis3mdl_from_fs4_to_gauss(
+                data_raw_magnetic[2]);
+
+            // memset(&data_raw_temperature, 0x00, sizeof(int16_t));
+            // lis3mdl_temperature_raw_get(&lis3mdl, &data_raw_temperature);
+            // temperature_degC = lis3mdl_from_lsb_to_celsius(data_raw_temperature);
+
+            // log_data.lis_mag_raw
+            memcpy(log_data.lis_mag_raw, data_raw_magnetic, sizeof(data_raw_magnetic));
+            log_data.flags |= LOG_FLAG_MAG_FRESH;
+        }
+        lis3mdl_operating_mode_set(&lis3mdl, LIS3MDL_CONTINUOUS_MODE); // THIS FIXES IT!!!
+
+        ///////////////////////// LSM6DSM /////////////////////////
+        lsm6dsm_reg_t lsm_reg;
+        /* Read output only if new value is available */
+        lsm6dsm_status_reg_get(&lsm6dsm, &lsm_reg.status_reg);
+
+        if (lsm_reg.status_reg.xlda) {
+            /* Read acceleration field data */
+            memset(data_raw_acceleration, 0x00, 3 * sizeof(int16_t));
+            lsm6dsm_acceleration_raw_get(&lsm6dsm, data_raw_acceleration);
+            acceleration_g[0] =
+                lsm6dsm_from_fs16g_to_mg(data_raw_acceleration[0]) * 0.001f;
+            acceleration_g[1] =
+                lsm6dsm_from_fs16g_to_mg(data_raw_acceleration[1]) * 0.001f;
+            acceleration_g[2] =
+                lsm6dsm_from_fs16g_to_mg(data_raw_acceleration[2]) * 0.001f;
+
+            memcpy(log_data.lsm_acc_raw, data_raw_acceleration, sizeof(data_raw_acceleration));
+            log_data.flags |= LOG_FLAG_LSM_ACC_FRESH;
+        }
+
+        if (lsm_reg.status_reg.gda) {
+            /* Read angular rate field data */
+            memset(data_raw_angular_rate, 0x00, 3 * sizeof(int16_t));
+            lsm6dsm_angular_rate_raw_get(&lsm6dsm, data_raw_angular_rate);
+            angular_rate_dps[0] =
+                lsm6dsm_from_fs2000dps_to_mdps(data_raw_angular_rate[0]) * 0.001f;
+            angular_rate_dps[1] =
+                lsm6dsm_from_fs2000dps_to_mdps(data_raw_angular_rate[1]) * 0.001f;
+            angular_rate_dps[2] =
+                lsm6dsm_from_fs2000dps_to_mdps(data_raw_angular_rate[2]) * 0.001f;
+
+            memcpy(log_data.lsm_gyr_raw, data_raw_angular_rate, sizeof(data_raw_angular_rate));
+            log_data.flags |= LOG_FLAG_LSM_GYR_FRESH;
+        }
+
+        uint8_t adxl_intsrcs;
+        adxl375_get_int_source(&adxl, &adxl_intsrcs);
+        if (adxl_intsrcs & ADXL_INT_DRDY) {
+            /* Read angular rate field data */
+            memset(data_raw_acceleration_adxl, 0x00, 3 * sizeof(int16_t));
+            adxl375_get_acceleration_raw(&adxl, data_raw_acceleration_adxl);
+
+            adxl_acceleration_g[0] = (data_raw_acceleration_adxl[0] * 49) * 0.001f;
+            adxl_acceleration_g[1] = (data_raw_acceleration_adxl[1] * 49) * 0.001f;
+            adxl_acceleration_g[2] = (data_raw_acceleration_adxl[2] * 49) * 0.001f;
+
+            memcpy(log_data.adxl_acc_raw, data_raw_acceleration_adxl, sizeof(data_raw_acceleration_adxl));
+            log_data.flags |= LOG_FLAG_ADXL_ACC_FRESH;
+        }
+        xSemaphoreGive(sensors_mutex);
     }
-
-    ///////////////////////// LIS3MDL /////////////////////////
-    uint8_t reg;
-    /* Read output only if new value is available */
-    lis3mdl_mag_data_ready_get(&lis3mdl, &reg);
-
-    if (reg) {
-        /* Read magnetic field data */
-        memset(data_raw_magnetic, 0x00, 3 * sizeof(int16_t));
-        lis3mdl_magnetic_raw_get(&lis3mdl, data_raw_magnetic);
-        magnetic_mG[0] = 1000 * lis3mdl_from_fs4_to_gauss(
-            data_raw_magnetic[0]);
-        magnetic_mG[1] = 1000 * lis3mdl_from_fs4_to_gauss(
-            data_raw_magnetic[1]);
-        magnetic_mG[2] = 1000 * lis3mdl_from_fs4_to_gauss(
-            data_raw_magnetic[2]);
-
-        // memset(&data_raw_temperature, 0x00, sizeof(int16_t));
-        // lis3mdl_temperature_raw_get(&lis3mdl, &data_raw_temperature);
-        // temperature_degC = lis3mdl_from_lsb_to_celsius(data_raw_temperature);
-
-        // log_data.lis_mag_raw
-        memcpy(log_data.lis_mag_raw, data_raw_magnetic, sizeof(data_raw_magnetic));
-        log_data.flags |= LOG_FLAG_MAG_FRESH;
-    }
-    lis3mdl_operating_mode_set(&lis3mdl, LIS3MDL_CONTINUOUS_MODE); // THIS FIXES IT!!!
-
-    ///////////////////////// LSM6DSM /////////////////////////
-    lsm6dsm_reg_t lsm_reg;
-    /* Read output only if new value is available */
-    lsm6dsm_status_reg_get(&lsm6dsm, &lsm_reg.status_reg);
-
-    if (lsm_reg.status_reg.xlda) {
-        /* Read acceleration field data */
-        memset(data_raw_acceleration, 0x00, 3 * sizeof(int16_t));
-        lsm6dsm_acceleration_raw_get(&lsm6dsm, data_raw_acceleration);
-        acceleration_g[0] =
-            lsm6dsm_from_fs16g_to_mg(data_raw_acceleration[0]) * 0.001f;
-        acceleration_g[1] =
-            lsm6dsm_from_fs16g_to_mg(data_raw_acceleration[1]) * 0.001f;
-        acceleration_g[2] =
-            lsm6dsm_from_fs16g_to_mg(data_raw_acceleration[2]) * 0.001f;
-
-        memcpy(log_data.lsm_acc_raw, data_raw_acceleration, sizeof(data_raw_acceleration));
-        log_data.flags |= LOG_FLAG_LSM_ACC_FRESH;
-    }
-
-    if (lsm_reg.status_reg.gda) {
-        /* Read angular rate field data */
-        memset(data_raw_angular_rate, 0x00, 3 * sizeof(int16_t));
-        lsm6dsm_angular_rate_raw_get(&lsm6dsm, data_raw_angular_rate);
-        angular_rate_dps[0] =
-            lsm6dsm_from_fs2000dps_to_mdps(data_raw_angular_rate[0]) * 0.001f;
-        angular_rate_dps[1] =
-            lsm6dsm_from_fs2000dps_to_mdps(data_raw_angular_rate[1]) * 0.001f;
-        angular_rate_dps[2] =
-            lsm6dsm_from_fs2000dps_to_mdps(data_raw_angular_rate[2]) * 0.001f;
-
-        memcpy(log_data.lsm_gyr_raw, data_raw_angular_rate, sizeof(data_raw_angular_rate));
-        log_data.flags |= LOG_FLAG_LSM_GYR_FRESH;
-    }
-
-    uint8_t adxl_intsrcs;
-    // TODO: Make sure this can't clear the int source bits that might be received by the ISR
-    adxl375_get_int_source(&adxl, &adxl_intsrcs);
-    if (adxl_intsrcs & ADXL_INT_DRDY) {
-        /* Read angular rate field data */
-        memset(data_raw_acceleration_adxl, 0x00, 3 * sizeof(int16_t));
-        adxl375_get_acceleration_raw(&adxl, data_raw_acceleration_adxl);
-
-        adxl_acceleration_g[0] = (data_raw_acceleration_adxl[0] * 49) * 0.001f;
-        adxl_acceleration_g[1] = (data_raw_acceleration_adxl[1] * 49) * 0.001f;
-        adxl_acceleration_g[2] = (data_raw_acceleration_adxl[2] * 49) * 0.001f;
-
-        memcpy(log_data.adxl_acc_raw, data_raw_acceleration_adxl, sizeof(data_raw_acceleration_adxl));
-        log_data.flags |= LOG_FLAG_ADXL_ACC_FRESH;
-    }
-
 
 
 
@@ -1486,13 +1597,10 @@ void debug_output_task(void* arg) {
         // ESP_LOGI("DEBUG-LIS3MDL", "Temperature [C]:  %4.2f\n", temperature_degC);
 #endif
     }
-}
+    }
 
 static void telemetry_tx_task(void* arg) {
     while (1) {
-        // TODO: Check for GPS good (check fix level, DOPs, etc.)
-        // TODO: Also send over a USB interface when possible (tinyusb?)
-
         BaseType_t res = xTaskNotifyWait(0, 0, NULL, portMAX_DELAY);
 
         // Flush link every 1 second
@@ -1511,6 +1619,9 @@ static void once_per_second() {
         ESP_LOGI("LOGGER", "Flushing NVS");
         logger_flush(&logger);
         // TODO: logger alerts!
+        LogStatus stat;
+        get_logstatus(&stat);
+        link_send_datum(DatumTypeID_INFO_LogStatus, LogStatus_fields, &stat);
     }
 
     seconds += 1;
@@ -1539,6 +1650,7 @@ void app_main(void) {
 
     fmgr_mutex = xSemaphoreCreateMutex();
     hold_tx_sem = xSemaphoreCreateMutex();
+    sensors_mutex = xSemaphoreCreateMutex();
 
     fmgr_init(&lora_outgoing_fmgr, 255);
     fmgr_init(&lora_incoming_fmgr, 255);
