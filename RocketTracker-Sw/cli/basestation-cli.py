@@ -10,7 +10,7 @@ from threading import Condition
 import time
 import lib.proto.protocol_pb2 as protocol
 from threading import Thread
-from distutils.util import strtobool
+from str2bool import str2bool as strtobool
 import pickle
 import json
 
@@ -388,7 +388,7 @@ def monitor(args):
 
     while (not EX):
         d = wait_for_datum(None, 1.5)
-        if d is not None:
+        if d is not None and d.typeid != protocol.DatumTypeID.STATUS_RadioRxStatus:
             print(d)
             # if (args.log)
             # args.log.writelines([f"{d.to_dict()}"])
