@@ -6,6 +6,8 @@
 #include "pico/stdlib.h"
 #include "pico/binary_info.h"
 #include "hardware/sync.h"
+#include "pinout.h"
+#include "tusb.h"
 
 #define SPI_AQUIRE wait_spi(); spi_lock = true;
 #define SPI_RELEASE spi_lock = false;
@@ -720,8 +722,12 @@ bool RFM97_LoRa::applyConfig(RFM97_LoRa_config cfg) {
 }
 
 void RFM97_LoRa::wait_for_safe_state() {
-	while (!(state == RFM97_RadioState::RX_WAITING || state == RFM97_RadioState::STANDBY)) {
+	int timeout = 1000 / 5;
+	while (!(state == RFM97_RadioState::RX_WAITING || state == RFM97_RadioState::STANDBY) && timeout) {
 		// __wfe();
 		sleep_ms(5);
+		// tud_cdc_n_write_str(ITF_VGPS, "safe locked\n");
+		// tud_cdc_n_write_flush(ITF_VGPS);
+		timeout--;
 	};
 }
