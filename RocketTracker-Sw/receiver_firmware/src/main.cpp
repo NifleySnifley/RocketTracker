@@ -188,11 +188,14 @@ void telem_rx_cb() {
 			if (telem_txidx >= telem_txsize) {
 				// telem_rawtx_state = 3;
 
+				// tud_cdc_n_write_str(ITF_VGPS, "tx start\n");
 				radio.transmit(telem_txbuf, telem_txsize, true);
 				// printf("Send %d bytes\n", telem_txsize);
 				// write_frame_raw(telem_txbuf, telem_txsize);
 				ledr_d = make_timeout_time_ms(MS_LED);
 				telem_rawtx_state = 0;
+				// tud_cdc_n_write_str(ITF_VGPS, "tx done\n");
+				// tud_cdc_n_write_flush(ITF_VGPS);
 
 				telem_txidx = 0;
 				// printf("Message full!\n");
@@ -333,7 +336,7 @@ int main() {
 			}
 		}
 
-		if (gps_fresh) {
+		if (gps_fresh && tud_cdc_n_connected(ITF_TELEM)) {
 			gps_fresh = false;
 			write_fake_gps(&current_gps);
 		}
