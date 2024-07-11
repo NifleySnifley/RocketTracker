@@ -393,7 +393,7 @@ def monitor(args):
             # if (args.log)
             # args.log.writelines([f"{d.to_dict()}"])
 
-    args.log.close()
+    # args.log.close()
 
 
 def ping(args):
