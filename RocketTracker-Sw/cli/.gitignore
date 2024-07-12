@@ -1,2 +1,5 @@
 lib/proto
 **/*.pickle
+venv/
+**/*.pyc
+**/__pycache__
