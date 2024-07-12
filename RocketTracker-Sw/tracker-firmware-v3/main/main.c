@@ -1090,7 +1090,7 @@ static void init_lps22() {
     lps22hh_block_data_update_set(&lps22, PROPERTY_ENABLE);
     /* Set Output Data Rate */
     lps22hh_data_rate_set(&lps22, LPS22HH_200_Hz);
-    lps22hh_pressure_offset_set(&lps22, 0);
+    // lps22hh_pressure_offset_set(&lps22, (int16_t)(-63.0527133333 * 1048576.0f)); // error*1048576.0f
 }
 
 static void init_lis3mdl() {
@@ -1391,7 +1391,7 @@ void gps_uart_task(void* args) {
                                         // DONE: Check that GGA works as the primary message
                                         log_data.gps_lat = current_gps.lat;
                                         log_data.gps_lon = current_gps.lon;
-                                        log_data.gps_lon = current_gps.alt;
+                                        log_data.gps_alt = current_gps.alt;
                                         log_data.flags |= LOG_FLAG_GPS_FRESH;
 
                                         xTaskNotify(telemetry_task, 0, eNoAction);
@@ -1506,7 +1506,7 @@ void sensors_routine(void* arg) {
         if (lps_reg.status.p_da) {
             memset(&data_raw_pressure, 0x00, sizeof(uint32_t));
             lps22hh_pressure_raw_get(&lps22, &data_raw_pressure);
-            pressure_hPa = lps22hh_from_lsb_to_hpa(data_raw_pressure);
+            pressure_hPa = lps22hh_from_lsb_to_hpa(data_raw_pressure) + BARO_CAL_OFFSET;
 
             log_data.lps_press_raw = data_raw_pressure;
             log_data.flags |= LOG_FLAG_PRESS_FRESH;
@@ -1633,12 +1633,22 @@ void debug_output_task(void* arg) {
     }
 }
 
+static float pressure_hPa_to_alt_m(float hPa) {
+    return 44330.f * (1 - powf(hPa / 1013.25f, 0.190284f));
+}
+
 static void telemetry_tx_task(void* arg) {
     while (1) {
         BaseType_t res = xTaskNotifyWait(0, 0, NULL, portMAX_DELAY);
         if (telemetry_enable) {
+            Altitude alt = {
+                .has_v_speed = false,
+                .alt_m = pressure_hPa_to_alt_m(pressure_hPa)
+            };
+
             // Flush link every 1 second
             link_send_datum(DatumTypeID_INFO_GPS, GPS_fields, &current_gps);
+            link_send_datum(DatumTypeID_INFO_Altitude, Altitude_fields, &alt);
             link_flush();
         }
     }
