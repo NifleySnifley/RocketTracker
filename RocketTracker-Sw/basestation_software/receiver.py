@@ -93,7 +93,7 @@ class Receiver(QWidget):
             if (b == 0x00):
                 # print("RESET")
                 self.rx_buf.clear()
-                self.rx_len =[]
+                self.rx_len = []
                 continue
             elif (b == 0xFF):
                 bval = 0 if next(biter) == 0x02 else 0xFF
@@ -135,7 +135,7 @@ class Receiver(QWidget):
                         i += 1
                         # slen = self.rx_buf[i]
                         slen = int.from_bytes(self.rx_buf[i:i+2], 'little')
-                        i += 2#1
+                        i += 2  # 1
                         self.parse_datum(dtype,
                                          bytes(self.rx_buf[i:i+slen]))
                         i += slen
@@ -144,19 +144,19 @@ class Receiver(QWidget):
     def vgps_rx(self):
         # Detect and port swap if applicable
         bs = self.port_vgps.readAll().data()
-        for b in bs:
-            if b == 0x00:
-                # There shouldn't be any null characters coming from the VGPS port!
-                # The ports must be in the wrong order, so swap them
-                self.port_tlm.readyRead.disconnect(self.tlm_rx)
-                self.port_vgps.readyRead.disconnect(self.vgps_rx)
+        # for b in bs:
+        #     if b == 0x00:
+        #         # There shouldn't be any null characters coming from the VGPS port!
+        #         # The ports must be in the wrong order, so swap them
+        #         self.port_tlm.readyRead.disconnect(self.tlm_rx)
+        #         self.port_vgps.readyRead.disconnect(self.vgps_rx)
 
-                tmp = self.port_vgps
-                self.port_vgps = self.port_tlm
-                self.port_tlm = tmp
+        #         tmp = self.port_vgps
+        #         self.port_vgps = self.port_tlm
+        #         self.port_tlm = tmp
 
-                self.port_tlm.readyRead.connect(self.tlm_rx)
-                self.port_vgps.readyRead.connect(self.vgps_rx)
+        #         self.port_tlm.readyRead.connect(self.tlm_rx)
+        #         self.port_vgps.readyRead.connect(self.vgps_rx)
 
     def parse_datum(self, t: DatumTypeID, data):
         print(len(data))
@@ -194,13 +194,13 @@ class Receiver(QWidget):
             self.printfn("Error, malformed datum protobuf!")
             print([hex(e) for e in data])
             return
-        
+
         if (parsed == None):
             self.printfn("Unknown datum type! (None)")
             return
-        
+
         # if (not has_all_fields(parsed)):
         #     self.printfn(f"Missing field! {msgtype_str(t)}")
-        #     return 
+        #     return
 
         self.datumProcessed.emit(t, parsed)
