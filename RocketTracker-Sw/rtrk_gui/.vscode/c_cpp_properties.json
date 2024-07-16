@@ -4,7 +4,8 @@
 			"name": "Mac",
 			"includePath": [
 				"${VCPKG_ROOT}/installed/x64-windows/include/**",
-				"./**"
+				"./**",
+				"../comms_lib/**"
 			],
 			"defines": [],
 			"compilerPath": "cl.exe",

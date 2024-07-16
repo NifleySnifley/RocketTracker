@@ -13,6 +13,8 @@
 #include <stdlib.h>
 #include "sys/time.h"
 
+log_data_t log_data = { 0 };
+
 size_t min(size_t a, size_t b) {
     return (a < b) ? a : b;
 }

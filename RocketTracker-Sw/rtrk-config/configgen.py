@@ -77,7 +77,7 @@ cw.add_struct(cfg_entry)
 # Manifest
 var = Variable(
     "CONFIG_MANIFEST",
-    primitive="struct config_entry_t",
+    primitive="config_entry_t",
     value=[
         {
             "type": Typecast(TYPES.index(v.type.__class__.__name__), "config_type_t"),

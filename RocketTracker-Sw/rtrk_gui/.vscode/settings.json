@@ -95,6 +95,11 @@
 		"xstring": "cpp",
 		"xtr1common": "cpp",
 		"xtree": "cpp",
-		"xutility": "cpp"
+		"xutility": "cpp",
+		"*.inc": "cpp",
+		"bitset": "cpp",
+		"cinttypes": "cpp",
+		"complex": "cpp",
+		"random": "cpp"
 	}
 }

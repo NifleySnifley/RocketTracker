@@ -9,7 +9,7 @@
 
 // Frequency at which data is output over USB for debugging
 #define DEBUG_MON_HZ 1.0f
-#define DEBUG_MON_ENABLED false
+#define DEBUG_MON_ENABLED true
 #define DEBUG_MON_LPS22 true
 #define DEBUG_MON_LSM6DSM true
 #define DEBUG_MON_LIS3MDL true

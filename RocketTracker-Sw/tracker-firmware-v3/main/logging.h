@@ -117,4 +117,6 @@ size_t logger_get_current_log_size(logger_t* logger);
 // <- ACK_Download_Complete
 // -> ACK_Download_Complete
 
+extern log_data_t log_data;
+
 #endif

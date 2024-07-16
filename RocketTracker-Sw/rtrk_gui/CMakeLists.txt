@@ -5,6 +5,9 @@ set(CMAKE_CXX_STANDARD 17)
 
 find_package(OpenGL REQUIRED)
 
+set(FRAME_MANAGER_DIR "../comms_lib/")
+include_directories(${FRAME_MANAGER_DIR})
+
 # add_subdirectory(external/ImFileDialog)
 # add_subdirectory(external/implot)
 # add_subdirectory(external/imgui)
@@ -17,12 +20,25 @@ add_subdirectory(external/glfw)
 # set(Boost_DEBUG 1)
 find_package(Boost 1.80 REQUIRED system)
 
+include(FindProtobuf)
+find_package(Protobuf REQUIRED)
+include_directories(${PROTOBUF_INCLUDE_DIR})
+protobuf_generate_cpp(PROTO_SRC PROTO_HEADER ../protocol/protocol.proto)
+add_library(proto ${PROTO_HEADER} ${PROTO_SRC})
+include_directories(${CMAKE_CURRENT_BINARY_DIR})
+
 set(IMGUI_DIR external/imgui)
 set(IMGUI_SOURCES  ${IMGUI_DIR}/backends/imgui_impl_glfw.cpp ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp ${IMGUI_DIR}/imgui.cpp ${IMGUI_DIR}/imgui_draw.cpp ${IMGUI_DIR}/imgui_demo.cpp ${IMGUI_DIR}/imgui_tables.cpp ${IMGUI_DIR}/imgui_widgets.cpp)
 include_directories(${IMGUI_DIR} ${IMGUI_DIR}/backends)
 
 include_directories(menus)
 
-add_executable(rtrk_gui main.cpp menus/link/link_menu.cpp ${IMGUI_SOURCES})
+add_executable(rtrk_gui main.cpp menus/link/link_menu.cpp menus/link/frame_manager_v2.cpp ${IMGUI_SOURCES})
 target_link_libraries(rtrk_gui PRIVATE glfw OpenGL::GL ${Boost_LIBRARIES})
 target_include_directories(rtrk_gui PRIVATE ${Boost_INCLUDE_DIRS})
+
+
+add_custom_target(copy_assets
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_LIST_DIR}/assets ${CMAKE_CURRENT_BINARY_DIR}/assets
+)
+add_dependencies(rtrk_gui copy_assets)

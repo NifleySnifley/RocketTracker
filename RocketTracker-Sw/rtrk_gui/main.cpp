@@ -90,6 +90,9 @@ int main(int, char**) {
 	ImGui::StyleColorsDark();
 	//ImGui::StyleColorsLight();
 
+	io.Fonts->AddFontFromFileTTF("assets/JetBrainsMonoNL-Regular.ttf", 20);
+	// io.Fonts->GetTexDataAsRGBA32();
+
 	// When viewports are enabled we tweak WindowRounding/WindowBg so platform windows can look identical to regular ones.
 	ImGuiStyle& style = ImGui::GetStyle();
 	if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {

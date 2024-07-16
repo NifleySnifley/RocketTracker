@@ -50,7 +50,12 @@
         "lps22hh_reg.h": "c",
         "numbers": "c",
         "spi_master.h": "c",
-        "sx127x_spi.h": "c"
+        "sx127x_spi.h": "c",
+        "compare": "c",
+        "task.h": "c",
+        "stdio.h": "c",
+        "gpio.h": "c",
+        "config.h": "c"
     },
     "editor.tabSize": 4,
     "editor.insertSpaces": true,
