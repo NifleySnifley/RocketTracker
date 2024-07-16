@@ -1,0 +1,17 @@
+{
+	"configurations": [
+		{
+			"name": "Mac",
+			"includePath": [
+				"${VCPKG_ROOT}/installed/x64-windows/include/**",
+				"./**"
+			],
+			"defines": [],
+			"compilerPath": "cl.exe",
+			"cStandard": "c17",
+			"cppStandard": "c++17",
+			"intelliSenseMode": "windows-msvc-x64"
+		}
+	],
+	"version": 4
+}

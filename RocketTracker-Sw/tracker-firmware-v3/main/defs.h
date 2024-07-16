@@ -48,3 +48,11 @@
 #define USB_SER_ESC_ESC 0x01
 #define USB_SER_ESC_NULL 0x02
 #define USB_TIMEOUT_MS 500
+
+// Switches the pins of the debug UART (UART0) to be pins on the expansion header
+#define DEBUG_ON_EXP true
+
+#if (DEBUG_ON_EXP)
+#define DEBUG_UART_RX PIN_EXP1
+#define DEBUG_UART_TX PIN_EXP2
+#endif

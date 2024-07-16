@@ -34,10 +34,12 @@ message Altitude {
   optional float v_speed = 2;
 }
 
+message Quaternion {
+  repeated float components = 1;
+}
+
 message Orientation {
-  required float orientation_x = 1;
-  required float orientation_y = 2;
-  required float orientation_z = 3;
+  required Quaternion quat = 1;
 }
 
 enum AlertType {
@@ -78,14 +80,15 @@ message LogStatus {
 // Resp
 enum DatumTypeID {
   // Telemetry
-  INFO_Blank = 0;
-  INFO_Raw = 1;
-  INFO_Battery = 2;
-  INFO_GPS = 3;
-  INFO_Altitude = 4;
-  INFO_Orientation = 5;
-  INFO_Alert = 6;
-  INFO_LogStatus = 7;
+  INFO_Blank = 0; // No payload
+  INFO_Raw = 1; // Raw non-protobuf payload
+  INFO_Battery = 2; // Battery
+  INFO_GPS = 3; // GPS
+  INFO_Altitude = 4; // Altitude
+  INFO_Orientation = 5; // Orientation
+  INFO_Alert = 6; // Alert
+  INFO_LogStatus = 7; // LogStatus
+  IMFO_SensorData = 8; // SensorData
 
   // Receiver
   STATUS_RadioRxStatus = 64;
@@ -108,6 +111,9 @@ enum DatumTypeID {
   //ACK_DownloadLog_Segment = 141;
   // ACK_Download_Resend = 141; // TODO: Implement a mechanism for resending portions of the log!
 
+  CMD_ConfigSensorOutput = 144;
+  RESP_ConfigSensorOutput = 145;
+
   CMD_LogStatus = 139; // NO_BODY -> INFO_LogStatus
 }
 
@@ -116,7 +122,6 @@ enum LoggingMode {
     Armed = 1;
     ManualHz = 2;
 }
-
 message Command_ConfigureLogging {
     required LoggingMode setting = 1;
     optional uint32 parameter = 2; // Used for ManualHz
@@ -167,4 +172,18 @@ enum EraseType {
 }
 message Command_EraseLog {
     required EraseType type = 1;
+}
+
+message Command_ConfigSensorOutput {
+    required uint32 rate_hz = 1;
+}
+message SensorData {
+    repeated float lsm_acceleration_g = 1;
+    repeated float lsm_gyro_dps = 2;
+    repeated float adxl_acceleration_g = 3;
+    repeated float lis_magnetic_mG = 4;
+    required float lps_pressure_hPa = 5;
+
+    optional Quaternion filtered_orientation = 6;
+    optional Altitude filtered_altimetry = 7;
 }

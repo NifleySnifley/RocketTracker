@@ -1,1 +1,16 @@
 Resp_DownloadLog_Segment.data max_size:4096
+
+Quaternion.components max_count:4
+Quaternion.components fixed_count:true
+
+SensorData.lsm_acceleration_g max_count:3
+SensorData.lsm_acceleration_g fixed_count:true
+
+SensorData.lsm_gyro_dps max_count:3
+SensorData.lsm_gyro_dps fixed_count:true
+
+SensorData.adxl_acceleration_g max_count:3
+SensorData.adxl_acceleration_g fixed_count:true
+
+SensorData.lis_magnetic_mG max_count:3
+SensorData.lis_magnetic_mG fixed_count:true

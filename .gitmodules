@@ -4,3 +4,22 @@
 [submodule "RocketTracker-Sw/nanopb"]
 	path = RocketTracker-Sw/nanopb
 	url = https://github.com/nanopb/nanopb
+[submodule "RocketTracker-Sw/rtrk_gui/external/ImOsm"]
+	path = RocketTracker-Sw/rtrk_gui/external/ImOsm
+	url = https://github.com/gorbatschow/ImOsm
+[submodule "RocketTracker-Sw/rtrk_gui/external/implot"]
+	path = RocketTracker-Sw/rtrk_gui/external/implot
+	url = https://github.com/epezent/implot
+[submodule "RocketTracker-Sw/rtrk_gui/external/imgui_club"]
+	path = RocketTracker-Sw/rtrk_gui/external/imgui_club
+	url = https://github.com/ocornut/imgui_club
+[submodule "RocketTracker-Sw/rtrk_gui/external/ImFileDialog"]
+	path = RocketTracker-Sw/rtrk_gui/external/ImFileDialog
+	url = https://github.com/dfranx/ImFileDialog
+[submodule "RocketTracker-Sw/rtrk_gui/external/imgui"]
+	path = RocketTracker-Sw/rtrk_gui/external/imgui
+	url = https://github.com/ocornut/imgui
+	branch = docking
+[submodule "RocketTracker-Sw/rtrk_gui/external/glfw"]
+	path = RocketTracker-Sw/rtrk_gui/external/glfw
+	url = https://github.com/glfw/glfw

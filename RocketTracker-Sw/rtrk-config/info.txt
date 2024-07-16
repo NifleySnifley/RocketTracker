@@ -1,0 +1,35 @@
+Value types:
+- int
+- restricted_int
+- float
+- restricted_float
+- string (limited to fixed N chars)
+
+
+Custom types allowed in the defs category:
+- named restricted_int and restricted_float
+- custom enums
+
+Categorical "if" statements
+- For instance, have sub parameters for each different value of a selectable enum (settings for each pyro mode!)
+
+
+Generator makes:
+- Makes C enums and typedefs for all defined enums
+- Makes typedefs for custom named types in the definitions page
+
+
+ALL ENUMS TURN INTO DEFINES!
+- Enums can have "subtypes" that change them from being an enum (serialize->int) to a set of definitions that have a different type (float)
+ - Maybe C enums can support this natively? 
+ - Valid subtypes: int, float, string
+ - Enum "!values" field can be dict
+	- entries either are empty map, or one parameter for "!value"
+
+Valid types for defs:
+ - int (and range if applicable)
+ - float (and range if applicable)
+ - enum (with optional subtype, defaults to int for typical C-enum)
+
+
+Like kconfig but mine and with floats

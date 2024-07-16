@@ -688,7 +688,7 @@ static void init_logging() {
         .cs_id = 0,
         .cs_io_num = PIN_FLASH_CS,
         .io_mode = SPI_FLASH_DIO,
-        .freq_mhz = TL_SPI_FREQ / 1000000, // TODO: FASTER!!!
+        .freq_mhz = 20, // 20MHz is a safe speed below the GPIO matrix limit
     };
     // esp_err_t e = spi_bus_add_flash_device()
     ESP_ERROR_CHECK(spi_bus_add_flash_device(&ext_flash, &device_config));
@@ -710,9 +710,9 @@ static void init_logging() {
 
     logger_flush(&logger);
 
-    uint8_t buf[256];
-    ESP_ERROR_CHECK(logger_read_bytes_raw(&logger, 0, sizeof(buf), buf));
-    ESP_LOG_BUFFER_HEX("FLASH CONTENTS", buf, sizeof(buf));
+    // uint8_t buf[256];
+    // ESP_ERROR_CHECK(logger_read_bytes_raw(&logger, 0, sizeof(buf), buf));
+    // ESP_LOG_BUFFER_HEX("FLASH CONTENTS", buf, sizeof(buf));
 
     const esp_timer_create_args_t logtimer_args = {
         .callback = &log_timer_task,
@@ -902,7 +902,7 @@ static void init_radio() {
     // xSemaphoreGive(radio_mutex);
 
     spi_device_interface_config_t dev_cfg = {
-        .clock_speed_hz = TL_SPI_FREQ,
+        .clock_speed_hz = 10e6, // 10MHz is sx1276's max SPI freq
         .spics_io_num = PIN_RFM_CS,
         .queue_size = 16,
         .command_bits = 0,
@@ -996,7 +996,7 @@ static void radio_tx(uint8_t* data, int len) {
         }
 
 
-        ESP_LOGI("RADIO", "Actually TXing");
+        // ESP_LOGI("RADIO", "Actually TXing");
 
         ESP_ERROR_CHECK(sx127x_lora_tx_set_for_transmission(data, (uint8_t)len, radio));
         ESP_ERROR_CHECK(sx127x_set_opmod(SX127x_MODE_TX, SX127x_MODULATION_LORA, radio));
@@ -1053,7 +1053,7 @@ static void platform_delay(uint32_t ms) {
 
 static void init_lps22() {
     spi_device_interface_config_t devcfg = {
-        .clock_speed_hz = SENSORS_SPI_FREQ,
+        .clock_speed_hz = 8e6, // "Reccomended" SPI frequency
         .mode = 0,
         .spics_io_num = PIN_LPS_CS,
         .queue_size = 7,
@@ -1096,7 +1096,7 @@ static void init_lps22() {
 static void init_lis3mdl() {
     spi_device_interface_config_t devcfg = {
         // TODO: Can this be increased on a per-device basis?
-        .clock_speed_hz = SENSORS_SPI_FREQ,
+        .clock_speed_hz = 10e6,
         .mode = 0,
         .spics_io_num = PIN_LIS3MDL_CS,
         .queue_size = 7,
@@ -1145,8 +1145,7 @@ static void init_lis3mdl() {
 
 static void init_lsm6dsm() {
     spi_device_interface_config_t devcfg = {
-        // TODO: Can this be increased on a per-device basis?
-        .clock_speed_hz = SENSORS_SPI_FREQ,
+        .clock_speed_hz = 10e6,
         .mode = 0,
         .spics_io_num = PIN_LSM6DSM_CS,
         .queue_size = 7,
@@ -1280,7 +1279,7 @@ static IRAM_ATTR void adxl_isr(void* arg) {
 static void init_adxl375() {
     spi_device_interface_config_t devcfg = {
         // TODO: Can this be increased on a per-device basis?
-        .clock_speed_hz = SENSORS_SPI_FREQ,
+        .clock_speed_hz = 5e6,
         .mode = 3, // CPOL=1, CPHA=1
         .spics_io_num = PIN_ADXL_CS,
         .queue_size = 7,
@@ -1694,6 +1693,12 @@ static bool s_led_state = false;
 
 void app_main(void) {
     gpio_install_isr_service(0);
+
+#if DEBUG_ON_EXP
+    ESP_ERROR_CHECK(uart_set_pin(UART_NUM_0,
+        DEBUG_UART_RX, DEBUG_UART_TX,
+        UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
+#endif
 
     fmgr_mutex = xSemaphoreCreateRecursiveMutex();
     tl_spi_hold_sem = xSemaphoreCreateMutex();
