@@ -66,7 +66,8 @@ std::vector<std::tuple<DatumTypeID, std::shared_ptr<std::vector<uint8_t>>>> Fram
 bool FrameManager2::encode_datum(DatumTypeID id, google::protobuf::Message* datum) {
 	if (datum == nullptr) {
 		return false;
-	} else {
+	}
+	else {
 		// datum->SerializeToArray();
 	}
 }
@@ -111,4 +112,150 @@ FrameManager2::~FrameManager2() {
 	if (this->owns_buffer) {
 		free(this->frame_buffer);
 	}
+}
+
+using namespace google::protobuf;
+
+std::shared_ptr<Message> decode_datum(DatumTypeID id, std::shared_ptr<std::vector<uint8_t>> payload)
+{
+	std::shared_ptr<Message> decoded;
+	switch (id)
+	{
+	case INFO_Blank:
+		decoded = nullptr;
+		break;
+	case INFO_Raw:
+		decoded = nullptr;
+		break;
+	case INFO_Battery:
+	{
+		auto msg = std::make_shared<Battery>();
+		msg->ParseFromArray(payload->data(), payload->size());
+		decoded = std::dynamic_pointer_cast<Message>(msg);
+	}
+	break;
+	case INFO_GPS:
+	{
+		auto msg = std::make_shared<GPS>();
+		msg->ParseFromArray(payload->data(), payload->size());
+		decoded = std::dynamic_pointer_cast<Message>(msg);
+	}
+	break;
+	case INFO_Altitude:
+	{
+		auto msg = std::make_shared<Altitude>();
+		msg->ParseFromArray(payload->data(), payload->size());
+		decoded = std::dynamic_pointer_cast<Message>(msg);
+	}
+	break;
+	case INFO_Orientation:
+	{
+		auto msg = std::make_shared<Orientation>();
+		msg->ParseFromArray(payload->data(), payload->size());
+		decoded = std::dynamic_pointer_cast<Message>(msg);
+	}
+	break;
+	case INFO_Alert:
+	{
+		auto msg = std::make_shared<Alert>();
+		msg->ParseFromArray(payload->data(), payload->size());
+		decoded = std::dynamic_pointer_cast<Message>(msg);
+	}
+	break;
+	case INFO_LogStatus:
+	{
+		auto msg = std::make_shared<LogStatus>();
+		msg->ParseFromArray(payload->data(), payload->size());
+		decoded = std::dynamic_pointer_cast<Message>(msg);
+	}
+	break;
+	case IMFO_SensorData:
+	{
+		auto msg = std::make_shared<SensorData>();
+		msg->ParseFromArray(payload->data(), payload->size());
+		decoded = std::dynamic_pointer_cast<Message>(msg);
+	}
+	break;
+	case STATUS_RadioRxStatus:
+	{
+		auto msg = std::make_shared<RadioRxStatus>();
+		msg->ParseFromArray(payload->data(), payload->size());
+		decoded = std::dynamic_pointer_cast<Message>(msg);
+	}
+	break;
+	case CMD_Ping:
+	{
+		auto msg = std::make_shared<Command_Ping>();
+		msg->ParseFromArray(payload->data(), payload->size());
+		decoded = std::dynamic_pointer_cast<Message>(msg);
+	}
+	break;
+	case RESP_Ping:
+	{
+		auto msg = std::make_shared<Resp_Ping>();
+		msg->ParseFromArray(payload->data(), payload->size());
+		decoded = std::dynamic_pointer_cast<Message>(msg);
+	}
+	break;
+	case CMD_ConfigureLogging:
+	{
+		auto msg = std::make_shared<Command_ConfigureLogging>();
+		msg->ParseFromArray(payload->data(), payload->size());
+		decoded = std::dynamic_pointer_cast<Message>(msg);
+	}
+	break;
+
+	case CMD_EraseLog:
+	{
+		auto msg = std::make_shared<Command_EraseLog>();
+		msg->ParseFromArray(payload->data(), payload->size());
+		decoded = std::dynamic_pointer_cast<Message>(msg);
+	}
+	break;
+	case CMD_DownloadLog:
+		decoded = nullptr;
+		break;
+	case RESP_DownloadLog_Segment:
+	{
+		auto msg = std::make_shared<Resp_DownloadLog_Segment>();
+		msg->ParseFromArray(payload->data(), payload->size());
+		decoded = std::dynamic_pointer_cast<Message>(msg);
+	}
+		break;
+	case ACK_Download_Complete:
+	{
+		auto msg = std::make_shared<Acknowledgement_Download_Complete>();
+		msg->ParseFromArray(payload->data(), payload->size());
+		decoded = std::dynamic_pointer_cast<Message>(msg);
+	}
+		break;
+	case CMD_ConfigSensorOutput:
+	{
+		auto msg = std::make_shared<Command_ConfigSensorOutput>();
+		msg->ParseFromArray(payload->data(), payload->size());
+		decoded = std::dynamic_pointer_cast<Message>(msg);
+	}
+		break;
+	case RESP_ConfigSensorOutput:
+		decoded = nullptr;
+		break;
+	case CMD_LogStatus:
+		decoded = nullptr;
+		break;
+
+	case RESP_DownloadLog:
+	case RESP_EraseLog:
+	case RESP_ConfigureLogging: // All basic responses here!
+	{
+		auto msg = std::make_shared<Resp_BasicError>();
+		msg->ParseFromArray(payload->data(), payload->size());
+		decoded = std::dynamic_pointer_cast<Message>(msg);
+	}
+	break;
+	default:
+		decoded = nullptr;
+		break;
+	}
+
+	return decoded;
 }

@@ -100,6 +100,8 @@
 		"bitset": "cpp",
 		"cinttypes": "cpp",
 		"complex": "cpp",
-		"random": "cpp"
+		"random": "cpp",
+		"*.ipp": "cpp",
+		"strstream": "cpp"
 	}
 }

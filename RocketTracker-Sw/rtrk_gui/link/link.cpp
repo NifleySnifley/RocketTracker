@@ -1,15 +1,18 @@
-#include "link/link_menu.hpp"
-#include "imgui.h"
 #include <boost/system.hpp>
 #include <boost/bind.hpp>
+#include <boost/date_time/posix_time/posix_time.hpp>
 #include <string>
 #include <vector>
 #include <iostream>
-
+#include "link.hpp"
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include "windows.h"
 #endif
+
+#include "frame_manager_v2.hpp"
+
+using namespace boost;
 
 #ifdef _WIN32
 std::vector<std::string> enumerate_serial_ports() {
@@ -32,26 +35,15 @@ std::vector<std::string> enumerate_serial_ports() {
 #endif
 // TODO: Implement for *NIX
 
-using namespace boost;
-
-const char* link_types[2] = {
-	"Receiver (USB)",
-	"Tracker (USB)"
-};
-
-LinkMenu::LinkMenu() : io(4) {
+SerialLink::SerialLink() : io(0), keepalive_timer(io) {
 	this->main_port = new asio::serial_port(this->io);
-	// this->secondary_port = new asio::serial_port(this->io);
 }
 
-void LinkMenu::update_serialports() {
-	this->available_ports.clear();
-	this->available_ports.push_back("<Select Port>");
-	std::vector<std::string> ports = enumerate_serial_ports();
-	this->available_ports.insert(available_ports.end(), ports.begin(), ports.end());
+std::vector<std::string> SerialLink::get_available_ports() {
+	return enumerate_serial_ports();
 }
 
-void LinkMenu::rx_callback(const boost::system::error_code& error, std::size_t n) {
+void SerialLink::rx_callback(const boost::system::error_code& error, std::size_t n) {
 	static int usb_recv_frameidx = 0;
 	// 0 read len MSB, 4 read len LSB, 1 reading data, 2 esc, 3 done UNUSED
 	static int usb_recv_state = 0;
@@ -125,7 +117,7 @@ void LinkMenu::rx_callback(const boost::system::error_code& error, std::size_t n
 		this->main_port->async_read_some(
 			boost::asio::buffer(this->buffer),
 			boost::bind(
-				&LinkMenu::rx_callback,
+				&SerialLink::rx_callback,
 				this,
 				boost::asio::placeholders::error,
 				boost::asio::placeholders::bytes_transferred
@@ -134,82 +126,89 @@ void LinkMenu::rx_callback(const boost::system::error_code& error, std::size_t n
 	}
 }
 
-void LinkMenu::frame_rx_callback(uint16_t n) {
+void SerialLink::frame_rx_callback(uint16_t n) {
 	std::cout << "Received frame, length = " << n << std::endl;
 	FrameManager2 fmgr(this->buffer, (size_t)n);
 	for (const auto& [a, b] : fmgr.get_datums()) {
-		std::cout << "Datum type: " << a << ", Length: " << b->size() << std::endl;
+		this->rx_signal(a, b);
 	}
 }
 
-void LinkMenu::init() {
-	update_serialports();
-}
-
-void LinkMenu::render_gui(bool* isopen) {
-	static size_t port_idx = 0;
-	this->io.run();
-
-	if (*isopen) {
-		ImGui::Begin("Link Configuration", isopen);
-
-		// ImGui::Combo("Connection Type", (int*)&this->type, link_types, IM_ARRAYSIZE(link_types));
-
-		if (ImGui::Button("Refresh Ports")) {
-			update_serialports();
-		}
-
-		port_idx = std::min(port_idx, this->available_ports.size() - 1);
-
-		const char* combo_preview_value = this->available_ports[port_idx].c_str();
-
-		bool newport = false;
-
-		ImGui::Text("Serial Port:");
-		if (ImGui::BeginCombo("##Serial Port", combo_preview_value, 0)) {
-			for (int n = 0; n < this->available_ports.size(); n++) {
-				const bool is_selected = (port_idx == n);
-				if (ImGui::Selectable(this->available_ports[n].c_str(), is_selected)) {
-					port_idx = n;
-					newport = true;
-				}
-
-				// Set the initial focus when opening the combo (scrolling + keyboard navigation focus)
-				if (is_selected)
-					ImGui::SetItemDefaultFocus();
-			}
-			ImGui::EndCombo();
-		}
-
-		if (newport && port_idx != 0) {
-			if (this->main_port->is_open()) this->main_port->close();
-			try {
-				this->main_port->open(this->available_ports[port_idx]);
-				this->main_port->async_read_some(
-					boost::asio::buffer(this->buffer),
-					boost::bind(
-						&LinkMenu::rx_callback,
-						this,
-						boost::asio::placeholders::error,
-						boost::asio::placeholders::bytes_transferred
-					)
-				);
-			}
-			catch (...) {
-				std::cerr << "Error opening serial port '" << this->available_ports[port_idx] << "'" << std::endl;
-			}
-		}
-
-		ImGui::End();
-	}
-}
-
-void LinkMenu::deinit() {
+SerialLink::~SerialLink() {
 	if (this->main_port != nullptr && this->main_port->is_open()) {
 		this->main_port->close();
 	}
 }
 
-LinkMenu::~LinkMenu() {
-	delete this->main_port;
+void SerialLink::run() {
+	this->io.run();
+}
+
+void SerialLink::keep_alive(const boost::system::error_code& error) {
+	uint8_t alive[2] = { 0 };
+	this->main_port->async_write_some(
+		asio::buffer(alive, sizeof(alive)),
+		[this](boost::system::error_code ec, std::size_t /*length*/) {
+			if (ec) {
+				std::cout << "Error writing to serial port" << std::endl;
+			}
+		}
+	);
+
+	// TODO: Implement sending zero bytes to keepalive
+	this->keepalive_timer.expires_at(this->keepalive_timer.expires_at() + boost::posix_time::milliseconds(250));
+	this->keepalive_timer.async_wait(boost::bind(
+		&SerialLink::keep_alive,
+		this,
+		boost::asio::placeholders::error
+	));
+}
+
+void SerialLink::send_frame(FrameManager2* frame) {
+	uint8_t* data = 0;
+	size_t len = 0;
+	data = frame->get_data(&len);
+
+	this->main_port->async_write_some(
+		asio::buffer(data, len),
+		[this](boost::system::error_code ec, std::size_t /*length*/) {
+			if (ec) {
+				std::cout << "Error writing frame to serial port" << std::endl;
+			}
+		}
+	);
+}
+
+bool SerialLink::open_port(std::string port) {
+	if (this->main_port->is_open()) this->main_port->close();
+	try {
+		this->main_port->open(port);
+		// FIXME: Need to flush input!
+		this->main_port->async_read_some(
+			boost::asio::buffer(this->buffer),
+			boost::bind(
+				&SerialLink::rx_callback,
+				this,
+				boost::asio::placeholders::error,
+				boost::asio::placeholders::bytes_transferred
+			)
+		);
+		// Start keeping the port alive
+		this->keepalive_timer.expires_at(boost::posix_time::microsec_clock::local_time() + boost::posix_time::milliseconds(250));
+		this->keepalive_timer.async_wait(boost::bind(
+			&SerialLink::keep_alive,
+			this,
+			boost::asio::placeholders::error
+		));
+		return true;
+	}
+	catch (...) {
+		return false;
+	}
+}
+
+void SerialLink::close() {
+	if (this->main_port->is_open()) {
+		this->main_port->close();
+	}
 }

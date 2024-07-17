@@ -23,3 +23,6 @@
 [submodule "RocketTracker-Sw/rtrk_gui/external/glfw"]
 	path = RocketTracker-Sw/rtrk_gui/external/glfw
 	url = https://github.com/glfw/glfw
+[submodule "RocketTracker-Sw/rtrk_gui/external/protobuf"]
+	path = RocketTracker-Sw/rtrk_gui/external/protobuf
+	url = https://github.com/protocolbuffers/protobuf

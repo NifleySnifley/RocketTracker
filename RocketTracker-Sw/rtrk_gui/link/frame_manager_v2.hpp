@@ -7,6 +7,7 @@
 #include <iostream>
 #include "frame_manager_common.h"
 #include "protocol.pb.h"
+#include <memory>
 
 class FrameManager2 {
 private:
@@ -37,5 +38,7 @@ public:
 
 	~FrameManager2();
 };
+
+std::shared_ptr<google::protobuf::Message> decode_datum(DatumTypeID id, std::shared_ptr<std::vector<uint8_t>> payload);
 
 #endif

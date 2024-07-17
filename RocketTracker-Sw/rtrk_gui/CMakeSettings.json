@@ -1,0 +1,16 @@
+﻿{
+  "configurations": [
+	{
+	  "name": "x64-Debug",
+	  "generator": "Ninja",
+	  "configurationType": "Debug",
+	  "inheritEnvironments": [ "msvc_x64_x64" ],
+	  "buildRoot": "${projectDir}\\build\\${name}",
+	  "installRoot": "${projectDir}\\out\\install\\${name}",
+	  "buildCommandArgs": "",
+	  "ctestCommandArgs": "",
+	  "cmakeToolchain": "C:/Users/finns/Documents/Repos/vcpkg/scripts/buildsystems/vcpkg.cmake",
+	  "cmakeCommandArgs": " -D Protobuf_PROTOC_EXECUTABLE=C:\\Users\\finns\\Documents\\Repos\\vcpkg\\installed\\x64-windows\\tools\\protobuf\\protoc.exe"
+	}
+  ]
+}
