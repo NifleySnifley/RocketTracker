@@ -10,7 +10,7 @@
 	  "buildCommandArgs": "",
 	  "ctestCommandArgs": "",
 	  "cmakeToolchain": "C:/Users/finns/Documents/Repos/vcpkg/scripts/buildsystems/vcpkg.cmake",
-	  "cmakeCommandArgs": " -D Protobuf_PROTOC_EXECUTABLE=C:\\Users\\finns\\Documents\\Repos\\vcpkg\\installed\\x64-windows\\tools\\protobuf\\protoc.exe"
+	  "cmakeCommandArgs": "-DCMAKE_PREFIX_PATH=C:\\Users\\finns\\Documents\\Repos\\vcpkg\\packages\\protobuf_x64-windows\\"
 	}
   ]
 }

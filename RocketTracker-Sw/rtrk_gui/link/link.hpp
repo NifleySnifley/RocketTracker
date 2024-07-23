@@ -6,11 +6,14 @@
 #include "boost/signals2.hpp"
 #include "protocol.pb.h"
 #include "link/frame_manager_v2.hpp"
+#include "MSerialLib.h"
 
 #define USB_SERIAL_BUF_SIZE 1024*5
 #define USB_SER_ESC 0xFF
 #define USB_SER_ESC_ESC 0x01
 #define USB_SER_ESC_NULL 0x02
+
+using namespace MSerial;
 
 class Link {
 public:
@@ -19,14 +22,24 @@ public:
 	virtual void send_frame(FrameManager2* frame) = 0;
 };
 
+std::vector<uint8_t> cobs_decode(uint8_t* data, size_t len);
+std::vector<uint8_t> cobs_encode(uint8_t* data, size_t len);
+
 class SerialLink : public Link {
 private:
-	boost::asio::serial_port* main_port;
-	boost::asio::io_service io;
+	//boost::asio::serial_port* main_port;
+	//boost::asio::io_service io;
 
-	boost::asio::deadline_timer keepalive_timer;
+	//boost::asio::deadline_timer keepalive_timer;
 
-	uint8_t buffer[USB_SERIAL_BUF_SIZE];
+	MSerialLib serial_port;
+
+	uint8_t serial_buffer[USB_SERIAL_BUF_SIZE];
+
+	std::vector<uint8_t> rx_buf;
+
+	std::atomic_bool thread_stop = false;
+	std::thread io_thread;
 
 	void keep_alive(const boost::system::error_code& error);
 
@@ -41,7 +54,7 @@ public:
 
 	void rx_callback(const boost::system::error_code& error, std::size_t n);
 
-	void frame_rx_callback(uint16_t length); // Stored in buffer
+	void frame_rx_callback(uint8_t* data, size_t size); // Stored in buffer
 
 	void run();
 

@@ -293,6 +293,7 @@ void link_decode_datum(int i, DatumTypeID id, int len, uint8_t* data, bool is_us
     } else if (id == DatumTypeID_CMD_ConfigSensorOutput) {
         Command_ConfigSensorOutput cmd;
         if (pb_decode(&istream, Command_ConfigSensorOutput_fields, &cmd)) {
+            ESP_LOGW("LINK", "Setting sensor date output rate to %dHz", (int)cmd.rate_hz);
             if ((sensor_output_hz == 0) && (cmd.rate_hz > 0)) {
                 // Start
                 xTaskCreate(sensor_output_task, "sensor_output", 1024 * 4, NULL, 10, &sensor_output_task_handle);
@@ -483,7 +484,7 @@ void link_flush() {
 void link_send_datum(DatumTypeID type, const pb_msgdesc_t* fields, const void* src_struct) {
     xSemaphoreTakeRecursive(fmgr_mutex, portMAX_DELAY);
     // DONE: Switch between USB and LoRa accordingly
-    ESP_LOGI("LINK", "Sending datum %d", (int)type);
+    // ESP_LOGI("LINK", "Sending datum %d", (int)type);
 
     if (USB_AVAILABLE) {
         // Send with USB link
@@ -1254,18 +1255,18 @@ static void telemetry_tx_task(void* arg) {
 static void sensor_output_task(void* arg) {
     while (1) {
         SensorData data;
-        memcpy(data.lsm_acceleration_g, acceleration_g, sizeof(acceleration_g));
-        memcpy(data.lsm_gyro_dps, angular_rate_dps, sizeof(angular_rate_dps));
-        memcpy(data.lis_magnetic_mG, magnetic_mG, sizeof(magnetic_mG));
-        memcpy(data.adxl_acceleration_g, adxl_acceleration_g, sizeof(adxl_acceleration_g));
+        memcpy(data.lsm_acceleration_g, (float*)acceleration_g, sizeof(acceleration_g));
+        memcpy(data.lsm_gyro_dps, (float*)angular_rate_dps, sizeof(angular_rate_dps));
+        memcpy(data.lis_magnetic_mG, (float*)magnetic_mG, sizeof(magnetic_mG));
+        memcpy(data.adxl_acceleration_g, (float*)adxl_acceleration_g, sizeof(adxl_acceleration_g));
         data.lps_pressure_hPa = pressure_hPa;
 
         data.has_filtered_altimetry = false;
         data.has_filtered_orientation = false;
 
         if (USB_AVAILABLE) {
-            link_send_datum(DatumTypeID_IMFO_SensorData, SensorData_fields, &data);
-            link_flush();
+            link_send_datum(DatumTypeID_INFO_SensorData, SensorData_fields, &data);
+            ESP_LOGW("SENSOR", "OUT!");
         } else {
             // Do literally nothing
         }

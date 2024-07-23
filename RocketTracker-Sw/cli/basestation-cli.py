@@ -55,7 +55,10 @@ def receiver_thread():
                     data = cobs_decode(bytes(buffer))
                     # print(data.hex(':'))
                     length = int.from_bytes(data[0:2], byteorder='little')
+                    # print(length, len(data))
+
                     if (length == (len(data)-2)):
+                        print(f"Got frame: {length} bytes")
                         f = Frame()
                         f.load_from_bytes(data[2:])
                         for d in f.datums:
@@ -400,6 +403,26 @@ def monitor(args):
     # args.log.close()
 
 
+def sensormon(args):
+    global EX
+    init_cli(args)
+
+    d = Datum(protocol.CMD_ConfigSensorOutput)
+    d.load_protobuf(protocol.Command_ConfigSensorOutput(rate_hz=60))
+    tx_queue.put(d)
+
+    while (not EX):
+        d = wait_for_datum([protocol.INFO_SensorData], 1.5)
+        if d is not None:  # and d.typeid != protocol.DatumTypeID.STATUS_RadioRxStatus
+            datastr = ', '.join([str(round(e, 4)).rjust(7)
+                                for e in d.to_dict()['lsm_acceleration_g']])
+            print(datastr + '         \r', end='')
+            # if (args.log)
+            # args.log.writelines([f"{d.to_dict()}"])
+
+    # args.log.close()
+
+
 def ping(args):
     init_cli(args)
 
@@ -492,6 +515,9 @@ parser_monitor = subparsers.add_parser('monitor')
 parser_monitor.add_argument(
     '-l', '--log', type=argparse.FileType('w'))
 parser_monitor.set_defaults(func=monitor)
+
+parser_sensormon = subparsers.add_parser('sensormon')
+parser_sensormon.set_defaults(func=sensormon)
 
 parser_ping = subparsers.add_parser('ping')
 parser_ping.set_defaults(func=ping)

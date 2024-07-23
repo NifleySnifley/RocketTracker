@@ -34,7 +34,13 @@
 #include "menu_interface.hpp"
 #include "connection_menu.hpp"
 #include "debug_view_menu.hpp"
+#include "data_viewer.hpp"
 #include "link/link.hpp"
+#include <boost/date_time/posix_time/posix_time.hpp>
+#include "main.h"
+#include "implot.h"
+
+boost::posix_time::ptime app_start_time;
 
 static void glfw_error_callback(int error, const char* description) {
 	fprintf(stderr, "GLFW Error %d: %s\n", error, description);
@@ -80,6 +86,8 @@ int main(int, char**) {
 	// Setup Dear ImGui context
 	IMGUI_CHECKVERSION();
 	ImGui::CreateContext();
+	ImPlot::CreateContext();
+
 	ImGuiIO& io = ImGui::GetIO(); (void)io;
 	io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;     // Enable Keyboard Controls
 	io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;      // Enable Gamepad Controls
@@ -129,13 +137,17 @@ int main(int, char**) {
 	// Our state
 	ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
 
-	bool link_menu_open = true, debug_menu_open = false;
+	app_start_time = boost::posix_time::microsec_clock::local_time();
+
+	bool link_menu_open = true, debug_menu_open = false, plots_open = false;
 	SerialLink link = SerialLink();
 	ConnectionMenu conn_menu = ConnectionMenu(&link);
 	DebugViewer dbg = DebugViewer(&link);
+	DataViewer plots = DataViewer(&link);
 
 	conn_menu.init();
 	dbg.init();
+	plots.init();
 
 	// Main loop
 #ifdef __EMSCRIPTEN__
@@ -163,6 +175,7 @@ int main(int, char**) {
 			if (ImGui::BeginMenu("Window")) {
 				ImGui::MenuItem("Connection Menu", "", &link_menu_open);
 				ImGui::MenuItem("Debug Viewer", "", &debug_menu_open);
+				ImGui::MenuItem("Data Viewer", "", &plots_open);
 
 				ImGui::EndMenu();
 			}
@@ -174,6 +187,7 @@ int main(int, char**) {
 		link.run();
 		conn_menu.render_gui(&link_menu_open);
 		dbg.render_gui(&debug_menu_open);
+		plots.render_gui(&plots_open);
 
 
 		// Rendering
@@ -203,10 +217,13 @@ int main(int, char**) {
 
 	conn_menu.deinit();
 	dbg.deinit();
+	plots.deinit();
 
 	// Cleanup
 	ImGui_ImplOpenGL3_Shutdown();
 	ImGui_ImplGlfw_Shutdown();
+
+	ImPlot::DestroyContext();
 	ImGui::DestroyContext();
 
 	glfwDestroyWindow(window);

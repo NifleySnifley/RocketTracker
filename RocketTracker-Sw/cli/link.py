@@ -61,6 +61,9 @@ DATUMTYPEID_TO_CLASS = {
     CMD_EraseLog: Command_EraseLog,
     RESP_EraseLog: Resp_BasicError,
 
+    CMD_ConfigSensorOutput: Command_ConfigSensorOutput,
+    INFO_SensorData: SensorData,
+
     CMD_DownloadLog: None,  # IMPLEMENT!!!!
     RESP_DownloadLog: Resp_BasicError,  # IMPLEMENT!!!!
     RESP_DownloadLog_Segment: Resp_DownloadLog_Segment,

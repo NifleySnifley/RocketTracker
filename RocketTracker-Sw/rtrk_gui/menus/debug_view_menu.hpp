@@ -12,12 +12,11 @@
 #include "imgui.h"
 
 class LogDisplay {
-private:
+public:
 	ImGuiTextBuffer Buf;
 	ImGuiTextFilter Filter;
 	ImVector<int> LineOffsets; // Index to lines offset. We maintain this with AddLog() calls.
-	
-public:
+
 	bool AutoScroll = true;  // Keep scrolling if already at the bottom.
 
 	LogDisplay();
@@ -39,6 +38,7 @@ private:
 	Link* link;
 	LogDisplay log;
 	DatumDisplayType disptype;
+	bool isopen;
 
 public:
 	DebugViewer(Link* link);

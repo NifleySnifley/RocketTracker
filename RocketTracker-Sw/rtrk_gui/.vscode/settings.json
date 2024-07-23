@@ -102,6 +102,7 @@
 		"complex": "cpp",
 		"random": "cpp",
 		"*.ipp": "cpp",
-		"strstream": "cpp"
+		"strstream": "cpp",
+		"queue": "cpp"
 	}
 }

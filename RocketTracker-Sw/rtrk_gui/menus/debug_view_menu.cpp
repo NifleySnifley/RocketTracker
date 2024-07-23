@@ -111,32 +111,32 @@ void LogDisplay::Draw(const char* title, bool* p_open) {
 
 void DebugViewer::datum_callback(DatumTypeID id, std::shared_ptr<std::vector<uint8_t>> payload) {
 	// JSON format!
+	if (isopen) {
+		if (this->disptype == DatumDisplayType::Json) {
+			auto decoded = decode_datum(id, payload);
+			std::string json_out = "";
+			// TODO: Fix this!
+			if (protobuf::util::MessageToJsonString(*decoded, &json_out).ok()) {
+				this->log.AddLog("Datum type %d = %s\n", (int)id, json_out.c_str());
+			}
+		} else if (this->disptype == DatumDisplayType::Bytes) {
+			std::string payload_hex = "";
 
-	if (this->disptype == DatumDisplayType::Json) {
-		auto decoded = decode_datum(id, payload);
-		//std::string json_out = decoded->DebugString();
-		// TODO: Fix this!
-		/*if (protobuf::util::MessageToJsonString(*decoded, &json_out).ok()) {
-			this->log.AddLog("Datum type %d = %s\n", (int)id, json_out.c_str());
-		}*/
-	}
-	else if (this->disptype == DatumDisplayType::Bytes) {
-		std::string payload_hex = "";
-
-		for (uint8_t b : *payload) {
-			char lsb = b & 0x0F;
-			char msb = (b & 0xF0) >> 4;
-			payload_hex.push_back((char)((msb <= 9) ? '0' + msb : 'A' + (msb - 10)));
-			payload_hex.push_back((char)((lsb <= 9) ? '0' + lsb : 'A' + (lsb - 10)));
-			payload_hex.push_back(':');
+			for (uint8_t b : *payload) {
+				char lsb = b & 0x0F;
+				char msb = (b & 0xF0) >> 4;
+				payload_hex.push_back((char)((msb <= 9) ? '0' + msb : 'A' + (msb - 10)));
+				payload_hex.push_back((char)((lsb <= 9) ? '0' + lsb : 'A' + (lsb - 10)));
+			}
+			this->log.AddLog("Datum type %d = %s\n", (int)id, payload_hex.c_str());
 		}
-		this->log.AddLog("Datum type %d = %s\n", (int)id, payload_hex.c_str());
 	}
 }
 
 DebugViewer::DebugViewer(Link* link) {
 	this->link = link;
 	this->log = LogDisplay();
+	this->disptype = DatumDisplayType::Json;
 }
 void DebugViewer::deinit() {
 
@@ -148,8 +148,12 @@ void DebugViewer::init() {
 }
 
 void DebugViewer::render_gui(bool* open) {
+	this->isopen = *open;
 	if (*open) {
 		ImGui::Begin("Debug Viewer", open);
+
+		ImGui::RadioButton("Bytes (raw)", (int*)&this->disptype, DatumDisplayType::Bytes); ImGui::SameLine();
+		ImGui::RadioButton("JSON", (int*)&this->disptype, DatumDisplayType::Json); ImGui::SameLine();
 
 		ImGui::End();
 

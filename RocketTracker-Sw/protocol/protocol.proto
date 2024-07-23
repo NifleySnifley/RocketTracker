@@ -88,7 +88,7 @@ enum DatumTypeID {
   INFO_Orientation = 5; // Orientation
   INFO_Alert = 6; // Alert
   INFO_LogStatus = 7; // LogStatus
-  IMFO_SensorData = 8; // SensorData
+  INFO_SensorData = 8; // SensorData
 
   // Receiver
   STATUS_RadioRxStatus = 64;
@@ -112,7 +112,6 @@ enum DatumTypeID {
   // ACK_Download_Resend = 141; // TODO: Implement a mechanism for resending portions of the log!
 
   CMD_ConfigSensorOutput = 144;
-  RESP_ConfigSensorOutput = 145;
 
   CMD_LogStatus = 139; // NO_BODY -> INFO_LogStatus
 }

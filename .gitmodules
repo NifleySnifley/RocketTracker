@@ -23,6 +23,9 @@
 [submodule "RocketTracker-Sw/rtrk_gui/external/glfw"]
 	path = RocketTracker-Sw/rtrk_gui/external/glfw
 	url = https://github.com/glfw/glfw
-[submodule "RocketTracker-Sw/rtrk_gui/external/protobuf"]
-	path = RocketTracker-Sw/rtrk_gui/external/protobuf
-	url = https://github.com/protocolbuffers/protobuf
+[submodule "RocketTracker-Sw/rtrk_gui/external/libserial"]
+	path = RocketTracker-Sw/rtrk_gui/external/libserial
+	url = https://github.com/crayzeewulf/libserial
+[submodule "RocketTracker-Sw/rtrk_gui/external/MSerialLib"]
+	path = RocketTracker-Sw/rtrk_gui/external/MSerialLib
+	url = https://github.com/puppydytt/MSerialLib
