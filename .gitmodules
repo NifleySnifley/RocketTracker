@@ -29,3 +29,12 @@
 [submodule "RocketTracker-Sw/rtrk_gui/external/MSerialLib"]
 	path = RocketTracker-Sw/rtrk_gui/external/MSerialLib
 	url = https://github.com/puppydytt/MSerialLib
+[submodule "RocketTracker-Sw/rtrk_gui/external/mINI"]
+	path = RocketTracker-Sw/rtrk_gui/external/mINI
+	url = https://github.com/metayeti/mINI
+[submodule "RocketTracker-Sw/rtrk_gui/external/latlon"]
+	path = RocketTracker-Sw/rtrk_gui/external/latlon
+	url = https://github.com/gorbatschow/latlon
+[submodule "RocketTracker-Sw/rtrk_gui/external/stb"]
+	path = RocketTracker-Sw/rtrk_gui/external/stb
+	url = https://github.com/nothings/stb
