@@ -195,7 +195,7 @@ void DataViewer::render_gui(bool* open) {
 	}*/
 
 		if (ImPlot::BeginPlot("Data")) {
-
+			ImPlot::SetupAxis(ImAxis_X1, nullptr, ImPlotAxisFlags_AutoFit);
 			for (auto& [k, v] : this->series) {
 				if (this->series_enabled[k]) {
 
@@ -213,7 +213,7 @@ void DataViewer::render_gui(bool* open) {
 					if (scaleY)
 						*/
 						// ImPlotAxisFlags_AutoFit ImPlot::SetupAxisLimits(ImAxis_Y1, *data_min, *data_max, ImGuiCond_Always);
-					ImPlot::SetupAxis(ImAxis_X1, nullptr, ImPlotAxisFlags_AutoFit);
+					
 					ImPlot::PlotLine(title.c_str(), v.timestamps.linearize(), v.data.linearize(), v.data.size());
 				}
 			}

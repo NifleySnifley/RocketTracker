@@ -9,8 +9,8 @@ find_package(OpenGL REQUIRED)
 set(FRAME_MANAGER_DIR "../comms_lib/")
 include_directories(${FRAME_MANAGER_DIR})
 
-add_subdirectory(external/MSerialLib/MSerialLib)
-
+#add_subdirectory(external/latlon)
+#add_subdirectory(external/ImOsm)
 
 # add_subdirectory(external/ImFileDialog)
 # add_subdirectory(external/implot)
@@ -45,6 +45,8 @@ set(MENU_SOURCES
     menus/connection_menu.cpp
     menus/debug_view_menu.cpp
     menus/data_viewer.cpp
+    menus/map_menu.cpp
+    menus/configurator.cpp
 )
 
 set(IMPLOT_SOURCES
@@ -55,12 +57,24 @@ set(IMPLOT_SOURCES
 
 add_library(implot ${IMPLOT_SOURCES})
 
-add_executable(rtrk_gui main.cpp ${MENU_SOURCES} link/frame_manager_v2.cpp link/link.cpp ${IMGUI_SOURCES} ${PROTO_SRCS})
+add_executable(rtrk_gui main.cpp ${MENU_SOURCES} link/frame_manager_v2.cpp link/link.cpp ${IMGUI_SOURCES} ${PROTO_SRCS}  "include_imgui.h" "menus/map_menu.cpp")
 # protobuf_generate(TARGET rtrk_gui)
 
-target_link_libraries(rtrk_gui glfw OpenGL::GL ${Boost_LIBRARIES} ${Protobuf_LIBRARIES} proto implot absl::log MSerialLib)
-target_include_directories(rtrk_gui PRIVATE ${Boost_INCLUDE_DIRS} external/implot external/MSerialLib/MSerialLib)
-include_directories(${PROTOBUF_INCLUDE_DIRS})
+target_link_libraries(rtrk_gui 
+    glfw 
+    OpenGL::GL 
+    ${Boost_LIBRARIES} 
+    ${Protobuf_LIBRARIES} 
+    proto 
+    implot 
+    absl::log 
+)
+include_directories(
+    ${Boost_INCLUDE_DIRS} 
+    external/stb 
+    external/implot 
+    ${PROTOBUF_INCLUDE_DIRS}
+)
 
 
 add_custom_target(copy_assets

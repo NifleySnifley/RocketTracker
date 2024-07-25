@@ -2,7 +2,7 @@
 #define SENSOR_DATA_VIEWER_H
 
 #include "protocol.pb.h"
-#include "imgui.h"
+#include "include_imgui.h"
 #include <functional>
 #include <boost/system.hpp>
 #include <boost/bind.hpp>

@@ -1,3 +1,6 @@
+#ifndef FMGR_H
+#define FMGR_H
+
 #ifdef __cplusplus
 #define EXTERNC extern "C"
 #else
@@ -34,3 +37,5 @@ EXTERNC uint16_t fmgr_get_cur_frame_id(fmgr_t* fmgr);
 EXTERNC uint16_t fmgr_util_crc16(uint8_t* buffer, size_t length);
 
 #undef EXTERNC
+
+#endif

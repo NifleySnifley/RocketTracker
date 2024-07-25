@@ -1,4 +1,5 @@
 #include "sensors.h"
+#include "configuration.h"
 
 // Sensors
 stmdev_ctx_t lps22;
@@ -22,6 +23,71 @@ volatile float temperature_degC;
 volatile float adxl_acceleration_g[3];
 
 SemaphoreHandle_t sensors_mutex;
+
+float apply_2pt_calibration(float value, calibration_2pt_t calibration) {
+    return (value + calibration.offset) * calibration.scale;
+}
+void apply_2pt_calibrations_inplace(float* value, calibration_2pt_t* calibrations, int n) {
+    for (int i = 0; i < n; ++i)
+        value[i] = apply_2pt_calibration(value[i], calibrations[i]);
+}
+
+calibration_2pt_t adxl_acc_calib[3];
+calibration_2pt_t lsm_acc_calib[3];
+calibration_2pt_t lsm_gyr_calib[3];
+calibration_2pt_t lis_mag_calib[3];
+calibration_2pt_t lps_calib;
+
+void init_sensors() {
+    // ADXL375 Calibration
+    config_get_float(CONFIG_CALIBRATION_ADXL375_X_OFFSET_KEY, &adxl_acc_calib[0].offset);
+    config_get_float(CONFIG_CALIBRATION_ADXL375_X_SCALE_KEY, &adxl_acc_calib[0].scale);
+
+    config_get_float(CONFIG_CALIBRATION_ADXL375_Y_OFFSET_KEY, &adxl_acc_calib[1].offset);
+    config_get_float(CONFIG_CALIBRATION_ADXL375_Y_SCALE_KEY, &adxl_acc_calib[1].scale);
+
+    config_get_float(CONFIG_CALIBRATION_ADXL375_Z_OFFSET_KEY, &adxl_acc_calib[2].offset);
+    config_get_float(CONFIG_CALIBRATION_ADXL375_Z_SCALE_KEY, &adxl_acc_calib[2].scale);
+
+
+    // LSM6DSM Acceleration Calibration
+    config_get_float(CONFIG_CALIBRATION_LSM6DSM_ACCEL_X_OFFSET_KEY, &lsm_acc_calib[0].offset);
+    config_get_float(CONFIG_CALIBRATION_LSM6DSM_ACCEL_X_SCALE_KEY, &lsm_acc_calib[0].scale);
+
+    config_get_float(CONFIG_CALIBRATION_LSM6DSM_ACCEL_Y_OFFSET_KEY, &lsm_acc_calib[1].offset);
+    config_get_float(CONFIG_CALIBRATION_LSM6DSM_ACCEL_Y_SCALE_KEY, &lsm_acc_calib[1].scale);
+
+    config_get_float(CONFIG_CALIBRATION_LSM6DSM_ACCEL_Z_OFFSET_KEY, &lsm_acc_calib[2].offset);
+    config_get_float(CONFIG_CALIBRATION_LSM6DSM_ACCEL_Z_SCALE_KEY, &lsm_acc_calib[2].scale);
+
+    // LSM6DSM Gyro Calibration
+    config_get_float(CONFIG_CALIBRATION_LSM6DSM_GYRO_X_OFFSET_KEY, &lsm_gyr_calib[0].offset);
+    lsm_gyr_calib[0].scale = 1.0f;
+    // config_get_float(&lsm_gyr_calib[0].scale, CONFIG_CALIBRATION_LSM6DSM_GYRO_X_SCALE_KEY);
+
+    config_get_float(CONFIG_CALIBRATION_LSM6DSM_GYRO_Y_OFFSET_KEY, &lsm_gyr_calib[1].offset);
+    lsm_gyr_calib[1].scale = 1.0f;
+    // config_get_float(&lsm_gyr_calib[1].scale, CONFIG_CALIBRATION_LSM6DSM_GYRO_Y_SCALE_KEY);
+
+    config_get_float(CONFIG_CALIBRATION_LSM6DSM_GYRO_Z_OFFSET_KEY, &lsm_gyr_calib[2].offset);
+    lsm_gyr_calib[2].scale = 1.0f;
+    // config_get_float(&lsm_gyr_calib[2].scale, CONFIG_CALIBRATION_LSM6DSM_GYRO_Z_SCALE_KEY);
+
+
+    // LIS3MDL Calibration
+    config_get_float(CONFIG_CALIBRATION_LIS3MDL_X_OFFSET_KEY, &lis_mag_calib[0].offset);
+    config_get_float(CONFIG_CALIBRATION_LIS3MDL_X_SCALE_KEY, &lis_mag_calib[0].scale);
+
+    config_get_float(CONFIG_CALIBRATION_LIS3MDL_Y_OFFSET_KEY, &lis_mag_calib[1].offset);
+    config_get_float(CONFIG_CALIBRATION_LIS3MDL_Y_SCALE_KEY, &lis_mag_calib[1].scale);
+
+    config_get_float(CONFIG_CALIBRATION_LIS3MDL_Y_OFFSET_KEY, &lis_mag_calib[2].offset);
+    config_get_float(CONFIG_CALIBRATION_LIS3MDL_Y_SCALE_KEY, &lis_mag_calib[2].scale);
+
+    // LPS22 Calibration
+    config_get_float(CONFIG_CALIBRATION_LPS22_OFFSET_KEY, &lps_calib.offset);
+    lps_calib.scale = 1.0f;
+}
 
 void init_sensor_spi() {
     ESP_LOGI("SYS", "Initializing sensor SPI...");
@@ -330,6 +396,9 @@ void sensors_routine(void* arg) {
             lps22hh_pressure_raw_get(&lps22, &data_raw_pressure);
             pressure_hPa = lps22hh_from_lsb_to_hpa(data_raw_pressure);
 
+            // CALIBRATE!
+            pressure_hPa = apply_2pt_calibration(pressure_hPa, lps_calib);
+
             log_data.lps_press_raw = data_raw_pressure;
             log_data.flags |= LOG_FLAG_PRESS_FRESH;
         }
@@ -343,12 +412,18 @@ void sensors_routine(void* arg) {
             /* Read magnetic field data */
             memset(data_raw_magnetic, 0x00, 3 * sizeof(int16_t));
             lis3mdl_magnetic_raw_get(&lis3mdl, data_raw_magnetic);
+            // +X global is sensor Y
             magnetic_mG[0] = 1000 * lis3mdl_from_fs4_to_gauss(
-                data_raw_magnetic[0]);
-            magnetic_mG[1] = 1000 * lis3mdl_from_fs4_to_gauss(
                 data_raw_magnetic[1]);
+            // +Y global is -sensor X
+            magnetic_mG[1] = -1000 * lis3mdl_from_fs4_to_gauss(
+                data_raw_magnetic[0]);
+            // +Z global is sensor Z
             magnetic_mG[2] = 1000 * lis3mdl_from_fs4_to_gauss(
                 data_raw_magnetic[2]);
+
+            // CALIBRATE!
+            apply_2pt_calibrations_inplace((float*)magnetic_mG, lis_mag_calib, 3);
 
             // memset(&data_raw_temperature, 0x00, sizeof(int16_t));
             // lis3mdl_temperature_raw_get(&lis3mdl, &data_raw_temperature);
@@ -369,12 +444,19 @@ void sensors_routine(void* arg) {
             /* Read acceleration field data */
             memset(data_raw_acceleration, 0x00, 3 * sizeof(int16_t));
             lsm6dsm_acceleration_raw_get(&lsm6dsm, data_raw_acceleration);
+            // X global is sensor Y
             acceleration_g[0] =
-                lsm6dsm_from_fs16g_to_mg(data_raw_acceleration[0]) * 0.001f;
-            acceleration_g[1] =
                 lsm6dsm_from_fs16g_to_mg(data_raw_acceleration[1]) * 0.001f;
+            // Y global is -sensor X
+            acceleration_g[1] =
+                -lsm6dsm_from_fs16g_to_mg(data_raw_acceleration[0]) * 0.001f;
+            // Z global is sensor Z
             acceleration_g[2] =
                 lsm6dsm_from_fs16g_to_mg(data_raw_acceleration[2]) * 0.001f;
+
+            // CALIBRATE!
+            apply_2pt_calibrations_inplace((float*)acceleration_g, lsm_acc_calib, 3);
+
 
             memcpy(log_data.lsm_acc_raw, data_raw_acceleration, sizeof(data_raw_acceleration));
             log_data.flags |= LOG_FLAG_LSM_ACC_FRESH;
@@ -384,12 +466,16 @@ void sensors_routine(void* arg) {
             /* Read angular rate field data */
             memset(data_raw_angular_rate, 0x00, 3 * sizeof(int16_t));
             lsm6dsm_angular_rate_raw_get(&lsm6dsm, data_raw_angular_rate);
+            // TODO: Confirm that this inversion is neccesary with the axes inversion of X and Y
             angular_rate_dps[0] =
-                lsm6dsm_from_fs2000dps_to_mdps(data_raw_angular_rate[0]) * 0.001f;
-            angular_rate_dps[1] =
                 lsm6dsm_from_fs2000dps_to_mdps(data_raw_angular_rate[1]) * 0.001f;
+            angular_rate_dps[1] =
+                -lsm6dsm_from_fs2000dps_to_mdps(data_raw_angular_rate[0]) * 0.001f;
             angular_rate_dps[2] =
                 lsm6dsm_from_fs2000dps_to_mdps(data_raw_angular_rate[2]) * 0.001f;
+
+            // CALIBRATE!
+            apply_2pt_calibrations_inplace((float*)angular_rate_dps, lsm_gyr_calib, 3);
 
             memcpy(log_data.lsm_gyr_raw, data_raw_angular_rate, sizeof(data_raw_angular_rate));
             log_data.flags |= LOG_FLAG_LSM_GYR_FRESH;
@@ -402,9 +488,15 @@ void sensors_routine(void* arg) {
             memset(data_raw_acceleration_adxl, 0x00, 3 * sizeof(int16_t));
             adxl375_get_acceleration_raw(&adxl, data_raw_acceleration_adxl);
 
-            adxl_acceleration_g[0] = (data_raw_acceleration_adxl[0] * 49) * 0.001f;
-            adxl_acceleration_g[1] = (data_raw_acceleration_adxl[1] * 49) * 0.001f;
+            // Global X is sensor Y
+            adxl_acceleration_g[0] = (data_raw_acceleration_adxl[1] * 49) * 0.001f;
+            // Global Y is -sensor X
+            adxl_acceleration_g[1] = -(data_raw_acceleration_adxl[0] * 49) * 0.001f;
+            // Z is Z
             adxl_acceleration_g[2] = (data_raw_acceleration_adxl[2] * 49) * 0.001f;
+
+            // CALIBRATE!
+            apply_2pt_calibrations_inplace((float*)adxl_acceleration_g, adxl_acc_calib, 3);
 
             memcpy(log_data.adxl_acc_raw, data_raw_acceleration_adxl, sizeof(data_raw_acceleration_adxl));
             log_data.flags |= LOG_FLAG_ADXL_ACC_FRESH;

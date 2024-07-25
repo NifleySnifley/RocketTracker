@@ -9,7 +9,7 @@
 #include "protocol.pb.h"
 #include "link/frame_manager_v2.hpp"
 #include "link/link.hpp"
-#include "imgui.h"
+#include "include_imgui.h"
 
 class LogDisplay {
 public:

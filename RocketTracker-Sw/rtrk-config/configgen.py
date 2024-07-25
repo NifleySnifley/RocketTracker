@@ -1,5 +1,6 @@
 from configparse import *
-from csnake import CodeWriter, Struct, Enum, Function, Variable, Typecast
+from csnake import CodeWriter, Struct, Enum, Function, Variable, Typecast, FormattedLiteral
+from csnake.cconstructs import CFloatLiteral
 import base64
 from hashlib import shake_128
 c = parse_configuration(
@@ -8,7 +9,15 @@ c = parse_configuration(
 types = flatten_config_types(c)
 values = flatten_config_values(c)
 
+Nvalues = len(values)
+
 cw = CodeWriter()
+
+cw.add_line("#ifndef CONFIG_GENERATED_H")
+cw.add_line("#define CONFIG_GENERATED_H")
+
+cw.include("stdint.h")
+
 
 TYPES = [
     "IntType",
@@ -46,6 +55,7 @@ for tname, t in types.items():
         cw.add_enum(e)
         # print(basename)
 
+
 defs = ['\n']
 enkeys = set()
 for v in values:
@@ -68,11 +78,46 @@ for v in values:
         defs.append(f"#define {vpath_clean.upper()}_DEFAULT {defval}")
     defs.append('')
 
+cw.add_lines("""typedef union config_value_t {
+   float float_value;
+   int32_t int_value;
+   char* string_value;
+   bool bool_value;
+   int32_t enum_value;
+} config_value_t;""")
+
 cfg_entry = Struct("config_entry_t", typedef=True)
 cfg_entry.add_variable(Variable("type", "config_type_t"))
-cfg_entry.add_variable(Variable("name", "const char*"))
-cfg_entry.add_variable(Variable("encoded_key", "const char*"))
+cfg_entry.add_variable(Variable("key", "const char*"))
+cfg_entry.add_variable(Variable("hashed_key", "const char*"))
+cfg_entry.add_variable(Variable("default_value", "config_value_t"))
 cw.add_struct(cfg_entry)
+
+
+cw.add('\n'.join(defs))
+cw.add_line(f"extern const config_entry_t CONFIG_MANIFEST[{Nvalues}];")
+
+cw.add_line("#endif")
+
+cw.add_line("#ifdef CONFIG_GENERATED_IMPL")
+
+
+def convert_value(type, value):
+    v = None
+    if (isinstance(type, EnumType)):
+        v = Typecast(type.values.index(value), "int32_t")
+    elif isinstance(type, FloatType):
+        v = Typecast(value, "float")
+    elif isinstance(type, IntType):
+        v = Typecast(value, "int32_t")
+    elif isinstance(type, BoolType):
+        v = Typecast(value, "bool")
+    elif isinstance(type, StringType):
+        v = Typecast(value, "const char*")
+    else:
+        v = value
+    return Typecast(v, "config_value_t")
+
 
 # Manifest
 var = Variable(
@@ -81,8 +126,9 @@ var = Variable(
     value=[
         {
             "type": Typecast(TYPES.index(v.type.__class__.__name__), "config_type_t"),
-            "name": v.path,
-            "encoded_key": encode_key(v.path)
+            "key": v.path,
+            "hashed_key": encode_key(v.path),
+            "default_value": convert_value(v.type, v.default)
         }
         for v in values
     ],
@@ -90,5 +136,7 @@ var = Variable(
 )
 cw.add_variable_initialization(var)
 
-cw.add('\n'.join(defs))
-cw.write_to_file("./generated/config.h")
+cw.add_line("#endif")
+
+
+cw.write_to_file("./generated/config_generated.h")

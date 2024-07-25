@@ -16,8 +16,22 @@ from distutils.util import strtobool
 # else:
 # from str2bool import str2bool as strtobool
 import pickle
-import json
+from os import path
+from lib.rtrk_config.configparse import parse_configuration, flatten_config_values, flatten_config_types, FloatType, EnumType, BoolType, IntType, StringType
+from lib.rtrk_config.configgen import encode_key
+from tqdm import tqdm
+import curses
 
+CONFIG_DIR = path.join(
+    sys.path[0], "lib/rtrk_config/configfiles/")
+CONFIGURATION = parse_configuration(
+    open(path.join(CONFIG_DIR, "tracker_config.jsonc")), root=CONFIG_DIR)
+CONFIG_KEY_ENCODE = {v.path: encode_key(
+    v.path) for v in flatten_config_values(CONFIGURATION)}
+CONFIG_KEY_DECODE = {v: k for k, v in CONFIG_KEY_ENCODE.items()}
+CONFIG_LOOKUP = {
+    v.path: v for v in flatten_config_values(CONFIGURATION)
+}
 
 serialport: Serial | None = None
 rx_queue: Queue[Datum] = Queue()
@@ -33,9 +47,13 @@ EX = False
 
 def sigint_handler(signum, frame):
     global serialport, EX
+
+    if (EX):
+        print("Force quitting")
+        exit(0)
     EX = True
     print('Exiting!')
-    exit(0)
+    # exit(0)
     # if (serialport is not None and serialport.is_open):
     #     serialport.close()
 
@@ -47,7 +65,7 @@ def receiver_thread():
     global serialport, EX
     buffer = []
 
-    while (not EX):
+    while (True):
         for char in serialport.read_all():
             if (char == 0x00):
                 if (len(buffer)):
@@ -58,7 +76,7 @@ def receiver_thread():
                     # print(length, len(data))
 
                     if (length == (len(data)-2)):
-                        print(f"Got frame: {length} bytes")
+                        # print(f"Got frame: {length} bytes")
                         f = Frame()
                         f.load_from_bytes(data[2:])
                         for d in f.datums:
@@ -74,7 +92,7 @@ def receiver_thread():
 def sender_thread():
     global serialport, EX
 
-    while (not EX):
+    while (True):
         # Send just under the keepalive
         try:
             d = tx_queue.get(timeout=0.4)
@@ -104,7 +122,7 @@ def sender_thread():
 def wait_for_datum(valid_types=None, timeout=None) -> None | Datum:
     global EX
     stime = time.time()
-    while ((time.time() - stime) < timeout) and not EX:
+    while ((time.time() - stime) < timeout):
         datum = None
         try:
             datum = rx_queue.get(timeout=timeout)
@@ -387,8 +405,11 @@ def log_download(args):
                 return
             segments.append(segment.to_dict())
 
+    exit(0)
 
 # TODO: Make a nice "view" command with a TUI
+
+
 def monitor(args):
     global EX
     init_cli(args)
@@ -399,27 +420,110 @@ def monitor(args):
             print(d)
             # if (args.log)
             # args.log.writelines([f"{d.to_dict()}"])
-
+    exit(0)
     # args.log.close()
 
 
 def sensormon(args):
+    def vector_print_just(vector):
+        return ','.join([f"{v:9.4f}" for v in vector])
+
     global EX
     init_cli(args)
 
     d = Datum(protocol.CMD_ConfigSensorOutput)
-    d.load_protobuf(protocol.Command_ConfigSensorOutput(rate_hz=60))
+    d.load_protobuf(protocol.Command_ConfigSensorOutput(
+        rate_hz=args.frequency))
+    tx_queue.put(d)
+
+    stdscr = curses.initscr()
+    stdscr.nodelay(True)
+    curses.noecho()
+    curses.cbreak()
+
+    while (not EX):
+        d = wait_for_datum([protocol.INFO_SensorData], 1.5)
+        if d is not None:  # and d.typeid != protocol.DatumTypeID.STATUS_RadioRxStatus
+            # print(d)
+            # repeated float lsm_acceleration_g = 1;
+            # repeated float lsm_gyro_dps = 2
+            # repeated float adxl_acceleration_g = 3
+            # repeated float lis_magnetic_mG = 4
+            # required float lps_pressure_hPa = 5
+
+            # optional Quaternion filtered_orientation = 6
+            # optional Altitude filtered_altimetry = 7
+
+            pb = d.to_protobuf()
+            stdscr.addstr(
+                0, 0, f"ADXL375 Acceleration (g): {vector_print_just(pb.adxl_acceleration_g)}")
+            stdscr.addstr(
+                1, 0, f"LSM6DSM Acceleration (g): {vector_print_just(pb.lsm_acceleration_g)}")
+            stdscr.addstr(
+                2, 0, f"LSM6DSM Gyro (dps): {vector_print_just(pb.lsm_gyro_dps)}")
+            stdscr.addstr(
+                3, 0, f"LIS3MDL Magnetic Field (mG): {vector_print_just(pb.lis_magnetic_mG)}")
+            stdscr.addstr(
+                4, 0, f"LPS22 Pressure (hPa): {pb.lps_pressure_hPa:9.4f}")
+
+            stdscr.refresh()
+            if (args.log):
+                args.log.writelines([f"{d.to_dict()}"])
+
+            if (stdscr.getch() != -1):
+                EX = True
+                break
+
+    curses.nocbreak()
+    stdscr.keypad(False)
+    curses.echo()
+    curses.endwin()
+
+    d = Datum(protocol.CMD_ConfigSensorOutput)
+    d.load_protobuf(protocol.Command_ConfigSensorOutput(
+        rate_hz=0))
+    tx_queue.put(d)
+
+    print("Cleaned up.")
+    exit(0)
+    # args.log.close()
+
+
+CALIBSTATE_STANDBY = 1
+CALIBSTATE_Z_WAITING = 1
+
+
+def calibrate(args):
+    global EX
+    init_cli(args)
+
+    d = Datum(protocol.CMD_ConfigSensorOutput)
+    d.load_protobuf(protocol.Command_ConfigSensorOutput(
+        rate_hz=200))
     tx_queue.put(d)
 
     while (not EX):
         d = wait_for_datum([protocol.INFO_SensorData], 1.5)
         if d is not None:  # and d.typeid != protocol.DatumTypeID.STATUS_RadioRxStatus
-            datastr = ', '.join([str(round(e, 4)).rjust(7)
-                                for e in d.to_dict()['lsm_acceleration_g']])
-            print(datastr + '         \r', end='')
-            # if (args.log)
-            # args.log.writelines([f"{d.to_dict()}"])
+            pb = d.to_protobuf()
+            # stdscr.addstr(
+            #     0, 0, f"ADXL375 Acceleration (g): {vector_print_just(pb.adxl_acceleration_g)}")
+            # stdscr.addstr(
+            #     1, 0, f"LSM6DSM Acceleration (g): {vector_print_just(pb.lsm_acceleration_g)}")
+            # stdscr.addstr(
+            #     2, 0, f"LSM6DSM Gyro (dps): {vector_print_just(pb.lsm_gyro_dps)}")
+            # stdscr.addstr(
+            #     3, 0, f"LIS3MDL Magnetic Field (mG): {vector_print_just(pb.lis_magnetic_mG)}")
+            # stdscr.addstr(
+            #     4, 0, f"LPS22 Pressure (hPa): {pb.lps_pressure_hPa:9.4f}")
 
+    d = Datum(protocol.CMD_ConfigSensorOutput)
+    d.load_protobuf(protocol.Command_ConfigSensorOutput(
+        rate_hz=0))
+    tx_queue.put(d)
+
+    print("Cleaned up.")
+    exit(0)
     # args.log.close()
 
 
@@ -464,6 +568,172 @@ def receiver_config(args):
 
     vgps.flush()
     vgps.close()
+
+
+def config_get(args):
+    init_cli(args)
+
+    if (args.key not in CONFIG_KEY_ENCODE):
+        print(f"Error, key {args.key} not found")
+        exit(1)
+
+    parameter = CONFIG_LOOKUP[args.key]
+
+    d = Datum(protocol.CMD_Config)
+    pb = protocol.Config(
+        key_hashed=CONFIG_KEY_ENCODE[args.key], mode=protocol.ConfigGet)
+    d.load_protobuf(pb)
+
+    tx_queue.put(d)
+    resp = wait_for_datum([protocol.RESP_ConfigValue], 5.0)
+    # print(resp)
+    if (resp is None):
+        print("Error: timed out")
+    elif ("error" in resp.to_dict()):
+        print(f"Error getting config value: {resp.to_dict()['error']}")
+    else:
+        response = resp.to_protobuf()
+        value_path = CONFIG_KEY_DECODE[response.key_hashed]
+
+        value = None
+        if (response.HasField("bool_value")):
+            value = response.bool_value
+        elif (response.HasField("float_value")):
+            value = response.float_value
+        elif (response.HasField("int_value")):
+            value = response.int_value
+        elif (response.HasField("string_value")):
+            value = response.string_value
+        elif (response.HasField("enum_value")):
+            value = CONFIG_LOOKUP[value_path].type.values[response.enum_value]
+
+        print(f"{value_path} = {value}")
+
+
+def config_set(args):
+    init_cli(args)
+
+    if (args.key not in CONFIG_KEY_ENCODE):
+        print(f"Error, key {args.key} not found")
+        exit(1)
+
+    parameter = CONFIG_LOOKUP[args.key]
+
+    d = Datum(protocol.CMD_Config)
+    pb = protocol.Config(
+        key_hashed=CONFIG_KEY_ENCODE[args.key], mode=protocol.ConfigSet)
+    value = parameter.type.parse_value(eval(args.value))
+    if (value is None):
+        print("Error parsing value!")
+        print(f"Type: {parameter.type}")
+        exit(1)
+
+    if isinstance(parameter.type, FloatType):
+        pb.float_value = value
+    elif isinstance(parameter.type, IntType):
+        pb.int_value = value
+    elif isinstance(parameter.type, BoolType):
+        pb.bool_value = value
+    elif isinstance(parameter.type, StringType):
+        pb.string_value = value
+    elif isinstance(parameter.type, EnumType):
+        pb.enum_value = value
+
+    d.load_protobuf(pb)
+
+    # print(d)
+    tx_queue.put(d)
+    resp = wait_for_datum([protocol.RESP_ConfigSet], 5.0)
+    # print(resp)
+    if (resp is None):
+        print("Error: timed out")
+    elif ("error" in resp.to_dict()):
+        print(f"Error setting config value: {resp.to_dict()['error']}")
+    else:
+        print(f"Successfully set {args.key} to {args.value}")
+
+
+def config_erase(args):
+    init_cli(args)
+
+    if (args.key not in CONFIG_KEY_ENCODE):
+        print(f"Error, key {args.key} not found")
+        exit(1)
+
+    d = Datum(protocol.CMD_Config)
+    pb = protocol.Config(
+        key_hashed=CONFIG_KEY_ENCODE[args.key], mode=protocol.ConfigErase)
+    d.load_protobuf(pb)
+
+    tx_queue.put(d)
+
+    resp = wait_for_datum([protocol.RESP_ConfigSet], 5.0)
+    # print(resp)
+    if (resp is None):
+        print("Error: timed out")
+    elif ("error" in resp.to_dict()):
+        print(f"Error erasing config value: {resp.to_dict()['error']}")
+    else:
+        print(f"Successfully erased {args.key}")
+
+
+def config_reset(args):
+    init_cli(args)
+    n_erased = 0
+    vnames = []
+    for v in tqdm(flatten_config_values(CONFIGURATION), desc="Erasing configuration"):
+        d = Datum(protocol.CMD_Config)
+        pb = protocol.Config(
+            key_hashed=CONFIG_KEY_ENCODE[v.path], mode=protocol.ConfigErase)
+        d.load_protobuf(pb)
+
+        tx_queue.put(d)
+        n_erased += 1
+        vnames.append(v.path)
+
+    for i in tqdm(range(n_erased), desc="Verifying configuration"):
+        resp = wait_for_datum([protocol.RESP_ConfigSet], 5.0)
+        if (resp is None):
+            print("Error: timed out")
+        elif ("error" in resp.to_dict()):
+            print(f"Error erasing config value {vnames[i]}")
+
+
+def config_list(args):
+    init_cli(args)
+
+    d = Datum(protocol.CMD_ConfigEnumerate)
+    tx_queue.put(d)
+
+    print("Requesting device configuration...\n")
+
+    while (True):
+        enumval = wait_for_datum(
+            [protocol.RESP_ConfigEnumerateDone, protocol.RESP_ConfigValue], 1.5)
+        if (enumval is None):
+            print("Error: timed out")
+            break
+        elif enumval.typeid == protocol.RESP_ConfigEnumerateDone:
+            print("\nDone.")
+            break
+        elif enumval.typeid == protocol.RESP_ConfigValue:
+            # val = enumval.to_protobuf()
+            response = enumval.to_protobuf()
+            value_path = CONFIG_KEY_DECODE[response.key_hashed]
+
+            value = None
+            if (response.HasField("bool_value")):
+                value = response.bool_value
+            elif (response.HasField("float_value")):
+                value = response.float_value
+            elif (response.HasField("int_value")):
+                value = response.int_value
+            elif (response.HasField("string_value")):
+                value = response.string_value
+            elif (response.HasField("enum_value")):
+                value = CONFIG_LOOKUP[value_path].type.values[response.enum_value]
+
+            print(f"{value_path} = {value}")
 
 
 def argparse_restricted_float(mi, ma):
@@ -516,8 +786,15 @@ parser_monitor.add_argument(
     '-l', '--log', type=argparse.FileType('w'))
 parser_monitor.set_defaults(func=monitor)
 
+parser_monitor = subparsers.add_parser('calibrate')
+parser_monitor.set_defaults(func=calibrate)
+
 parser_sensormon = subparsers.add_parser('sensormon')
 parser_sensormon.set_defaults(func=sensormon)
+parser_sensormon.add_argument(
+    "-f", "--frequency", default=60, type=argparse_restricted_int(1, 256))
+parser_sensormon.add_argument(
+    '-l', '--log', type=argparse.FileType('w'))
 
 parser_ping = subparsers.add_parser('ping')
 parser_ping.set_defaults(func=ping)
@@ -559,6 +836,29 @@ parser_log_download.add_argument(
 # parser_log_download.add_argument(
 # '-f', '--format', required=True, type=str, choices=['rlog', 'csv', 'json'])
 parser_log_download.set_defaults(func=log_download)
+
+parser_config = subparsers.add_parser('config')
+config_subparsers = parser_config.add_subparsers()
+
+parser_config_get = config_subparsers.add_parser('get')
+parser_config_get.set_defaults(func=config_get)
+parser_config_get.add_argument("key", type=str)
+
+
+parser_config_set = config_subparsers.add_parser('set')
+parser_config_set.set_defaults(func=config_set)
+parser_config_set.add_argument("key", type=str)
+parser_config_set.add_argument("value", type=str)
+
+parser_config_erase = config_subparsers.add_parser('erase')
+parser_config_erase.set_defaults(func=config_erase)
+parser_config_erase.add_argument("key", type=str)
+
+parser_config_reset = config_subparsers.add_parser('reset')
+parser_config_reset.set_defaults(func=config_reset)
+
+parser_config_list = config_subparsers.add_parser('list')
+parser_config_list.set_defaults(func=config_list)
 
 # TODO: Monitor (receiver) logging
 

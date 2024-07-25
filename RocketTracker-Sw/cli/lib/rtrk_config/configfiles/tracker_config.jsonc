@@ -1,0 +1,77 @@
+{
+	"!name": "Configuration",
+	"radio": "!include(lora_radio_config.jsonc)",
+	"calibration": "!include(calibration_config.jsonc)",
+	"logging": {
+		"!name": "Logger Settings",
+		"launch_threshold": {
+			"!name": "Launch detection acceleration threshold",
+			"!type": "float(0,200)",
+			"!suffix": "g",
+			"!description": "When the rocket is armed and detects an acceleration greater than this value, a launch event has occured",
+			"!default": 4.0
+		},
+		"liftoff_duration": {
+			"!name": "Liftoff logging duration",
+			"!type": "float(0, 100)",
+			"!suffix": "s",
+			"!default": 10.0
+		},
+		"liftoff_lograte": {
+			"!name": "Logging rate during liftoff",
+			"!type": "float(1,256)",
+			"!suffix": "Hz",
+			"!default": 200.0
+		},
+		"flight_lograte": {
+			"!name": "Logging rate during flight",
+			"!type": "float(1,256)",
+			"!suffix": "Hz",
+			"!default": 60.0
+		}
+	},
+	"misc": {
+		"!name": "Miscellaneous",
+		"batt_hz": {
+			"!type": "float(0.01, 1)",
+			"!suffix": "Hz",
+			"!name": "Battery monitoring update rate",
+			"!default": 0.1
+		},
+		"debug_monitor_en": {
+			"!type": "bool",
+			"!name": "Debug monitor enabled",
+			"!default": false
+		},
+		"debug_monitor": {
+			"!showif": "debug_monitor_en", // This is a custom parameter that will be handled on the GUI side of things!
+			"!name": "Debug monitor configuration",
+			"hz": {
+				"!type": "float(0.01, 100)",
+				"!name": "Debug monitor rate",
+				"!suffix": "Hz",
+				"!default": 1.0
+			},
+			"lps22": {
+				"!type": "bool",
+				"!name": "Enable LPS22 output",
+				"!default": false
+			},
+			"lsm6dsm": {
+				"!type": "bool",
+				"!name": "Enable LSM6DSM output",
+				"!default": false
+			},
+			"lis3mdl": {
+				"!type": "bool",
+				"!name": "Enable lis3mdl output",
+				"!default": false
+			},
+			"adxl375": {
+				"!type": "bool",
+				"!name": "Enable ADXL375 output",
+				"!default": false
+			}
+		}
+	}
+}

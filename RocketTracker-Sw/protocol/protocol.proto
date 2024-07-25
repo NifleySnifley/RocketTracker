@@ -113,7 +113,41 @@ enum DatumTypeID {
 
   CMD_ConfigSensorOutput = 144;
 
+  CMD_Config = 145; // Config (mode!=ConfigResponse) -> RESP_ConfigSet | RESP_ConfigValue
+  CMD_ConfigEnumerate = 146; // NO BODY -> All RESP_ConfigValue
+
+  RESP_ConfigValue = 148; // Config (mode=ConfigResponse)
+  RESP_ConfigSet = 149; // Config (mode=)
+  RESP_ConfigEnumerateDone = 150; // -> Resp_ConfigEnumerateDone
+
   CMD_LogStatus = 139; // NO_BODY -> INFO_LogStatus
+}
+
+enum ConfigMode {
+  ConfigSet = 1;
+  ConfigGet = 2;
+  ConfigErase = 3; // "set" to default
+  ConfigGetResponse = 4; // Used as response for a value
+  ConfigSetResponse = 5;
+  ConfigEnumerateResponse = 6;
+}
+
+message Config {
+    required string key_hashed = 2;
+    required ConfigMode mode = 3;
+
+    optional int32 int_value = 10;
+    optional float float_value = 11;
+    optional bool bool_value = 12;
+    optional string string_value = 13;
+    optional int32 enum_value = 14;
+
+    optional uint32 error = 20;
+}
+
+message Resp_ConfigEnumerateDone {
+    required uint32 num_values = 1;
+    optional uint32 error = 2;
 }
 
 enum LoggingMode {

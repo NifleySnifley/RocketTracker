@@ -6,7 +6,7 @@
 #include "lsm6dsm_reg.h"
 #include "driver/spi_master.h"
 #include "driver/gpio.h"
-#include "stdint.h",
+#include "stdint.h"
 #include "lis3mdl_reg.h"
 #include "lps22hh_reg.h"
 #include "lsm6dsm_reg.h"
@@ -42,6 +42,13 @@ extern volatile float adxl_acceleration_g[3];
 
 extern SemaphoreHandle_t sensors_mutex;
 
+typedef struct calibration_2pt_t {
+    float offset;
+    float scale;
+} calibration_2pt_t;
+
+float apply_2pt_calibration(float value, calibration_2pt_t calibration);
+void apply_2pt_calibrations_inplace(float* value, calibration_2pt_t* calibrations, int n);
 
 void init_sensor_spi();
 void init_lps22();
@@ -49,5 +56,7 @@ void init_lis3mdl();
 void init_lsm6dsm();
 void init_adxl375(TaskHandle_t* interrupt_task);
 void sensors_routine(void* arg);
+
+void init_sensors();
 
 #endif

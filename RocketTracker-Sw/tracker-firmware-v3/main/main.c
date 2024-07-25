@@ -40,7 +40,8 @@
 #include "fmgr.h"
 #include "logging.h"
 
-#include "config.h"
+#include "configuration.h"
+config_provider_t GLOBAL_CONFIG; // Define this here
 
 ////////////////// GLOBALS //////////////////
 // Peripherals
@@ -309,6 +310,31 @@ void link_decode_datum(int i, DatumTypeID id, int len, uint8_t* data, bool is_us
         } else {
             ESP_LOGW("LINK", "Error decoding Command_ConfigSensorOutput");
         }
+    } else if (id == DatumTypeID_CMD_Config) {
+        Config cmd;
+        if (pb_decode(&istream, Config_fields, &cmd)) {
+            DatumTypeID typeout;
+            // All the actual handling of the message is dealt with by config
+            Config response = config_handle_request(&cmd, &typeout);
+            link_send_datum(typeout, Config_fields, &response);
+        } else {
+            ESP_LOGW("LINK", "Error decoding Config");
+        }
+    } else if (id == DatumTypeID_CMD_ConfigEnumerate) {
+        // TODO: USB ONLY???
+        int num = 0;
+        for (config_iterator_t it = config_iterator_first(); !config_iterator_done(it); it = config_iterator_next(it)) {
+            config_entry_t entry = config_iterator_get_value(it);
+            Config message = config_value_as_message(entry);
+            link_send_datum(DatumTypeID_RESP_ConfigValue, Config_fields, &message);
+            num += 1;
+        }
+
+        Resp_ConfigEnumerateDone finish = {
+            .has_error = false,
+            .num_values = num
+        };
+        link_send_datum(DatumTypeID_RESP_ConfigEnumerateDone, Resp_ConfigEnumerateDone_fields, &finish);
     }
 }
 
@@ -890,10 +916,17 @@ static void init_radio() {
 
     ESP_ERROR_CHECK(sx127x_create(radio_spi_device, &radio));
     ESP_ERROR_CHECK(sx127x_set_opmod(SX127x_MODE_SLEEP, SX127x_MODULATION_LORA, radio));
-    ESP_ERROR_CHECK(sx127x_set_frequency(9.14e+8, radio)); // 915MHz
+
+    int32_t freq = CONFIG_RADIO_FREQ_HZ_DEFAULT;
+    config_get_int(CONFIG_RADIO_FREQ_HZ_KEY, &freq);
+    ESP_ERROR_CHECK(sx127x_set_frequency((uint64_t)freq, radio)); // 915MHz
     ESP_ERROR_CHECK(sx127x_lora_reset_fifo(radio));
     ESP_ERROR_CHECK(sx127x_set_opmod(SX127x_MODE_STANDBY, SX127x_MODULATION_LORA, radio));
-    ESP_ERROR_CHECK(sx127x_lora_set_bandwidth(SX127x_BW_125000, radio));
+
+    LoRa_Bandwidth_t bw_config = CONFIG_RADIO_BANDWIDTH_DEFAULT;
+    config_get_enum(CONFIG_RADIO_BANDWIDTH_KEY, (int32_t*)&bw_config);
+
+    ESP_ERROR_CHECK(sx127x_lora_set_bandwidth(config_convert_bandwidth(bw_config), radio));
     ESP_ERROR_CHECK(sx127x_lora_set_implicit_header(NULL, radio));
     ESP_ERROR_CHECK(sx127x_lora_set_modem_config_2(SX127x_SF_7, radio));
     // ESP_ERROR_CHECK(sx127x_lora_set_modem_config_1(SX127x_CR_4_5, radio));
@@ -1084,15 +1117,15 @@ void gps_uart_task(void* args) {
                                         ESP_LOGW("GPS", "Sentence struct contains parse errors!\n");
                                     }
 
-                                    if (NMEA_GPGLL == data->type) {
-                                        nmea_gpgll_s* pos = (nmea_gpgll_s*)data;
+                                    // if (NMEA_GPGLL == data->type) {
+                                        // nmea_gpgll_s* pos = (nmea_gpgll_s*)data;
                                         // current_gps.lat = (pos->latitude.degrees + pos->latitude.minutes / 60.0f) * (pos->latitude.cardinal == 'S' ? -1.f : 1.f);
                                         // current_gps.lon = (pos->longitude.degrees + pos->longitude.minutes / 60.0f) * (pos->longitude.cardinal == 'W' ? -1.f : 1.f);
 
                                         // Notify telemetry task that GPS data is ready.
                                         // xTaskNotify(telemetry_task, 0, eNoAction);
                                         // ESP_LOGI("GPS", "GLL xTaskNotify");
-                                    }
+                                    // }
                                     if (NMEA_GPGSA == data->type) {
                                         nmea_gpgsa_s* gpgsa = (nmea_gpgsa_s*)data;
 
@@ -1202,32 +1235,38 @@ static void battmon_task(void* arg) {
 esp_timer_handle_t sensor_timer;
 
 void debug_output_task(void* arg) {
-    while (1) {
-        vTaskDelay(pdMS_TO_TICKS(1000.0f / DEBUG_MON_HZ));
+    bool lps22_on, lsm6dsm_on, adxl_on, lis3mdl_on;
 
-#if DEBUG_MON_LPS22
-        ESP_LOGI("DEBUG-LPS22", "hPa:  %f", pressure_hPa);
-#endif
-#if DEBUG_MON_LSM6DSM
-        ESP_LOGI("DEBUG-LSM6DSM",
-            "Acceleration [g]:  %4.2f  %4.2f  %4.2f",
-            acceleration_g[0], acceleration_g[1], acceleration_g[2]);
-        ESP_LOGI("DEBUG-LSM6DSM",
-            "Angular rate [dps]:  %4.2f  %4.2f  %4.2f",
-            angular_rate_dps[0], angular_rate_dps[1], angular_rate_dps[2]);
-#endif
-#if DEBUG_MON_LIS3MDL
-        ESP_LOGI("DEBUG-LIS3MDL",
-            "Magnetic Field [mG]:  %4.2f  %4.2f  %4.2f",
-            magnetic_mG[0], magnetic_mG[1], magnetic_mG[2]);
+    config_get_bool(CONFIG_MISC_DEBUG_MONITOR_LPS22_KEY, &lps22_on);
+    config_get_bool(CONFIG_MISC_DEBUG_MONITOR_ADXL375_KEY, &adxl_on);
+    config_get_bool(CONFIG_MISC_DEBUG_MONITOR_LIS3MDL_KEY, &lis3mdl_on);
+    config_get_bool(CONFIG_MISC_DEBUG_MONITOR_LSM6DSM_KEY, &lsm6dsm_on);
+
+    while (1) {
+        float debug_mon_hz;
+        config_get_float(CONFIG_MISC_DEBUG_MONITOR_HZ_KEY, &debug_mon_hz);
+        vTaskDelay(pdMS_TO_TICKS(1000.0f / debug_mon_hz));
+
+        if (lps22_on)
+            ESP_LOGI("DEBUG-LPS22", "hPa:  %f", pressure_hPa);
+        if (lsm6dsm_on) {
+            ESP_LOGI("DEBUG-LSM6DSM",
+                "Acceleration [g]:  %4.2f  %4.2f  %4.2f",
+                acceleration_g[0], acceleration_g[1], acceleration_g[2]);
+            ESP_LOGI("DEBUG-LSM6DSM",
+                "Angular rate [dps]:  %4.2f  %4.2f  %4.2f",
+                angular_rate_dps[0], angular_rate_dps[1], angular_rate_dps[2]);
+        }
+        if (lis3mdl_on)
+            ESP_LOGI("DEBUG-LIS3MDL",
+                "Magnetic Field [mG]:  %4.2f  %4.2f  %4.2f",
+                magnetic_mG[0], magnetic_mG[1], magnetic_mG[2]);
         // ESP_LOGI("DEBUG-LIS3MDL", "Temperature [C]:  %4.2f\n", temperature_degC);
-#endif
-#if DEBUG_MON_ADXL
-        ESP_LOGI("DEBUG-ADXL",
-            "Acceleration [200g]:  %4.2f  %4.2f  %4.2f",
-            adxl_acceleration_g[0], adxl_acceleration_g[1], adxl_acceleration_g[2]);
+        if (adxl_on)
+            ESP_LOGI("DEBUG-ADXL",
+                "Acceleration [200g]:  %4.2f  %4.2f  %4.2f",
+                adxl_acceleration_g[0], adxl_acceleration_g[1], adxl_acceleration_g[2]);
         // ESP_LOGI("DEBUG-LIS3MDL", "Temperature [C]:  %4.2f\n", temperature_degC);
-#endif
     }
 }
 
@@ -1237,7 +1276,7 @@ static float pressure_hPa_to_alt_m(float hPa) {
 
 static void telemetry_tx_task(void* arg) {
     while (1) {
-        BaseType_t res = xTaskNotifyWait(0, 0, NULL, portMAX_DELAY);
+        BaseType_t _res = xTaskNotifyWait(0, 0, NULL, portMAX_DELAY);
         if (telemetry_enable) {
             Altitude alt = {
                 .has_v_speed = false,
@@ -1331,9 +1370,12 @@ void app_main(void) {
     fmgr_init(&usb_outgoing_fmgr, USB_SERIAL_BUF_SIZE);
     fmgr_init(&usb_incoming_fmgr, USB_SERIAL_BUF_SIZE);
 
+    init_nvs();
+
+    init_config("config");
+
     init_usb();
 
-    init_nvs();
     // TODO: Set default values if neccesary!!
     // Reboot will be required to set configuration!!
     // Make a sub-app that is a pop-out window from the telemetry app that allows configuration
@@ -1364,15 +1406,17 @@ void app_main(void) {
     ESP_LOGI("SYS", "Initializing LPS22");
     init_lps22();
 
+    init_sensors();
+
     init_gps();
 
     // Stack overflowing... when no battery...
     xTaskCreate(battmon_task, "battmon_task", 4 * 1024, NULL, 10, NULL);
 
-#if DEBUG_MON_ENABLED
-    xTaskCreate(debug_output_task, "debug_task", 4 * 1024, NULL, 10, NULL);
-#endif
-
+    bool debug_mon_on;
+    config_get_bool(CONFIG_MISC_DEBUG_MONITOR_EN_KEY, &debug_mon_on);
+    if (debug_mon_on)
+        xTaskCreate(debug_output_task, "debug_task", 4 * 1024, NULL, 10, NULL);
 
     xTaskCreate(telemetry_tx_task, "telemetry_tx_task", 4 * 1024, NULL, 10, &telemetry_task);
 

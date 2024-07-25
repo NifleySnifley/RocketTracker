@@ -70,6 +70,12 @@ DATUMTYPEID_TO_CLASS = {
     ACK_Download_Complete: Acknowledgement_Download_Complete,
     # ACK_DownloadLog_Segment: None,  # IMPLEMENT!!!!
 
+    CMD_Config: Config,
+    CMD_ConfigEnumerate: None,
+    RESP_ConfigValue: Config,
+    RESP_ConfigSet: Config,
+    RESP_ConfigEnumerateDone: Resp_ConfigEnumerateDone,
+
     CMD_LogStatus: LogStatus,
 }
 

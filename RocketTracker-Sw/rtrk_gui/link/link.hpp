@@ -6,14 +6,12 @@
 #include "boost/signals2.hpp"
 #include "protocol.pb.h"
 #include "link/frame_manager_v2.hpp"
-#include "MSerialLib.h"
 
 #define USB_SERIAL_BUF_SIZE 1024*5
 #define USB_SER_ESC 0xFF
 #define USB_SER_ESC_ESC 0x01
 #define USB_SER_ESC_NULL 0x02
 
-using namespace MSerial;
 
 class Link {
 public:
@@ -28,11 +26,11 @@ std::vector<uint8_t> cobs_encode(uint8_t* data, size_t len);
 class SerialLink : public Link {
 private:
 	//boost::asio::serial_port* main_port;
-	//boost::asio::io_service io;
+	boost::asio::io_service io;
 
-	//boost::asio::deadline_timer keepalive_timer;
+	boost::asio::deadline_timer keepalive_timer;
 
-	MSerialLib serial_port;
+	HANDLE serial_port = nullptr;
 
 	uint8_t serial_buffer[USB_SERIAL_BUF_SIZE];
 
@@ -52,7 +50,7 @@ public:
 
 	void close();
 
-	void rx_callback(const boost::system::error_code& error, std::size_t n);
+	void rx_callback(size_t n);
 
 	void frame_rx_callback(uint8_t* data, size_t size); // Stored in buffer
 

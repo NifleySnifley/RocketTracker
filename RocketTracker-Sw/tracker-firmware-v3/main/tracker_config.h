@@ -1,4 +1,5 @@
 #include <stdbool.h>
+#include "configuration.h"
 
 // Battery monitoring frequency (hz)
 // Frequency at which the battery monitor IC is polled for SOC.
@@ -8,12 +9,12 @@
 #define SENSOR_HZ 256
 
 // Frequency at which data is output over USB for debugging
-#define DEBUG_MON_HZ 1.0f
-#define DEBUG_MON_ENABLED false
-#define DEBUG_MON_LPS22 true
-#define DEBUG_MON_LSM6DSM true
-#define DEBUG_MON_LIS3MDL true
-#define DEBUG_MON_ADXL true
+// #define DEBUG_MON_HZ 1.0f
+// #define DEBUG_MON_ENABLED false
+// #define DEBUG_MON_LPS22 true
+// #define DEBUG_MON_LSM6DSM true
+// #define DEBUG_MON_LIS3MDL true
+// #define DEBUG_MON_ADXL true
 
 
 // Noise is about +-0.5g
