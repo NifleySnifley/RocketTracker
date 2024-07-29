@@ -293,8 +293,9 @@ void init_lps22() {
 
     lps22hh_block_data_update_set(&lps22, PROPERTY_ENABLE);
     /* Set Output Data Rate */
-    // lps22hh_data_rate_set(&lps22, LPS22HH_200_Hz);
-    lps22hh_data_rate_set(&lps22, LPS22HH_75_Hz_LOW_NOISE);
+    lps22hh_data_rate_set(&lps22, LPS22HH_200_Hz);
+    lps22hh_lp_bandwidth_set(&lps22, LPS22HH_LPF_ODR_DIV_2);
+    // lps22hh_data_rate_set(&lps22, LPS22HH_75_Hz_LOW_NOISE);
 
     // lps22hh_pressure_offset_set(&lps22, (int16_t)(-63.0527133333 * 1048576.0f)); // error*1048576.0f
 }
@@ -464,6 +465,9 @@ void sensors_routine(void* arg) {
 
             log_data.lps_press_raw = data_raw_pressure;
             log_data.flags |= LOG_FLAG_PRESS_FRESH;
+
+            altitude_m_raw = pressure_hPa_to_alt_m(pressure_hPa);
+            altimetry_filter_correct(&alt_filter, altitude_m_raw);
         }
 
         // TODO: Raw data, raw output configuration with message for calibration
@@ -600,9 +604,7 @@ void sensors_routine(void* arg) {
     FusionQuaternion orientation = FusionAhrsGetQuaternion(&ahrs);
     memcpy(log_data.orientation_quat, orientation.array, sizeof(orientation.array));
 
-    altitude_m_raw = pressure_hPa_to_alt_m(pressure_hPa);
-    altimetry_filter_update(&alt_filter, &ahrs, altitude_m_raw);
-
+    altimetry_filter_update(&alt_filter, &ahrs);
 
 
     altitude_m = altimetry_filter_get_filtered_altitude(&alt_filter);
