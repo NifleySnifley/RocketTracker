@@ -2,6 +2,25 @@
 	"!name": "Configuration",
 	"radio": "!include(lora_radio_config.jsonc)",
 	"calibration": "!include(calibration_config.jsonc)",
+	"sensors": {
+		"!name": "Sensor Settings",
+		"ahrs_no_mag": {
+			"!name": "Ignore magnetometer readings for AHRS (orientation) sensor fusion",
+			"!type": "bool",
+			"!description": "WARNING: Setting this to true will disable GPS augmentation with accelerometer data",
+			"!default": false
+		},
+		"acc_trans_lo": {
+			"!name": "Acceleration transition low end",
+			"!type": "float(0, 15.9)",
+			"!default": 15.5
+		},
+		"acc_trans_hi": {
+			"!name": "Acceleration transition high end",
+			"!type": "float(0, 15.9)",
+			"!default": 15.9
+		}
+	},
 	"logging": {
 		"!name": "Logger Settings",
 		"launch_threshold": {
@@ -43,6 +62,11 @@
 			"!name": "Debug monitor enabled",
 			"!default": false
 		},
+		"debug_monitor_usb": {
+			"!type": "bool",
+			"!name": "Debug monitor output over USB",
+			"!default": false
+		},
 		"debug_monitor": {
 			"!showif": "debug_monitor_en", // This is a custom parameter that will be handled on the GUI side of things!
 			"!name": "Debug monitor configuration",
@@ -70,6 +94,21 @@
 			"adxl375": {
 				"!type": "bool",
 				"!name": "Enable ADXL375 output",
+				"!default": false
+			},
+			"compass": {
+				"!type": "bool",
+				"!name": "Enable compass output (LIS3MDL)",
+				"!default": false
+			},
+			"orientation": {
+				"!type": "bool",
+				"!name": "Enable euler-angle orientation output (Fusion)",
+				"!default": false
+			},
+			"world_acc": {
+				"!type": "bool",
+				"!name": "Enable world-acceleration output (Fusion)",
 				"!default": false
 			}
 		}

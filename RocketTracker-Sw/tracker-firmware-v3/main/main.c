@@ -88,6 +88,7 @@ static bool telemetry_enable = true;
 // Sensor output over USB
 static int sensor_output_hz = 0;
 static TaskHandle_t sensor_output_task_handle;
+static bool sensor_output_raw = false;
 
 //////////////// PREDEFS
 void link_send_datum(DatumTypeID type, const pb_msgdesc_t* fields, const void* src_struct);
@@ -294,6 +295,7 @@ void link_decode_datum(int i, DatumTypeID id, int len, uint8_t* data, bool is_us
     } else if (id == DatumTypeID_CMD_ConfigSensorOutput) {
         Command_ConfigSensorOutput cmd;
         if (pb_decode(&istream, Command_ConfigSensorOutput_fields, &cmd)) {
+            sensor_output_raw = cmd.raw;
             ESP_LOGW("LINK", "Setting sensor date output rate to %dHz", (int)cmd.rate_hz);
             if ((sensor_output_hz == 0) && (cmd.rate_hz > 0)) {
                 // Start
@@ -1234,44 +1236,109 @@ static void battmon_task(void* arg) {
 
 esp_timer_handle_t sensor_timer;
 
-void debug_output_task(void* arg) {
-    bool lps22_on, lsm6dsm_on, adxl_on, lis3mdl_on;
+void DEBUG_send_float(char* name, char* suffix, float value) {
+    DebugDataOutput message;
+    if ((strlen(name) < 64) && ((suffix == NULL) || (strlen(suffix) < 32)) && USB_AVAILABLE) {
+        // memcpy(message.suffix)
+        message.has_suffix = suffix != NULL;
+        if (message.has_suffix) {
+            memcpy(message.suffix, suffix, strlen(suffix) + 1);
+        }
+
+        memcpy(message.name, name, strlen(name) + 1);
+        message.has_float_value = true;
+        message.float_value = value;
+        link_send_datum(DatumTypeID_INFO_Debug, DebugDataOutput_fields, &message);
+    } else {
+        // ESP_LOGE("DEBUG", "Too large of a name for debug value");
+    }
+}
+
+void DEBUG_send_float3(char* name, char* suffix, float values[3]) {
+    char namebuf[64];
+    int namelen = strlen(name);
+    if (namelen < (64 - 2)) {
+        memcpy(namebuf, name, namelen);
+        namebuf[namelen] = ':';
+        namebuf[namelen + 2] = '\0';
+
+        for (int i = 0; i < 3; ++i) {
+            namebuf[namelen + 1] = 'X' + i;
+            DEBUG_send_float(namebuf, suffix, values[i]);
+        }
+    } else {
+        ESP_LOGE("DEBUG", "Too large of a name for debug vector");
+    }
+}
+
+void DEBUG_output_task(void* arg) {
+    bool lps22_on, lsm6dsm_on, adxl_on, lis3mdl_on, compass_on, orientation_on, worldacc_on;
+    bool usb_output = false;
+    config_get_bool(CONFIG_MISC_DEBUG_MONITOR_USB_KEY, &usb_output);
 
     config_get_bool(CONFIG_MISC_DEBUG_MONITOR_LPS22_KEY, &lps22_on);
     config_get_bool(CONFIG_MISC_DEBUG_MONITOR_ADXL375_KEY, &adxl_on);
     config_get_bool(CONFIG_MISC_DEBUG_MONITOR_LIS3MDL_KEY, &lis3mdl_on);
     config_get_bool(CONFIG_MISC_DEBUG_MONITOR_LSM6DSM_KEY, &lsm6dsm_on);
+    config_get_bool(CONFIG_MISC_DEBUG_MONITOR_COMPASS_KEY, &compass_on);
+    config_get_bool(CONFIG_MISC_DEBUG_MONITOR_ORIENTATION_KEY, &orientation_on);
+    config_get_bool(CONFIG_MISC_DEBUG_MONITOR_WORLD_ACC_KEY, &worldacc_on);
+
+    float debug_mon_hz;
+    config_get_float(CONFIG_MISC_DEBUG_MONITOR_HZ_KEY, &debug_mon_hz);
 
     while (1) {
-        float debug_mon_hz;
-        config_get_float(CONFIG_MISC_DEBUG_MONITOR_HZ_KEY, &debug_mon_hz);
         vTaskDelay(pdMS_TO_TICKS(1000.0f / debug_mon_hz));
-
-        if (lps22_on)
-            ESP_LOGI("DEBUG-LPS22", "hPa:  %f", pressure_hPa);
-        if (lsm6dsm_on) {
-            ESP_LOGI("DEBUG-LSM6DSM",
-                "Acceleration [g]:  %4.2f  %4.2f  %4.2f",
-                acceleration_g[0], acceleration_g[1], acceleration_g[2]);
-            ESP_LOGI("DEBUG-LSM6DSM",
-                "Angular rate [dps]:  %4.2f  %4.2f  %4.2f",
-                angular_rate_dps[0], angular_rate_dps[1], angular_rate_dps[2]);
+        if (lps22_on) {
+            // ESP_LOGI("DEBUG-LPS22", "hPa:  %f", pressure_hPa_raw);
+            DEBUG_send_float("LPS22 Raw Pressure", "hPa", pressure_hPa_raw);
+            DEBUG_send_float("LPS22 Raw Altitude", "m", altitude_m_raw);
+            DEBUG_send_float("LPS22 Filtered Altitude", "m", altitude_m);
+            DEBUG_send_float("LPS22 Filtered V-Speed", "m/s", v_speed_m_s);
         }
-        if (lis3mdl_on)
-            ESP_LOGI("DEBUG-LIS3MDL",
-                "Magnetic Field [mG]:  %4.2f  %4.2f  %4.2f",
-                magnetic_mG[0], magnetic_mG[1], magnetic_mG[2]);
+        if (lsm6dsm_on) {
+            // ESP_LOGI("DEBUG-LSM6DSM",
+                // "Acceleration [g]:  %4.2f  %4.2f  %4.2f",
+                // acceleration_g_raw[0], acceleration_g_raw[1], acceleration_g_raw[2]);
+            DEBUG_send_float3("LSM6DSM Raw Acceleration", "g", (float*)acceleration_g_raw);
+            // ESP_LOGI("DEBUG-LSM6DSM",
+                // "Angular rate [dps]:  %4.2f  %4.2f  %4.2f",
+                // angular_rate_dps_raw[0], angular_rate_dps_raw[1], angular_rate_dps_raw[2]);
+            DEBUG_send_float3("LSM6DSM Raw Gyro", "dps", (float*)angular_rate_dps_raw);
+        }
+        if (lis3mdl_on) {
+            // ESP_LOGI("DEBUG-LIS3MDL",
+                // "Magnetic Field [mG]:  %4.2f  %4.2f  %4.2f",
+                // magnetic_mG_raw[0], magnetic_mG_raw[1], magnetic_mG_raw[2]);
+            DEBUG_send_float3("LIS3MDL Raw Magnetic", "mG", (float*)magnetic_mG_raw);
+        }
         // ESP_LOGI("DEBUG-LIS3MDL", "Temperature [C]:  %4.2f\n", temperature_degC);
-        if (adxl_on)
-            ESP_LOGI("DEBUG-ADXL",
-                "Acceleration [200g]:  %4.2f  %4.2f  %4.2f",
-                adxl_acceleration_g[0], adxl_acceleration_g[1], adxl_acceleration_g[2]);
+        if (adxl_on) {
+            // ESP_LOGI("DEBUG-ADXL",
+                // "Acceleration [200g]:  %4.2f  %4.2f  %4.2f",
+                // adxl_acceleration_g_raw[0], adxl_acceleration_g_raw[1], adxl_acceleration_g_raw[2]);
+            DEBUG_send_float3("ADXL375 Raw Acceleration", "h", (float*)adxl_acceleration_g_raw);
+        }
+        if (compass_on) {
+            float heading_raw = (atan2(magnetic_mG[1], magnetic_mG[0]) / 3.14159265) * 180.0f;
+            // ESP_LOGI("DEBUG-COMPASS", "Heading [deg]: %4.2f", heading_raw);
+            DEBUG_send_float("LIS3MDL Compass", "deg", heading_raw);
+        }
+        if (orientation_on) {
+            FusionEuler euler = FusionQuaternionToEuler(FusionAhrsGetQuaternion(&ahrs));
+            // ESP_LOGI("DEBUG-ORIENTATION", "Euler Angles [deg]: (roll): %4.2f, (pitch): %4.2f, (yaw): %4.2f", euler.angle.roll, euler.angle.pitch, euler.angle.yaw);
+            DEBUG_send_float3("Orientation (Euler Angles)", "deg", euler.array);
+
+        }
+        if (worldacc_on) {
+            FusionVector worldacc = FusionAhrsGetEarthAcceleration(&ahrs);
+            // ESP_LOGI("DEBUG-WORLDACC",
+            //     "World-Space Acceleration [g]:  North: %4.2f West: %4.2f Up: %4.2f",
+            //     worldacc.axis.x, worldacc.axis.y, worldacc.axis.z);
+            DEBUG_send_float3("Fused world-space acceleration", "g", worldacc.array);
+        }
         // ESP_LOGI("DEBUG-LIS3MDL", "Temperature [C]:  %4.2f\n", temperature_degC);
     }
-}
-
-static float pressure_hPa_to_alt_m(float hPa) {
-    return 44330.f * (1 - powf(hPa / 1013.25f, 0.190284f));
 }
 
 static void telemetry_tx_task(void* arg) {
@@ -1280,7 +1347,7 @@ static void telemetry_tx_task(void* arg) {
         if (telemetry_enable) {
             Altitude alt = {
                 .has_v_speed = false,
-                .alt_m = pressure_hPa_to_alt_m(pressure_hPa)
+                .alt_m = altitude_m
             };
 
             // Flush link every 1 second
@@ -1294,14 +1361,32 @@ static void telemetry_tx_task(void* arg) {
 static void sensor_output_task(void* arg) {
     while (1) {
         SensorData data;
-        memcpy(data.lsm_acceleration_g, (float*)acceleration_g, sizeof(acceleration_g));
-        memcpy(data.lsm_gyro_dps, (float*)angular_rate_dps, sizeof(angular_rate_dps));
-        memcpy(data.lis_magnetic_mG, (float*)magnetic_mG, sizeof(magnetic_mG));
-        memcpy(data.adxl_acceleration_g, (float*)adxl_acceleration_g, sizeof(adxl_acceleration_g));
-        data.lps_pressure_hPa = pressure_hPa;
+
+        // Raw option mostly for calibration reasons!
+        if (sensor_output_raw) {
+            memcpy(data.lsm_acceleration_g, (float*)acceleration_g_raw, sizeof(acceleration_g_raw));
+            memcpy(data.lsm_gyro_dps, (float*)angular_rate_dps_raw, sizeof(angular_rate_dps_raw));
+            memcpy(data.lis_magnetic_mG, (float*)magnetic_mG_raw, sizeof(magnetic_mG_raw));
+            memcpy(data.adxl_acceleration_g, (float*)adxl_acceleration_g_raw, sizeof(adxl_acceleration_g_raw));
+            data.lps_pressure_hPa = pressure_hPa_raw;
+        } else {
+            memcpy(data.lsm_acceleration_g, (float*)acceleration_g, sizeof(acceleration_g));
+            memcpy(data.lsm_gyro_dps, (float*)angular_rate_dps, sizeof(angular_rate_dps));
+            memcpy(data.lis_magnetic_mG, (float*)magnetic_mG, sizeof(magnetic_mG));
+            memcpy(data.adxl_acceleration_g, (float*)adxl_acceleration_g, sizeof(adxl_acceleration_g));
+            data.lps_pressure_hPa = pressure_hPa;
+        }
+
+        data.filtered_orientation = (Quaternion){ 0 };
+        FusionQuaternion orientation = FusionAhrsGetQuaternion(&ahrs);
+        // memcpy(data.filtered_orientation.components, orientation.array, sizeof(orientation.array));
+        data.filtered_orientation.x = orientation.element.x;
+        data.filtered_orientation.y = orientation.element.y;
+        data.filtered_orientation.z = orientation.element.z;
+        data.filtered_orientation.w = orientation.element.w;
+        data.has_filtered_orientation = true;
 
         data.has_filtered_altimetry = false;
-        data.has_filtered_orientation = false;
 
         if (USB_AVAILABLE) {
             link_send_datum(DatumTypeID_INFO_SensorData, SensorData_fields, &data);
@@ -1416,7 +1501,7 @@ void app_main(void) {
     bool debug_mon_on;
     config_get_bool(CONFIG_MISC_DEBUG_MONITOR_EN_KEY, &debug_mon_on);
     if (debug_mon_on)
-        xTaskCreate(debug_output_task, "debug_task", 4 * 1024, NULL, 10, NULL);
+        xTaskCreate(DEBUG_output_task, "debug_task", 4 * 1024, NULL, 10, NULL);
 
     xTaskCreate(telemetry_tx_task, "telemetry_tx_task", 4 * 1024, NULL, 10, &telemetry_task);
 

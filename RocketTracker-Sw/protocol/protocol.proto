@@ -35,7 +35,10 @@ message Altitude {
 }
 
 message Quaternion {
-  repeated float components = 1;
+  required float x = 1;
+  required float y = 2;
+  required float z = 3;
+  required float w = 4;
 }
 
 message Orientation {
@@ -89,6 +92,7 @@ enum DatumTypeID {
   INFO_Alert = 6; // Alert
   INFO_LogStatus = 7; // LogStatus
   INFO_SensorData = 8; // SensorData
+  INFO_Debug = 9;
 
   // Receiver
   STATUS_RadioRxStatus = 64;
@@ -130,6 +134,7 @@ enum ConfigMode {
   ConfigGetResponse = 4; // Used as response for a value
   ConfigSetResponse = 5;
   ConfigEnumerateResponse = 6;
+  ConfigClear = 7; // Erase all
 }
 
 message Config {
@@ -209,6 +214,7 @@ message Command_EraseLog {
 
 message Command_ConfigSensorOutput {
     required uint32 rate_hz = 1;
+    required bool raw = 2;
 }
 message SensorData {
     repeated float lsm_acceleration_g = 1;
@@ -219,4 +225,12 @@ message SensorData {
 
     optional Quaternion filtered_orientation = 6;
     optional Altitude filtered_altimetry = 7;
+}
+
+message DebugDataOutput {
+    required string name = 1;
+    optional string suffix = 2;
+
+    optional float float_value = 3;
+    optional int32 int_value = 4;
 }

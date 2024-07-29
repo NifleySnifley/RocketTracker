@@ -267,6 +267,7 @@ esp_err_t config_set_bool(char* key_hash, bool val) {
         return e;
     }
 
+    nvs_commit(GLOBAL_CONFIG.nvs);
     return ESP_OK;
 }
 esp_err_t config_set_string(char* key_hash, char* val) {
@@ -292,6 +293,7 @@ esp_err_t config_set_string(char* key_hash, char* val) {
         return e;
     }
 
+    nvs_commit(GLOBAL_CONFIG.nvs);
     return ESP_OK;
 }
 esp_err_t config_set_float(char* key_hash, float val) {
@@ -322,6 +324,7 @@ esp_err_t config_set_float(char* key_hash, float val) {
         return e;
     }
 
+    nvs_commit(GLOBAL_CONFIG.nvs);
     return ESP_OK;
 }
 
@@ -345,6 +348,7 @@ esp_err_t config_set_int(char* key_hash, int32_t val) {
         return e;
     }
 
+    nvs_commit(GLOBAL_CONFIG.nvs);
     return ESP_OK;
 }
 
@@ -368,6 +372,7 @@ esp_err_t config_set_enum(char* key_hash, int32_t val) {
         return e;
     }
 
+    nvs_commit(GLOBAL_CONFIG.nvs);
     return ESP_OK;
 }
 
@@ -504,6 +509,15 @@ Config config_handle_request(Config* cmd, DatumTypeID* typeout) {
         ESP_LOGW("LINK", "Error, received config response! tracker is not supposed to be responded to!!!");
         response.has_error = true;
         response.error = 0;
+    } else if (cmd->mode == ConfigMode_ConfigClear) {
+        // Erase all values in the NVS namespace
+        esp_err_t e = nvs_erase_all(GLOBAL_CONFIG.nvs);
+        if (e != ESP_OK) {
+            response.has_error = true;
+            response.error = e;
+        } else {
+            nvs_commit(GLOBAL_CONFIG.nvs);
+        }
     }
 
     return response;

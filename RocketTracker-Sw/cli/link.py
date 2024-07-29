@@ -49,6 +49,7 @@ DATUMTYPEID_TO_CLASS = {
     INFO_Orientation: Orientation,
     INFO_Alert: Alert,
     INFO_LogStatus: LogStatus,
+    INFO_Debug: DebugDataOutput,
 
     STATUS_RadioRxStatus: RadioRxStatus,
 

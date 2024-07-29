@@ -116,6 +116,7 @@ void DataViewer::set_debug_datarate(uint32_t rate_hz) {
 
 	Command_ConfigSensorOutput command;
 	command.set_rate_hz(rate_hz);
+    command.set_raw(false);
 
 	f2.encode_datum(DatumTypeID::CMD_ConfigSensorOutput, &command);
 	this->link->send_frame(&f2);

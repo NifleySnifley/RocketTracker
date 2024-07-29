@@ -1,8 +1,5 @@
 Resp_DownloadLog_Segment.data max_size:4096
 
-Quaternion.components max_count:4
-Quaternion.components fixed_count:true
-
 SensorData.lsm_acceleration_g max_count:3
 SensorData.lsm_acceleration_g fixed_count:true
 
@@ -17,3 +14,6 @@ SensorData.lis_magnetic_mG fixed_count:true
 
 Config.key_hashed max_size:64
 Config.string_value max_size:64
+
+DebugDataOutput.name max_size:64
+DebugDataOutput.suffix max_size:32

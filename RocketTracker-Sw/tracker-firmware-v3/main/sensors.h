@@ -18,6 +18,7 @@
 #include "logging.h"
 #include "defs.h"
 #include "memory.h"
+#include "Fusion.h"
 
 extern stmdev_ctx_t lps22;
 extern spi_device_handle_t lps22_device;
@@ -38,9 +39,21 @@ extern volatile float acceleration_g[3];
 extern volatile float angular_rate_dps[3];
 extern volatile float temperature_degC;
 extern volatile float adxl_acceleration_g[3];
-// TODO: Calibrate all sensors, G-scales, offsets, etc.
+
+// No calibration!
+extern volatile float pressure_hPa_raw;
+extern volatile float magnetic_mG_raw[3];
+extern volatile float acceleration_g_raw[3];
+extern volatile float angular_rate_dps_raw[3];
+extern volatile float temperature_degC_raw;
+extern volatile float adxl_acceleration_g_raw[3];
+extern volatile float altitude_m_raw;
 
 extern SemaphoreHandle_t sensors_mutex;
+
+extern FusionAhrs ahrs;
+extern volatile float altitude_m;
+extern volatile float v_speed_m_s;
 
 typedef struct calibration_2pt_t {
     float offset;

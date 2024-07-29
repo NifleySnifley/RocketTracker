@@ -1,5 +1,7 @@
 #include "sensors.h"
 #include "configuration.h"
+#include "Fusion.h"
+#include "tracker_config.h"
 
 // Sensors
 stmdev_ctx_t lps22;
@@ -22,6 +24,21 @@ volatile float angular_rate_dps[3];
 volatile float temperature_degC;
 volatile float adxl_acceleration_g[3];
 
+volatile float pressure_hPa_raw;
+volatile float magnetic_mG_raw[3];
+volatile float acceleration_g_raw[3];
+volatile float angular_rate_dps_raw[3];
+volatile float temperature_degC_raw;
+volatile float adxl_acceleration_g_raw[3];
+volatile float altitude_m_raw;
+
+
+FusionAhrs ahrs;
+volatile float altitude_m;
+volatile float v_speed_m_s;
+
+const FusionAxesAlignment SENSORS_ALIGNMENT = FusionAxesAlignmentNXNYPZ;
+
 SemaphoreHandle_t sensors_mutex;
 
 float apply_2pt_calibration(float value, calibration_2pt_t calibration) {
@@ -37,6 +54,9 @@ calibration_2pt_t lsm_acc_calib[3];
 calibration_2pt_t lsm_gyr_calib[3];
 calibration_2pt_t lis_mag_calib[3];
 calibration_2pt_t lps_calib;
+bool ahrs_no_magnetometer = false;
+float acc_transition_low = CONFIG_SENSORS_ACC_TRANS_LO_DEFAULT;
+float acc_transition_high = CONFIG_SENSORS_ACC_TRANS_LO_DEFAULT;
 
 void init_sensors() {
     // ADXL375 Calibration
@@ -73,6 +93,7 @@ void init_sensors() {
     lsm_gyr_calib[2].scale = 1.0f;
     // config_get_float(&lsm_gyr_calib[2].scale, CONFIG_CALIBRATION_LSM6DSM_GYRO_Z_SCALE_KEY);
 
+    config_get_bool(CONFIG_SENSORS_AHRS_NO_MAG_KEY, &ahrs_no_magnetometer);
 
     // LIS3MDL Calibration
     config_get_float(CONFIG_CALIBRATION_LIS3MDL_X_OFFSET_KEY, &lis_mag_calib[0].offset);
@@ -81,12 +102,19 @@ void init_sensors() {
     config_get_float(CONFIG_CALIBRATION_LIS3MDL_Y_OFFSET_KEY, &lis_mag_calib[1].offset);
     config_get_float(CONFIG_CALIBRATION_LIS3MDL_Y_SCALE_KEY, &lis_mag_calib[1].scale);
 
-    config_get_float(CONFIG_CALIBRATION_LIS3MDL_Y_OFFSET_KEY, &lis_mag_calib[2].offset);
-    config_get_float(CONFIG_CALIBRATION_LIS3MDL_Y_SCALE_KEY, &lis_mag_calib[2].scale);
+    config_get_float(CONFIG_CALIBRATION_LIS3MDL_Z_OFFSET_KEY, &lis_mag_calib[2].offset);
+    config_get_float(CONFIG_CALIBRATION_LIS3MDL_Z_SCALE_KEY, &lis_mag_calib[2].scale);
 
     // LPS22 Calibration
     config_get_float(CONFIG_CALIBRATION_LPS22_OFFSET_KEY, &lps_calib.offset);
     lps_calib.scale = 1.0f;
+
+    config_get_float(CONFIG_SENSORS_ACC_TRANS_LO_KEY, &acc_transition_low);
+    config_get_float(CONFIG_SENSORS_ACC_TRANS_HI_KEY, &acc_transition_high);
+
+    FusionAhrsInitialise(&ahrs);
+    // FusionAhrsSetSettings(&ahrs, &settings);
+    FusionAhrsReset(&ahrs);
 }
 
 void init_sensor_spi() {
@@ -376,6 +404,29 @@ void init_lsm6dsm() {
     // No gyro bandpass
 }
 
+float clamp(float value, float min, float max) {
+    return (value > max) ? max : ((value < min) ? min : value);
+}
+
+FusionVector get_interpolated_acceleration() {
+    FusionVector lsm_accel, adxl_accel, interpolated_accel;
+    memcpy(lsm_accel.array, (float*)acceleration_g, sizeof(lsm_accel.array));
+    memcpy(adxl_accel.array, (float*)adxl_acceleration_g, sizeof(adxl_accel.array));
+
+    // if (FusionVectorMagnitudeSquared(adxl_accel))
+    for (int axis = 0; axis < 3; axis++) {
+        float avg = (lsm_accel.array[axis] + adxl_accel.array[axis]) * 0.5f;
+        float factor = clamp((avg - acc_transition_low) / (acc_transition_low - acc_transition_high), 0.0f, 1.0f);
+        interpolated_accel.array[axis] = (1.0f - factor) * adxl_accel.array[axis] + factor * lsm_accel.array[axis];
+    }
+
+    return interpolated_accel;
+}
+
+static float pressure_hPa_to_alt_m(float hPa) {
+    return 44330.f * (1 - powf(hPa / 1013.25f, 0.190284f));
+}
+
 void sensors_routine(void* arg) {
     static uint32_t data_raw_pressure;
     static int16_t data_raw_magnetic[3];
@@ -394,14 +445,16 @@ void sensors_routine(void* arg) {
         if (lps_reg.status.p_da) {
             memset(&data_raw_pressure, 0x00, sizeof(uint32_t));
             lps22hh_pressure_raw_get(&lps22, &data_raw_pressure);
-            pressure_hPa = lps22hh_from_lsb_to_hpa(data_raw_pressure);
+            pressure_hPa_raw = lps22hh_from_lsb_to_hpa(data_raw_pressure);
 
             // CALIBRATE!
-            pressure_hPa = apply_2pt_calibration(pressure_hPa, lps_calib);
+            pressure_hPa = apply_2pt_calibration(pressure_hPa_raw, lps_calib);
 
             log_data.lps_press_raw = data_raw_pressure;
             log_data.flags |= LOG_FLAG_PRESS_FRESH;
         }
+
+        // TODO: Raw data, raw output configuration with message for calibration
 
         ///////////////////////// LIS3MDL /////////////////////////
         uint8_t reg;
@@ -413,16 +466,18 @@ void sensors_routine(void* arg) {
             memset(data_raw_magnetic, 0x00, 3 * sizeof(int16_t));
             lis3mdl_magnetic_raw_get(&lis3mdl, data_raw_magnetic);
             // +X global is sensor Y
-            magnetic_mG[0] = 1000 * lis3mdl_from_fs4_to_gauss(
-                data_raw_magnetic[1]);
-            // +Y global is -sensor X
-            magnetic_mG[1] = -1000 * lis3mdl_from_fs4_to_gauss(
+            magnetic_mG_raw[0] = 1000 * lis3mdl_from_fs4_to_gauss(
                 data_raw_magnetic[0]);
+            // +Y global is -sensor X
+            magnetic_mG_raw[1] = 1000 * lis3mdl_from_fs4_to_gauss(
+                data_raw_magnetic[1]);
             // +Z global is sensor Z
-            magnetic_mG[2] = 1000 * lis3mdl_from_fs4_to_gauss(
+            magnetic_mG_raw[2] = 1000 * lis3mdl_from_fs4_to_gauss(
                 data_raw_magnetic[2]);
 
+
             // CALIBRATE!
+            memcpy((float*)magnetic_mG, (float*)magnetic_mG_raw, sizeof(magnetic_mG));
             apply_2pt_calibrations_inplace((float*)magnetic_mG, lis_mag_calib, 3);
 
             // memset(&data_raw_temperature, 0x00, sizeof(int16_t));
@@ -445,16 +500,17 @@ void sensors_routine(void* arg) {
             memset(data_raw_acceleration, 0x00, 3 * sizeof(int16_t));
             lsm6dsm_acceleration_raw_get(&lsm6dsm, data_raw_acceleration);
             // X global is sensor Y
-            acceleration_g[0] =
-                lsm6dsm_from_fs16g_to_mg(data_raw_acceleration[1]) * 0.001f;
+            acceleration_g_raw[0] =
+                lsm6dsm_from_fs16g_to_mg(data_raw_acceleration[0]) * 0.001f;
             // Y global is -sensor X
-            acceleration_g[1] =
-                -lsm6dsm_from_fs16g_to_mg(data_raw_acceleration[0]) * 0.001f;
+            acceleration_g_raw[1] =
+                lsm6dsm_from_fs16g_to_mg(data_raw_acceleration[1]) * 0.001f;
             // Z global is sensor Z
-            acceleration_g[2] =
+            acceleration_g_raw[2] =
                 lsm6dsm_from_fs16g_to_mg(data_raw_acceleration[2]) * 0.001f;
 
             // CALIBRATE!
+            memcpy((float*)acceleration_g, (float*)acceleration_g_raw, sizeof(acceleration_g));
             apply_2pt_calibrations_inplace((float*)acceleration_g, lsm_acc_calib, 3);
 
 
@@ -467,14 +523,15 @@ void sensors_routine(void* arg) {
             memset(data_raw_angular_rate, 0x00, 3 * sizeof(int16_t));
             lsm6dsm_angular_rate_raw_get(&lsm6dsm, data_raw_angular_rate);
             // TODO: Confirm that this inversion is neccesary with the axes inversion of X and Y
-            angular_rate_dps[0] =
+            angular_rate_dps_raw[0] =
+                lsm6dsm_from_fs2000dps_to_mdps(data_raw_angular_rate[0]) * 0.001f;
+            angular_rate_dps_raw[1] =
                 lsm6dsm_from_fs2000dps_to_mdps(data_raw_angular_rate[1]) * 0.001f;
-            angular_rate_dps[1] =
-                -lsm6dsm_from_fs2000dps_to_mdps(data_raw_angular_rate[0]) * 0.001f;
-            angular_rate_dps[2] =
+            angular_rate_dps_raw[2] =
                 lsm6dsm_from_fs2000dps_to_mdps(data_raw_angular_rate[2]) * 0.001f;
 
             // CALIBRATE!
+            memcpy((float*)angular_rate_dps, (float*)angular_rate_dps_raw, sizeof(angular_rate_dps));
             apply_2pt_calibrations_inplace((float*)angular_rate_dps, lsm_gyr_calib, 3);
 
             memcpy(log_data.lsm_gyr_raw, data_raw_angular_rate, sizeof(data_raw_angular_rate));
@@ -489,13 +546,14 @@ void sensors_routine(void* arg) {
             adxl375_get_acceleration_raw(&adxl, data_raw_acceleration_adxl);
 
             // Global X is sensor Y
-            adxl_acceleration_g[0] = (data_raw_acceleration_adxl[1] * 49) * 0.001f;
+            adxl_acceleration_g_raw[0] = (data_raw_acceleration_adxl[0] * 49) * 0.001f;
             // Global Y is -sensor X
-            adxl_acceleration_g[1] = -(data_raw_acceleration_adxl[0] * 49) * 0.001f;
+            adxl_acceleration_g_raw[1] = (data_raw_acceleration_adxl[1] * 49) * 0.001f;
             // Z is Z
-            adxl_acceleration_g[2] = (data_raw_acceleration_adxl[2] * 49) * 0.001f;
+            adxl_acceleration_g_raw[2] = (data_raw_acceleration_adxl[2] * 49) * 0.001f;
 
             // CALIBRATE!
+            memcpy((float*)adxl_acceleration_g, (float*)adxl_acceleration_g_raw, sizeof(adxl_acceleration_g));
             apply_2pt_calibrations_inplace((float*)adxl_acceleration_g, adxl_acc_calib, 3);
 
             memcpy(log_data.adxl_acc_raw, data_raw_acceleration_adxl, sizeof(data_raw_acceleration_adxl));
@@ -504,13 +562,38 @@ void sensors_routine(void* arg) {
         xSemaphoreGive(sensors_mutex);
     }
 
+    FusionVector gyro, accel, mag;
+    memcpy(gyro.array, (float*)angular_rate_dps, sizeof(gyro.array));
+    // memcpy(accel.array, (float*)acceleration_g, sizeof(accel.array));
+    accel = get_interpolated_acceleration(); // TODO: Rigorously test!!!
+    memcpy(mag.array, (float*)magnetic_mG, sizeof(mag.array));
 
+    /*
+        Axes alignment describing the sensor axes relative to the body axes.
+        For example, if the body X axis is aligned with the sensor Y axis and the body Y axis is aligned with sensor X axis
+        but pointing the opposite direction then alignment is +Y-X+Z.
+    */
+    gyro = FusionAxesSwap(gyro, SENSORS_ALIGNMENT);
+    accel = FusionAxesSwap(accel, SENSORS_ALIGNMENT);
+    mag = FusionAxesSwap(mag, SENSORS_ALIGNMENT);
 
+    if (ahrs_no_magnetometer) {
+        FusionAhrsUpdateNoMagnetometer(&ahrs, gyro, accel, 1.0f / SENSOR_HZ);
+    } else {
+        FusionAhrsUpdate(&ahrs, gyro, accel, mag, 1.0f / SENSOR_HZ);
+    }
 
-    // TODO: Align axes!!!!!! (x,y,z direction convention, z-up antenna direction, x board axis, y out of the board front)
-    // Future have a configuration for mounting direction
+    // FusionAhrsUpdate(&ahrs, gyro, accel, mag, 1.0f / SENSOR_HZ);
 
+    FusionQuaternion orientation = FusionAhrsGetQuaternion(&ahrs);
+    memcpy(log_data.orientation_quat, orientation.array, sizeof(orientation.array));
 
+    // Axes:
+    // +Z is board-top
+    // +X is board-right (direction of GPS)
+    // +Y is antenna direction
+
+    altitude_m_raw = pressure_hPa_to_alt_m(pressure_hPa);
 
 
     // TODO: Fusion orientation filter & calibration

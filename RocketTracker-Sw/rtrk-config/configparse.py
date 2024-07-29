@@ -31,8 +31,12 @@ class BoolType(TypeBase):
         assert nativeval == 'bool'
         return self
 
+    def __repr__(self) -> str:
+        return "BoolType"
+
     def parse_value(self, nativeval: any):
-        assert isinstance(nativeval, bool)
+        if not isinstance(nativeval, bool):
+            return None
         return nativeval
 
 
@@ -67,7 +71,8 @@ class IntType(TypeBase):
         return f"IntType(min={self.min},max={self.max},valid={self.validvals})"
 
     def parse_value(self, nativeval: any):
-        assert isinstance(nativeval, int)
+        if not isinstance(nativeval, int):
+            return None
         valid = True
         if (self.min is not None):
             valid &= nativeval >= self.min
@@ -75,7 +80,8 @@ class IntType(TypeBase):
             valid &= nativeval <= self.max
         if (self.validvals is not None):
             valid &= nativeval in self.validvals
-        assert valid
+        if not valid:
+            return None
         return nativeval
 
 
@@ -110,7 +116,8 @@ class FloatType(TypeBase):
         return f"FloatType(min={self.min},max={self.max},valid={self.validvals})"
 
     def parse_value(self, nativeval: any):
-        assert isinstance(nativeval, float)
+        if not isinstance(nativeval, float):
+            return None
         valid = True
         if (self.min is not None):
             valid &= nativeval >= self.min
@@ -118,7 +125,8 @@ class FloatType(TypeBase):
             valid &= nativeval <= self.max
         if (self.validvals is not None):
             valid &= nativeval in self.validvals
-        assert valid
+        if (not valid):
+            return None
         return nativeval
 
 
@@ -136,8 +144,8 @@ class StringType(TypeBase):
         return f"StringType(maxlen={self.maxlen})"
 
     def parse_value(self, nativeval: any):
-        assert isinstance(nativeval, str)
-        assert len(nativeval) <= self.maxlen
+        if not (isinstance(nativeval, str) and len(nativeval) <= self.maxlen):
+            return None
         return nativeval
 
 
@@ -154,8 +162,8 @@ class EnumType(TypeBase):
         return f"EnumType(values={self.values})"
 
     def parse_value(self, nativeval: any):
-        assert isinstance(nativeval, str)
-        assert nativeval in self.values
+        if not (isinstance(nativeval, str) and nativeval in self.values):
+            return None
         return nativeval
 
 
