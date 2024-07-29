@@ -39,6 +39,7 @@
 
 #include "fmgr.h"
 #include "logging.h"
+#include "prelog.h"
 
 #include "configuration.h"
 config_provider_t GLOBAL_CONFIG; // Define this here
@@ -74,6 +75,8 @@ esp_timer_handle_t logging_timer;
 #define LOGDL_NOTIFY_START 0x01
 #define LOGDL_NOTIFY_ACK 0x02 // TODO: Use this to receive a acknowledgement for each segment in the future
 static TaskHandle_t log_download_task_handle;
+prelog_t prelogger;
+esp_timer_handle_t prelog_recording_timer;
 
 esp_timer_handle_t flight_timer;
 esp_timer_handle_t log_led_timer;
@@ -624,6 +627,7 @@ static void log_timer_task() {
 
         // set_logstate(LOGSTATE_LOGGING_STOPPED, 0);
     }
+    prelog_flush_some(&prelogger);
 }
 
 void set_logstate(logging_state_t state, int manual_hz) {
@@ -645,6 +649,7 @@ void set_logstate(logging_state_t state, int manual_hz) {
         case LOGSTATE_LOGGING_AUTO_ARMED:
             // Blink at 3Hz
             ESP_ERROR_CHECK(esp_timer_start_periodic(log_led_timer, 1000000 / 6));
+            prelog_start_recording(&prelogger);
 
             log_state_hz = LOG_HZ_AUTO_ARMED;
             break;
@@ -660,6 +665,7 @@ void set_logstate(logging_state_t state, int manual_hz) {
             break;
         case LOGSTATE_LOGGING_AUTO_LIFTOFF:
             log_state_hz = LOG_HZ_AUTO_LIFTOFF;
+            prelog_start_flushing(&prelogger);
 
             gpio_set_level(PIN_LED_G, 1);
             break;
@@ -677,6 +683,10 @@ void set_logstate(logging_state_t state, int manual_hz) {
             ESP_ERROR_CHECK(esp_timer_start_periodic(logging_timer, 1000000 / log_state_hz));
         }
     }
+}
+
+static void prelog_recording_timer_task() {
+    prelog_give_data(&prelogger, log_data);
 }
 
 static void init_logging() {
@@ -729,6 +739,21 @@ static void init_logging() {
     };
 
     ESP_ERROR_CHECK(esp_timer_create(&flight_timer_args, &flight_timer));
+
+
+    int32_t prelog_buf_size, prelog_rate_hz;
+    config_get_int(CONFIG_LOGGING_ARMED_RINGBUF_CAP_KEY, &prelog_buf_size);
+    config_get_int(CONFIG_LOGGING_ARMED_RINGBUF_HZ_KEY, &prelog_rate_hz);
+
+    prelog_init(&prelogger, &logger, prelog_buf_size);
+
+    const esp_timer_create_args_t prelog_timer_args = {
+        .callback = &prelog_recording_timer_task,
+        .name = "prelog_timer"
+    };
+
+    ESP_ERROR_CHECK(esp_timer_create(&prelog_timer_args, &prelog_recording_timer));
+    ESP_ERROR_CHECK(esp_timer_start_periodic(prelog_recording_timer, 1000000 / prelog_rate_hz));
 }
 
 // TODO: Make a special extension to the frame manager to reduce the amount of memcpys?
@@ -1331,11 +1356,11 @@ void DEBUG_output_task(void* arg) {
 
         }
         if (worldacc_on) {
-            FusionVector worldacc = FusionAhrsGetEarthAcceleration(&ahrs);
+            FusionVector worldacc = FusionVectorMultiplyScalar(FusionAhrsGetEarthAcceleration(&ahrs), GRAVITY_G);
             // ESP_LOGI("DEBUG-WORLDACC",
             //     "World-Space Acceleration [g]:  North: %4.2f West: %4.2f Up: %4.2f",
             //     worldacc.axis.x, worldacc.axis.y, worldacc.axis.z);
-            DEBUG_send_float3("Fused world-space acceleration", "g", worldacc.array);
+            DEBUG_send_float3("Fused world-space acceleration", "m/s2", worldacc.array);
         }
         // ESP_LOGI("DEBUG-LIS3MDL", "Temperature [C]:  %4.2f\n", temperature_degC);
     }

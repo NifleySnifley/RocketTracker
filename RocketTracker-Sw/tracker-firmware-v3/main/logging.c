@@ -12,8 +12,12 @@
 #include "math.h"
 #include <stdlib.h>
 #include "sys/time.h"
+#include "configuration.h"
 
 log_data_t log_data = { 0 };
+log_data_t* log_ringbuf;
+int log_ringbuf_capacity;
+int log_ringbuf_size;
 
 size_t min(size_t a, size_t b) {
     return (a < b) ? a : b;
@@ -79,6 +83,7 @@ esp_err_t logger_init(logger_t* logger, esp_flash_t* flash) {
     if (e != ESP_OK) {
         ESP_LOGE("LOGGER", "Error '%s' while refreshing logger.", esp_err_to_name(e));
     }
+
     return ESP_OK;
 }
 
@@ -214,8 +219,13 @@ esp_err_t logger_refresh(logger_t* logger) {
 
 uint8_t log_cobs_buf[sizeof(log_data_t) * 3];
 esp_err_t logger_log_data_now(logger_t* logger, uint8_t* data, size_t data_length) {
-    size_t buf_idx = 0;
     int64_t timestamp = util_time_us();
+    return logger_log_data(logger, data, data_length, timestamp);
+}
+
+uint8_t log_cobs_buf[sizeof(log_data_t) * 3];
+esp_err_t logger_log_data(logger_t* logger, uint8_t* data, size_t data_length, int64_t timestamp) {
+    size_t buf_idx = 0;
     uint8_t* ts_bytes = (uint8_t*)(&timestamp);
 
     // DONE: Detect log full/unable to write!

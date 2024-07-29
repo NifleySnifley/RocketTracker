@@ -19,6 +19,18 @@
 			"!name": "Acceleration transition high end",
 			"!type": "float(0, 15.9)",
 			"!default": 15.9
+		},
+		"altitude_stdev": {
+			"!name": "Altitude measurement standard deviation",
+			"!type": "float",
+			"!default": 0.4,
+			"!suffix": "m"
+		},
+		"vert_accel_stdev": {
+			"!name": "Vertical acceleration standard deviation",
+			"!type": "float",
+			"!default": 0.02,
+			"!suffix": "m/s"
 		}
 	},
 	"logging": {
@@ -47,6 +59,16 @@
 			"!type": "float(1,256)",
 			"!suffix": "Hz",
 			"!default": 60.0
+		},
+		"armed_ringbuf_cap": {
+			"!name": "Pre-launch log buffer size",
+			"!type": "int(0, 2560)",
+			"!default": 200
+		},
+		"armed_ringbuf_hz": {
+			"!name": "Pre-launch log rate",
+			"!type": "int(0, 256)",
+			"!default": 200
 		}
 	},
 	"misc": {

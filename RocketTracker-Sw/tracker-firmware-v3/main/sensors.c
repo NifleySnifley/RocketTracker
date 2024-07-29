@@ -57,6 +57,8 @@ calibration_2pt_t lps_calib;
 bool ahrs_no_magnetometer = false;
 float acc_transition_low = CONFIG_SENSORS_ACC_TRANS_LO_DEFAULT;
 float acc_transition_high = CONFIG_SENSORS_ACC_TRANS_LO_DEFAULT;
+float vertical_acceleration_stdev;
+float altimetry_stdev;
 
 void init_sensors() {
     // ADXL375 Calibration
@@ -111,6 +113,9 @@ void init_sensors() {
 
     config_get_float(CONFIG_SENSORS_ACC_TRANS_LO_KEY, &acc_transition_low);
     config_get_float(CONFIG_SENSORS_ACC_TRANS_HI_KEY, &acc_transition_high);
+
+    config_get_float(CONFIG_SENSORS_ALTITUDE_STDEV_KEY, &altimetry_stdev);
+    config_get_float(CONFIG_SENSORS_VERT_ACCEL_STDEV_KEY, &vertical_acceleration_stdev);
 
     FusionAhrsInitialise(&ahrs);
     // FusionAhrsSetSettings(&ahrs, &settings);

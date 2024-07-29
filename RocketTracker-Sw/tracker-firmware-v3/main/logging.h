@@ -40,6 +40,7 @@ typedef enum logging_state_t {
     LOGSTATE_LOGGING_MANUAL_HZ
 } logging_state_t;
 
+// TODO: Get this from config!!!
 #define LOG_HZ_AUTO_ARMED 10
 #define LOG_HZ_AUTO_LIFTOFF 200
 #define LOG_HZ_AUTO_FLIGHT 60
@@ -81,6 +82,8 @@ esp_err_t logger_refresh(logger_t* logger);
 // LATER (handle ring buffer/wrapping)
 esp_err_t logger_log_data_now(logger_t* logger, uint8_t* data, size_t data_length);
 
+esp_err_t logger_log_data(logger_t* logger, uint8_t* data, size_t data_length, int64_t timestamp);
+
 // DONE
 esp_err_t logger_flush(logger_t* logger);
 
@@ -118,5 +121,7 @@ size_t logger_get_current_log_size(logger_t* logger);
 // -> ACK_Download_Complete
 
 extern log_data_t log_data;
+
+int64_t util_time_us();
 
 #endif

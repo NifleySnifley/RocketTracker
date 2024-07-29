@@ -4,6 +4,11 @@ dependencies:
     source:
       type: service
     version: 3.1.2
+  espressif/esp-dsp:
+    component_hash: 3e7bbd487f1357a1d4944d0c85966d049501ea281b8a4c7f93f7cfedd5b7f23d
+    source:
+      type: service
+    version: 1.4.12
   idf:
     component_hash: null
     source:
@@ -14,6 +19,6 @@ dependencies:
     source:
       type: service
     version: 0.1.1
-manifest_hash: 81648ce12b752e4aa763c4b285029049d62f75b7ccc8c6f2a2f898755678b67f
+manifest_hash: 3a10e7f5244c876dc42a0821df4e1aadbc848b058113963621c2e7173cc24345
 target: esp32s3
 version: 1.0.0
