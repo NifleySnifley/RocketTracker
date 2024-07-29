@@ -478,6 +478,7 @@ def debug(args):
             stdscr.clear()
             stdscr.addstr(
                 0, 0, "Timed out, maybe you forgot to enable debug monitoring over USB?")
+            break
 
         if (stdscr.getch() == ord('q')):
             break
@@ -586,6 +587,10 @@ def sensormon(args):
     curses.noecho()
     curses.cbreak()
 
+    port = 9870
+    ip = "127.0.0.1"
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
     while (not EX):
         d = wait_for_datum([protocol.INFO_SensorData], 1.5)
         if d is not None:  # and d.typeid != protocol.DatumTypeID.STATUS_RadioRxStatus
@@ -613,15 +618,23 @@ def sensormon(args):
 
             if (pb.HasField('filtered_orientation')):
                 quat = pb.filtered_orientation
-                rpy = quat2euler(quat.x, quat.y, quat.z, quat.w)
+                rpy = quat2euler((quat.w, quat.x, quat.y, quat.z))
                 stdscr.addstr(
                     5, 0, f"Filtered Orientation (roll,pitch,yaw): {vector_print_just(rpy)}")
                 stdscr.addstr(
                     6, 0, f"Filtered Orientation (w,x,y,z): {vector_print_just([quat.w, quat.x, quat.y, quat.z])}")
 
+            if (pb.HasField('filtered_altimetry')):
+                stdscr.addstr(
+                    7, 0, f"Filtered Altitude (m): {pb.filtered_altimetry.alt_m:9.4f}")
+                stdscr.addstr(
+                    8, 0, f"Filtered V-Speed (m/s): {pb.filtered_altimetry.v_speed:9.4f}")
+
             stdscr.refresh()
             if (args.log):
                 args.log.writelines([f"{d.to_dict()}"])
+
+            sock.sendto(bytes(json.dumps(d.to_dict()), 'utf8'), (ip, port))
 
             if (stdscr.getch() != -1):
                 EX = True
@@ -989,6 +1002,62 @@ def calibrate_gyr(args):
         rate_hz=0, raw=False))
     tx_queue.put(d)
 
+# Simple null-offset calibration for the gyro
+
+
+def calibrate_altimetry(args):
+    init_cli(args)
+
+    NSAMPLES = 256*10
+    alt_samples = []
+    accel_samples = []
+
+    input("Place the device on a stationary surface and press <enter> to begin altimetry calibration")
+
+    # Run at the rate that the filter will run at!
+    d = Datum(protocol.CMD_ConfigSensorOutput)
+    d.load_protobuf(protocol.Command_ConfigSensorOutput(
+        rate_hz=256, raw=False))
+    tx_queue.put(d)
+
+    # repeated float lsm_acceleration_g = 1;
+    # repeated float lsm_gyro_dps = 2
+    # repeated float adxl_acceleration_g = 3
+    # repeated float lis_magnetic_mG = 4
+    # required float lps_pressure_hPa = 5
+
+    def hPa2meters(hPa):
+        return 44330. * (1 - pow(hPa / 1013.25, 0.190284))
+
+    flush_rx()
+    for i in tqdm(range(NSAMPLES)):
+        d = wait_for_datum([protocol.INFO_SensorData], 1.0)
+        if d is None:
+            print("Error: timed out!")
+            exit(1)
+        else:
+            pb = d.to_protobuf()
+            accel_samples.append(pb.filtered_world_acceleration_m_s)
+            alt_samples.append(hPa2meters(pb.lps_pressure_hPa))
+
+    alt_std = np.std(alt_samples)
+    acc_std = np.average(np.std(accel_samples, axis=0))
+    print("Calibration finished.")
+    print()
+    print(f"Acceleration standard deviation: {acc_std} m/s")
+    print(f"Barometric altitude standard deviation: {alt_std} m")
+
+    d = Datum(protocol.CMD_ConfigSensorOutput)
+    d.load_protobuf(protocol.Command_ConfigSensorOutput(
+        rate_hz=0, raw=False))
+    tx_queue.put(d)
+
+    write = strtobool(input("Write calibration to device? [y/n]:"))
+    if (write):
+        set_configval("config.sensors.vert_accel_stdev", acc_std)
+        set_configval("config.sensors.altitude_stdev", alt_std)
+        print("Successfully wrote calibration.")
+
 
 def calibrate_mag(args):
     init_cli(args)
@@ -1341,6 +1410,9 @@ if __name__ == "__main__":
 
     parser_calib_mag = calib_subparsers.add_parser("mag")
     parser_calib_mag.set_defaults(func=calibrate_mag)
+
+    parser_calib_mag = calib_subparsers.add_parser("altimetry")
+    parser_calib_mag.set_defaults(func=calibrate_altimetry)
 
     parser_sensormon = subparsers.add_parser('sensormon')
     parser_sensormon.set_defaults(func=sensormon)

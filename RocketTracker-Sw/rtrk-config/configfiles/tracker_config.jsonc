@@ -23,13 +23,13 @@
 		"altitude_stdev": {
 			"!name": "Altitude measurement standard deviation",
 			"!type": "float",
-			"!default": 0.4,
+			"!default": 0.25,
 			"!suffix": "m"
 		},
 		"vert_accel_stdev": {
 			"!name": "Vertical acceleration standard deviation",
 			"!type": "float",
-			"!default": 0.02,
+			"!default": 0.01,
 			"!suffix": "m/s"
 		}
 	},

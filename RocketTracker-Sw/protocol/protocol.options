@@ -12,6 +12,9 @@ SensorData.adxl_acceleration_g fixed_count:true
 SensorData.lis_magnetic_mG max_count:3
 SensorData.lis_magnetic_mG fixed_count:true
 
+SensorData.filtered_world_acceleration_m_s max_count:3
+SensorData.filtered_world_acceleration_m_s fixed_count:true
+
 Config.key_hashed max_size:64
 Config.string_value max_size:64
 

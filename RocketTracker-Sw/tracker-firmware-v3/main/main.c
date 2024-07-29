@@ -1093,9 +1093,16 @@ static void adxl_int_worker(void* arg) {
                     set_logstate(LOGSTATE_LOGGING_AUTO_LIFTOFF, 0);
                     // DONE: Start flight timer to switch to LOGSTATE_LOGGING_AUTO_FLIGHT
                     ESP_ERROR_CHECK(esp_timer_start_once(flight_timer, 1000000 * LIFTOFF_DURATION));
+
+                    // TODO: Make sure it's safe to flush here!
+                    link_send_datum(DatumTypeID_INFO_Alert, Alert_fields, &(Alert) {
+                        .type = AlertType_ALT_Liftoff,
+                            .has_data = false
+                    });
+                    link_flush();
                 }
                 break;
-                // TODO: Inact interrupt for LANDED
+                // TODO: Inact interrupt for LANDED?
             default:
                 break;
         }
@@ -1402,6 +1409,9 @@ static void sensor_output_task(void* arg) {
             data.lps_pressure_hPa = pressure_hPa;
         }
 
+        FusionVector worldacc = FusionVectorMultiplyScalar(FusionAhrsGetEarthAcceleration(&ahrs), GRAVITY_G);
+        memcpy(data.filtered_world_acceleration_m_s, (float*)worldacc.array, sizeof(worldacc.array));
+
         data.filtered_orientation = (Quaternion){ 0 };
         FusionQuaternion orientation = FusionAhrsGetQuaternion(&ahrs);
         // memcpy(data.filtered_orientation.components, orientation.array, sizeof(orientation.array));
@@ -1411,7 +1421,11 @@ static void sensor_output_task(void* arg) {
         data.filtered_orientation.w = orientation.element.w;
         data.has_filtered_orientation = true;
 
-        data.has_filtered_altimetry = false;
+        data.has_filtered_altimetry = true;
+        // data.filtered_altimetry.
+        data.filtered_altimetry.alt_m = altitude_m;
+        data.filtered_altimetry.v_speed = v_speed_m_s;
+        data.filtered_altimetry.has_v_speed = true;
 
         if (USB_AVAILABLE) {
             link_send_datum(DatumTypeID_INFO_SensorData, SensorData_fields, &data);

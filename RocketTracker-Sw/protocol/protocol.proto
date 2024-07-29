@@ -47,13 +47,17 @@ message Orientation {
 
 enum AlertType {
   ALT_Apogee = 0;  // Reached apogee
-  ALT_LowBatt = 1; // Battery < 50%
-  ALT_CritBatt = 6; // Battery < 20%
+
+  // TODO: These alerts can/should be generated from INFO_Battery messages
+  // ALT_LowBatt = 1; // Battery < 50%
+  // ALT_CritBatt = 6; // Battery < 20%
   ALT_Landed = 2;  // No major movement for X secs (configurable?)
   ALT_Liftoff = 3; // Large forward accel detected
-  ALT_Log50 = 4;   // Log memory 50% full warning (IDEA: Maybe have it reduce
+
+  // TODO: These alerts can/should be generated from INFO_LogStatus messages
+  // ALT_Log50 = 4;   // Log memory 50% full warning (IDEA: Maybe have it reduce
                    // logging speed as it fills? inversely slower?)
-  ALT_LogFull = 5; // Log full, logging stopped!
+  //ALT_LogFull = 5; // Log full, logging stopped!
 
   ALT_Error = 128; // Internal tracker error, error code specified in data
 }
@@ -222,6 +226,7 @@ message SensorData {
     repeated float adxl_acceleration_g = 3;
     repeated float lis_magnetic_mG = 4;
     required float lps_pressure_hPa = 5;
+    repeated float filtered_world_acceleration_m_s = 8;
 
     optional Quaternion filtered_orientation = 6;
     optional Altitude filtered_altimetry = 7;

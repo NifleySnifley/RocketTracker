@@ -57,4 +57,4 @@
 #define DEBUG_UART_TX PIN_EXP2
 #endif
 
-#define GRAVITY_G 9.805
+#define GRAVITY_G 9.81

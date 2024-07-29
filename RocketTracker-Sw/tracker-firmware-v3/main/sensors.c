@@ -2,6 +2,7 @@
 #include "configuration.h"
 #include "Fusion.h"
 #include "tracker_config.h"
+#include "alt_filter.h"
 
 // Sensors
 stmdev_ctx_t lps22;
@@ -36,6 +37,7 @@ volatile float altitude_m_raw;
 FusionAhrs ahrs;
 volatile float altitude_m;
 volatile float v_speed_m_s;
+volatile altimetry_filter_t alt_filter;
 
 const FusionAxesAlignment SENSORS_ALIGNMENT = FusionAxesAlignmentNXNYPZ;
 
@@ -57,8 +59,6 @@ calibration_2pt_t lps_calib;
 bool ahrs_no_magnetometer = false;
 float acc_transition_low = CONFIG_SENSORS_ACC_TRANS_LO_DEFAULT;
 float acc_transition_high = CONFIG_SENSORS_ACC_TRANS_LO_DEFAULT;
-float vertical_acceleration_stdev;
-float altimetry_stdev;
 
 void init_sensors() {
     // ADXL375 Calibration
@@ -114,12 +114,16 @@ void init_sensors() {
     config_get_float(CONFIG_SENSORS_ACC_TRANS_LO_KEY, &acc_transition_low);
     config_get_float(CONFIG_SENSORS_ACC_TRANS_HI_KEY, &acc_transition_high);
 
-    config_get_float(CONFIG_SENSORS_ALTITUDE_STDEV_KEY, &altimetry_stdev);
-    config_get_float(CONFIG_SENSORS_VERT_ACCEL_STDEV_KEY, &vertical_acceleration_stdev);
-
     FusionAhrsInitialise(&ahrs);
     // FusionAhrsSetSettings(&ahrs, &settings);
     FusionAhrsReset(&ahrs);
+
+
+    float vertical_acceleration_stdev, altimetry_stdev;
+    config_get_float(CONFIG_SENSORS_ALTITUDE_STDEV_KEY, &altimetry_stdev);
+    config_get_float(CONFIG_SENSORS_VERT_ACCEL_STDEV_KEY, &vertical_acceleration_stdev);
+
+    altimetry_filter_init(&alt_filter, 1.0f / SENSOR_HZ, vertical_acceleration_stdev, altimetry_stdev);
 }
 
 void init_sensor_spi() {
@@ -289,7 +293,9 @@ void init_lps22() {
 
     lps22hh_block_data_update_set(&lps22, PROPERTY_ENABLE);
     /* Set Output Data Rate */
-    lps22hh_data_rate_set(&lps22, LPS22HH_200_Hz);
+    // lps22hh_data_rate_set(&lps22, LPS22HH_200_Hz);
+    lps22hh_data_rate_set(&lps22, LPS22HH_75_Hz_LOW_NOISE);
+
     // lps22hh_pressure_offset_set(&lps22, (int16_t)(-63.0527133333 * 1048576.0f)); // error*1048576.0f
 }
 
@@ -420,9 +426,10 @@ FusionVector get_interpolated_acceleration() {
 
     // if (FusionVectorMagnitudeSquared(adxl_accel))
     for (int axis = 0; axis < 3; axis++) {
-        float avg = (lsm_accel.array[axis] + adxl_accel.array[axis]) * 0.5f;
-        float factor = clamp((avg - acc_transition_low) / (acc_transition_low - acc_transition_high), 0.0f, 1.0f);
-        interpolated_accel.array[axis] = (1.0f - factor) * adxl_accel.array[axis] + factor * lsm_accel.array[axis];
+        float abs_avg = abs((lsm_accel.array[axis] + adxl_accel.array[axis]) * 0.5f);
+
+        float factor = clamp((abs_avg - acc_transition_low) / (acc_transition_high - acc_transition_low), 0.0f, 1.0f);
+        interpolated_accel.array[axis] = lsm_accel.array[axis] * (1.0f - factor) + factor * adxl_accel.array[axis];
     }
 
     return interpolated_accel;
@@ -569,8 +576,8 @@ void sensors_routine(void* arg) {
 
     FusionVector gyro, accel, mag;
     memcpy(gyro.array, (float*)angular_rate_dps, sizeof(gyro.array));
-    // memcpy(accel.array, (float*)acceleration_g, sizeof(accel.array));
-    accel = get_interpolated_acceleration(); // TODO: Rigorously test!!!
+    memcpy(accel.array, (float*)acceleration_g, sizeof(accel.array));
+    // accel = get_interpolated_acceleration(); // TODO: Rigorously test!!!
     memcpy(mag.array, (float*)magnetic_mG, sizeof(mag.array));
 
     /*
@@ -593,13 +600,13 @@ void sensors_routine(void* arg) {
     FusionQuaternion orientation = FusionAhrsGetQuaternion(&ahrs);
     memcpy(log_data.orientation_quat, orientation.array, sizeof(orientation.array));
 
-    // Axes:
-    // +Z is board-top
-    // +X is board-right (direction of GPS)
-    // +Y is antenna direction
-
     altitude_m_raw = pressure_hPa_to_alt_m(pressure_hPa);
+    altimetry_filter_update(&alt_filter, &ahrs, altitude_m_raw);
 
+
+
+    altitude_m = altimetry_filter_get_filtered_altitude(&alt_filter);
+    v_speed_m_s = altimetry_filter_get_filtered_vspeed(&alt_filter);
 
     // TODO: Fusion orientation filter & calibration
     // TODO: Kalman altitude filter

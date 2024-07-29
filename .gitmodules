@@ -1,40 +1,40 @@
 [submodule "RocketTracker-Hw"]
-	path = RocketTracker-Hw
-	url = https://github.com/NifleySnifley/RocketTracker-Hw
+path = RocketTracker-Hw
+url = https://github.com/NifleySnifley/RocketTracker-Hw
 [submodule "RocketTracker-Sw/nanopb"]
-	path = RocketTracker-Sw/nanopb
-	url = https://github.com/nanopb/nanopb
+path = RocketTracker-Sw/nanopb
+url = https://github.com/nanopb/nanopb
 [submodule "RocketTracker-Sw/rtrk_gui/external/ImOsm"]
-	path = RocketTracker-Sw/rtrk_gui/external/ImOsm
-	url = https://github.com/gorbatschow/ImOsm
+path = RocketTracker-Sw/rtrk_gui/external/ImOsm
+url = https://github.com/gorbatschow/ImOsm
 [submodule "RocketTracker-Sw/rtrk_gui/external/implot"]
-	path = RocketTracker-Sw/rtrk_gui/external/implot
-	url = https://github.com/epezent/implot
+path = RocketTracker-Sw/rtrk_gui/external/implot
+url = https://github.com/epezent/implot
 [submodule "RocketTracker-Sw/rtrk_gui/external/imgui_club"]
-	path = RocketTracker-Sw/rtrk_gui/external/imgui_club
-	url = https://github.com/ocornut/imgui_club
+path = RocketTracker-Sw/rtrk_gui/external/imgui_club
+url = https://github.com/ocornut/imgui_club
 [submodule "RocketTracker-Sw/rtrk_gui/external/ImFileDialog"]
-	path = RocketTracker-Sw/rtrk_gui/external/ImFileDialog
-	url = https://github.com/dfranx/ImFileDialog
+path = RocketTracker-Sw/rtrk_gui/external/ImFileDialog
+url = https://github.com/dfranx/ImFileDialog
 [submodule "RocketTracker-Sw/rtrk_gui/external/imgui"]
-	path = RocketTracker-Sw/rtrk_gui/external/imgui
-	url = https://github.com/ocornut/imgui
-	branch = docking
+path = RocketTracker-Sw/rtrk_gui/external/imgui
+url = https://github.com/ocornut/imgui
+branch = docking
 [submodule "RocketTracker-Sw/rtrk_gui/external/glfw"]
-	path = RocketTracker-Sw/rtrk_gui/external/glfw
-	url = https://github.com/glfw/glfw
+path = RocketTracker-Sw/rtrk_gui/external/glfw
+url = https://github.com/glfw/glfw
 [submodule "RocketTracker-Sw/rtrk_gui/external/libserial"]
-	path = RocketTracker-Sw/rtrk_gui/external/libserial
-	url = https://github.com/crayzeewulf/libserial
+path = RocketTracker-Sw/rtrk_gui/external/libserial
+url = https://github.com/crayzeewulf/libserial
 [submodule "RocketTracker-Sw/rtrk_gui/external/MSerialLib"]
-	path = RocketTracker-Sw/rtrk_gui/external/MSerialLib
-	url = https://github.com/puppydytt/MSerialLib
+path = RocketTracker-Sw/rtrk_gui/external/MSerialLib
+url = https://github.com/puppydytt/MSerialLib
 [submodule "RocketTracker-Sw/rtrk_gui/external/mINI"]
-	path = RocketTracker-Sw/rtrk_gui/external/mINI
-	url = https://github.com/metayeti/mINI
+path = RocketTracker-Sw/rtrk_gui/external/mINI
+url = https://github.com/metayeti/mINI
 [submodule "RocketTracker-Sw/rtrk_gui/external/latlon"]
-	path = RocketTracker-Sw/rtrk_gui/external/latlon
-	url = https://github.com/gorbatschow/latlon
+path = RocketTracker-Sw/rtrk_gui/external/latlon
+url = https://github.com/gorbatschow/latlon
 [submodule "RocketTracker-Sw/rtrk_gui/external/stb"]
-	path = RocketTracker-Sw/rtrk_gui/external/stb
-	url = https://github.com/nothings/stb
+path = RocketTracker-Sw/rtrk_gui/external/stb
+url = https://github.com/nothings/stb

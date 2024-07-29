@@ -59,7 +59,13 @@
         "configuration.h": "c",
         "config_generated.h": "c",
         "typeinfo": "c",
-        "ekf.h": "c"
+        "ekf.h": "c",
+        "eigen": "cpp",
+        "vector": "cpp",
+        "stdexcept": "cpp",
+        "dense": "cpp",
+        "iosfwd": "cpp",
+        "matrixfunctions": "cpp"
     },
     "editor.tabSize": 4,
     "editor.insertSpaces": true,
