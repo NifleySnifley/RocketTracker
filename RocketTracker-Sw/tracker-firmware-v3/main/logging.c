@@ -14,10 +14,7 @@
 #include "sys/time.h"
 #include "configuration.h"
 
-log_data_t log_data = { 0 };
-log_data_t* log_ringbuf;
-int log_ringbuf_capacity;
-int log_ringbuf_size;
+log_data_default_t log_data = { 0 };
 
 size_t min(size_t a, size_t b) {
     return (a < b) ? a : b;
@@ -31,6 +28,21 @@ int64_t util_time_us() {
 }
 
 uint8_t logger_tmp_buffer[256] = { 0 };
+
+void logger_task(void* arg) {
+    logger_t* logger = (logger_t*)arg;
+    ESP_LOGI("LOGGER", "Logger task starting");
+
+    while (1) {
+        log_request_t req = { 0 };
+        // Do logger IO things
+        if (xQueueReceive(logger->log_queue, &req, portMAX_DELAY) == pdPASS) {
+            logger_log_data(logger, req.typeid, req.data, req.data_length, req.timestamp);
+            // THIS IS IMPORTANT!!!
+            free(req.data);
+        }
+    }
+}
 
 esp_err_t logger_init(logger_t* logger, esp_flash_t* flash) {
     logger->ext_flash = flash;
@@ -57,7 +69,9 @@ esp_err_t logger_init(logger_t* logger, esp_flash_t* flash) {
     } else if (e != ESP_OK) {
         ESP_LOGE("LOGGER", "Error getting NVS key '%s'", NVS_LOG_START);
     } else {
-        ESP_ERROR_CHECK(nvs_get_u32(logger->log_nvs, NVS_LOG_START, &logger->log_start_address));
+        uint32_t start_addr;
+        ESP_ERROR_CHECK(nvs_get_u32(logger->log_nvs, NVS_LOG_START, &start_addr));
+        logger->log_start_address = start_addr;
     }
 
     e = nvs_find_key(logger->log_nvs, NVS_LOG_END, NULL);
@@ -66,7 +80,9 @@ esp_err_t logger_init(logger_t* logger, esp_flash_t* flash) {
     } else if (e != ESP_OK) {
         ESP_LOGE("LOGGER", "Error getting NVS key '%s'", NVS_LOG_END);
     } else {
-        ESP_ERROR_CHECK(nvs_get_u32(logger->log_nvs, NVS_LOG_END, &logger->log_end_address));
+        uint32_t end_addr;
+        ESP_ERROR_CHECK(nvs_get_u32(logger->log_nvs, NVS_LOG_END, &end_addr));
+        logger->log_end_address = end_addr;
     }
 
     // DEBUG!!!
@@ -83,6 +99,16 @@ esp_err_t logger_init(logger_t* logger, esp_flash_t* flash) {
     if (e != ESP_OK) {
         ESP_LOGE("LOGGER", "Error '%s' while refreshing logger.", esp_err_to_name(e));
     }
+
+    // Create the queue
+    logger->log_queue = xQueueCreate(LOGGER_QUEUE_SIZE, sizeof(log_request_t));
+    if (logger->log_queue == NULL) {
+        ESP_LOGE("LOGGER", "Error initializing logger queue");
+        return ESP_ERR_NOT_FINISHED;
+    }
+
+    // Create the logger task
+    xTaskCreate(logger_task, "logger_task", 1024 * 4, logger, 10, &logger->log_task);
 
     return ESP_OK;
 }
@@ -217,54 +243,125 @@ esp_err_t logger_refresh(logger_t* logger) {
     return ESP_OK;
 }
 
-uint8_t log_cobs_buf[sizeof(log_data_t) * 3];
-esp_err_t logger_log_data_now(logger_t* logger, uint8_t* data, size_t data_length) {
+esp_err_t logger_queue_log_data_now(logger_t* logger, log_datatype_t typeid, uint8_t* data_allocd, size_t data_length) {
     int64_t timestamp = util_time_us();
-    return logger_log_data(logger, data, data_length, timestamp);
+    return logger_queue_log_data(logger, typeid, data_allocd, data_length, timestamp);
 }
 
-uint8_t log_cobs_buf[sizeof(log_data_t) * 3];
-esp_err_t logger_log_data(logger_t* logger, uint8_t* data, size_t data_length, int64_t timestamp) {
-    size_t buf_idx = 0;
-    uint8_t* ts_bytes = (uint8_t*)(&timestamp);
+esp_err_t logger_queue_log_data(logger_t* logger, log_datatype_t typeid, uint8_t* data_allocd, size_t data_length, int64_t timestamp) {
+    log_request_t req = {
+        .data_length = data_length,
+        .timestamp = timestamp,
+        .data = data_allocd,
+        .typeid = typeid
+    };
+    // TODO: Not max delay...
+    xQueueSend(logger->log_queue, &req, portMAX_DELAY);
+    return ESP_OK;
+}
+
+
+// TODO: Use a static sized buffer, but write the data not-raw
+// uint8_t log_cobs_buf[sizeof(log_data_t) * 3];
+uint8_t* log_cobs_buf;
+size_t log_cobs_buf_size = 0;
+
+esp_err_t logger_log_data_now(logger_t* logger, log_datatype_t typeid, uint8_t* data, size_t data_length) {
+    int64_t timestamp = util_time_us();
+    return logger_log_data(logger, typeid, data, data_length, timestamp);
+}
+
+ssize_t cobs_write_data(uint8_t* data_ptr, size_t data_len, uint8_t* buffer_ptr, size_t buffer_len) {
+    ssize_t buf_idx = 0;
+    for (int i = 0; i < data_len; ++i) {
+        uint8_t b = data_ptr[i];
+        if (buf_idx + 2 > buffer_len) {
+            return -1;
+        }
+
+        if (b == 0xFF) {
+            buffer_ptr[buf_idx++] = LOGGER_COBS_ESC;
+            buffer_ptr[buf_idx++] = LOGGER_COBS_ESC_FF;
+        } else if (b == 0xAA) {
+            buffer_ptr[buf_idx++] = LOGGER_COBS_ESC;
+            buffer_ptr[buf_idx++] = LOGGER_COBS_ESC_AA;
+        } else {
+            buffer_ptr[buf_idx++] = b;
+        }
+    }
+    return buf_idx;
+}
+
+esp_err_t logger_log_data(logger_t* logger, log_datatype_t typeid, uint8_t* data, size_t data_length, int64_t timestamp) {
+    ssize_t buf_idx = 0;
+    // uint8_t* ts_bytes = (uint8_t*)(&timestamp);
+    if (typeid < 0 || typeid > UINT16_MAX) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    uint16_t typeid_u16 = typeid;
 
     // DONE: Detect log full/unable to write!
 
+    // This will eventually settle to be a buffer big enough to store regular log data
+    size_t num_bytes_alloc = (data_length + sizeof(int64_t) + sizeof(uint16_t) + 1) * 2;
+    if (num_bytes_alloc > log_cobs_buf_size || log_cobs_buf == NULL) {
+        if (log_cobs_buf != NULL)
+            free(log_cobs_buf);
+
+        log_cobs_buf = (uint8_t*)malloc(num_bytes_alloc);
+        log_cobs_buf_size = num_bytes_alloc;
+    }
+
+    buf_idx += cobs_write_data((uint8_t*)(&timestamp), sizeof(timestamp), &log_cobs_buf[buf_idx], log_cobs_buf_size - buf_idx);
+    if (buf_idx < 0) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    buf_idx += cobs_write_data((uint8_t*)(&typeid_u16), sizeof(typeid_u16), &log_cobs_buf[buf_idx], log_cobs_buf_size - buf_idx);
+    if (buf_idx < 0) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    buf_idx += cobs_write_data(data, data_length, &log_cobs_buf[buf_idx], log_cobs_buf_size - buf_idx);
+    if (buf_idx < 0) {
+        return ESP_ERR_NO_MEM;
+    }
+
     // Encode timestamp
-    for (int i = 0; i < sizeof(timestamp); ++i) {
-        uint8_t b = ts_bytes[i];
-        if (buf_idx + 2 > sizeof(log_cobs_buf)) {
-            return ESP_ERR_NO_MEM;
-        }
+    // for (int i = 0; i < sizeof(timestamp); ++i) {
+    //     uint8_t b = ts_bytes[i];
+    //     if (buf_idx + 2 > log_cobs_buf_size) {
+    //         return ESP_ERR_NO_MEM;
+    //     }
 
-        if (b == 0xFF) {
-            log_cobs_buf[buf_idx++] = LOGGER_COBS_ESC;
-            log_cobs_buf[buf_idx++] = LOGGER_COBS_ESC_FF;
-        } else if (b == 0xAA) {
-            log_cobs_buf[buf_idx++] = LOGGER_COBS_ESC;
-            log_cobs_buf[buf_idx++] = LOGGER_COBS_ESC_AA;
-        } else {
-            log_cobs_buf[buf_idx++] = b;
-        }
-    }
+    //     if (b == 0xFF) {
+    //         log_cobs_buf[buf_idx++] = LOGGER_COBS_ESC;
+    //         log_cobs_buf[buf_idx++] = LOGGER_COBS_ESC_FF;
+    //     } else if (b == 0xAA) {
+    //         log_cobs_buf[buf_idx++] = LOGGER_COBS_ESC;
+    //         log_cobs_buf[buf_idx++] = LOGGER_COBS_ESC_AA;
+    //     } else {
+    //         log_cobs_buf[buf_idx++] = b;
+    //     }
+    // }
 
-    // Encode data payload
-    for (int i = 0; i < data_length; ++i) {
-        uint8_t b = data[i];
-        if (buf_idx + 2 > sizeof(log_cobs_buf)) {
-            return ESP_ERR_NO_MEM;
-        }
+    // // Encode data payload
+    // for (int i = 0; i < data_length; ++i) {
+    //     uint8_t b = data[i];
+    //     if (buf_idx + 2 > log_cobs_buf_size) {
+    //         return ESP_ERR_NO_MEM;
+    //     }
 
-        if (b == 0xFF) {
-            log_cobs_buf[buf_idx++] = LOGGER_COBS_ESC;
-            log_cobs_buf[buf_idx++] = LOGGER_COBS_ESC_FF;
-        } else if (b == 0xAA) {
-            log_cobs_buf[buf_idx++] = LOGGER_COBS_ESC;
-            log_cobs_buf[buf_idx++] = LOGGER_COBS_ESC_AA;
-        } else {
-            log_cobs_buf[buf_idx++] = b;
-        }
-    }
+    //     if (b == 0xFF) {
+    //         log_cobs_buf[buf_idx++] = LOGGER_COBS_ESC;
+    //         log_cobs_buf[buf_idx++] = LOGGER_COBS_ESC_FF;
+    //     } else if (b == 0xAA) {
+    //         log_cobs_buf[buf_idx++] = LOGGER_COBS_ESC;
+    //         log_cobs_buf[buf_idx++] = LOGGER_COBS_ESC_AA;
+    //     } else {
+    //         log_cobs_buf[buf_idx++] = b;
+    //     }
+    // }
 
     // Frame spacer!
     log_cobs_buf[buf_idx++] = 0xFF;

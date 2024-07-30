@@ -31,6 +31,9 @@ import math
 from pyquaternion import Quaternion
 import socket
 import json
+from colorama import init as colinit
+from colorama import Fore, Back, Style
+colinit()
 
 
 CONFIG_DIR = path.abspath(path.join(
@@ -411,10 +414,27 @@ def log_download(args):
                 f"Download complete! Downloaded {status.to_dict()['log_size']}")
             segments.append(segment.to_dict())  # Get the ACK too!
             # print(segments)
+
             pickle.dump(segments, args.outfile)
             args.outfile.flush()
             args.outfile.close()
             print("Saved to pickle")
+
+            segments, ack = segments[:-1], segments[-1]
+            # print(ack)
+            crc_xor = ack['log_crc16']
+            xor = 0
+            for s in segments:
+                xor ^= s['segment_crc16']
+            if (xor != crc_xor):
+                print(Fore.RED + "ERROR! Downloaded log CRC mismatch")
+                print(Fore.YELLOW +
+                      "Please re-download log to prevent data loss/corruption!")
+                print(Style.RESET_ALL)
+            else:
+                print(Fore.GREEN + "Log CRC verified")
+                print(Style.RESET_ALL)
+
             break
         else:
             if ("error" in segment.to_dict()):

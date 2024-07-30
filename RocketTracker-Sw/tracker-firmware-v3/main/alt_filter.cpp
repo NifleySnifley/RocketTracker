@@ -68,12 +68,12 @@ void altimetry_filter_init(altimetry_filter_t* filter, float dt, float vertical_
 
     P = Q;
 
-    print_matrix(A, "A");
-    print_matrix(B, "B");
-    print_matrix(C, "C");
-    print_matrix(Q, "Q");
-    print_matrix(R, "R");
-    print_matrix(P, "P");
+    // print_matrix(A, "A");
+    // print_matrix(B, "B");
+    // print_matrix(C, "C");
+    // print_matrix(Q, "Q");
+    // print_matrix(R, "R");
+    // print_matrix(P, "P");
     // B
 
     filter->Kf = (void*)new KalmanFilter(A, B, C, Q, R, P);

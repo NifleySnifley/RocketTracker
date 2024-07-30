@@ -37,7 +37,7 @@ volatile float altitude_m_raw;
 FusionAhrs ahrs;
 volatile float altitude_m;
 volatile float v_speed_m_s;
-volatile altimetry_filter_t alt_filter;
+altimetry_filter_t alt_filter;
 
 const FusionAxesAlignment SENSORS_ALIGNMENT = FusionAxesAlignmentNXNYPZ;
 
@@ -427,7 +427,7 @@ FusionVector get_interpolated_acceleration() {
 
     // if (FusionVectorMagnitudeSquared(adxl_accel))
     for (int axis = 0; axis < 3; axis++) {
-        float abs_avg = abs((lsm_accel.array[axis] + adxl_accel.array[axis]) * 0.5f);
+        float abs_avg = fabsf((lsm_accel.array[axis] + adxl_accel.array[axis]) * 0.5f);
 
         float factor = clamp((abs_avg - acc_transition_low) / (acc_transition_high - acc_transition_low), 0.0f, 1.0f);
         interpolated_accel.array[axis] = lsm_accel.array[axis] * (1.0f - factor) + factor * adxl_accel.array[axis];

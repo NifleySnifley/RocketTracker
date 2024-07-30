@@ -13,7 +13,7 @@ void prelog_init(prelog_t* prelog, logger_t* logger, int capacity) {
 }
 
 // Call this from the task where data is being generated for logging (high speed)
-void prelog_give_data(prelog_t* prelog, log_data_t logdata) {
+void prelog_give_data(prelog_t* prelog, log_data_default_t logdata) {
     if (prelog->state == PRELOG_RECORDING) {
         // Write to ringbuf;
         prelog_data_wrapper_t data = {
@@ -41,7 +41,7 @@ void prelog_flush_some(prelog_t* prelog) {
             ESP_LOGI("PRELOG", "Flushing at idx=%d", prelog->prelog_ringbuf_idx);
             // Grab the data and flush it
             prelog_data_wrapper_t data_to_flush = prelog->prelog_ringbuf[prelog->prelog_ringbuf_idx];
-            logger_log_data(prelog->logger, (uint8_t*)&data_to_flush.data, sizeof(log_data_t), data_to_flush.timestamp);
+            logger_log_data(prelog->logger, LOG_DTYPE_DATA_DEFAULT, (uint8_t*)&data_to_flush.data, sizeof(log_data_default_t), data_to_flush.timestamp);
             // Unfill
             prelog->prelog_ringbuf_fill--;
         } else {

@@ -4,6 +4,7 @@
 #include "esp_partition.h"
 #include "esp_flash.h"
 #include "nvs.h"
+#include "freertos/FreeRTOS.h"
 
 #define NVS_LOG_START "log_start"
 #define NVS_LOG_END "log_end"
@@ -13,6 +14,8 @@
 // #define LOG_MEMORY_SIZE_B 256
 // #define LOG_MEMORY_SIZE_B (4096*100)
 #define LOG_FLASH_SECTOR_SIZE 4096
+
+#define LOGGER_QUEUE_SIZE 256
 
 #define LOGGER_COBS_ESC 0xAA
 #define LOGGER_COBS_ESC_AA 0x01
@@ -29,6 +32,9 @@ typedef struct logger_t {
 
     const esp_partition_t* log_partition;
     uint8_t* log_buffer;
+
+    QueueHandle_t log_queue;
+    TaskHandle_t log_task;
 } logger_t;
 
 typedef enum logging_state_t {
@@ -39,6 +45,14 @@ typedef enum logging_state_t {
     LOGSTATE_LOGGING_AUTO_LANDED,
     LOGSTATE_LOGGING_MANUAL_HZ
 } logging_state_t;
+
+typedef struct log_request_t {
+    int64_t timestamp;
+    uint16_t typeid;
+
+    size_t data_length;
+    uint8_t* data;
+} log_request_t;
 
 // TODO: Get this from config!!!
 #define LOG_HZ_AUTO_ARMED 10
@@ -52,7 +66,7 @@ typedef enum logging_state_t {
 #define LOG_FLAG_LSM_GYR_FRESH (1<<3)
 #define LOG_FLAG_ADXL_ACC_FRESH (1<<4)
 #define LOG_FLAG_GPS_FRESH (1<<5)
-typedef struct log_data_t {
+typedef struct log_data_default_t {
     // Sensor data
     uint32_t lps_press_raw;
     int16_t lis_mag_raw[3];
@@ -67,7 +81,12 @@ typedef struct log_data_t {
     float gps_lon;
     float gps_alt;
     uint8_t flags;
-} log_data_t;
+} log_data_default_t;
+
+typedef enum log_datatype_t {
+    LOG_DTYPE_DATA_DEFAULT = 0,
+    LOG_DTYPE_DATA_RAW = 0,
+} log_datatype_t;
 
 // Instead of 0 being the delimiter, make 0xFF the delimiter!!
 // That way, whenever 0xFF is seen, it is known that that 0xFF marks the start of clean erased flash memory
@@ -80,9 +99,13 @@ esp_err_t logger_init(logger_t* logger, esp_flash_t* flash);
 esp_err_t logger_refresh(logger_t* logger);
 
 // LATER (handle ring buffer/wrapping)
-esp_err_t logger_log_data_now(logger_t* logger, uint8_t* data, size_t data_length);
+esp_err_t logger_queue_log_data_now(logger_t* logger, log_datatype_t typeid, uint8_t* data, size_t data_length);
 
-esp_err_t logger_log_data(logger_t* logger, uint8_t* data, size_t data_length, int64_t timestamp);
+esp_err_t logger_queue_log_data(logger_t* logger, log_datatype_t typeid, uint8_t* data, size_t data_length, int64_t timestamp);
+
+esp_err_t logger_log_data_now(logger_t* logger, log_datatype_t typeid, uint8_t* data, size_t data_length);
+
+esp_err_t logger_log_data(logger_t* logger, log_datatype_t typeid, uint8_t* data, size_t data_length, int64_t timestamp);
 
 // DONE
 esp_err_t logger_flush(logger_t* logger);
@@ -120,7 +143,7 @@ size_t logger_get_current_log_size(logger_t* logger);
 // <- ACK_Download_Complete
 // -> ACK_Download_Complete
 
-extern log_data_t log_data;
+extern log_data_default_t log_data;
 
 int64_t util_time_us();
 

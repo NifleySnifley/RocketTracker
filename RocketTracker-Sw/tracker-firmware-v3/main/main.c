@@ -169,7 +169,7 @@ void link_decode_datum(int i, DatumTypeID id, int len, uint8_t* data, bool is_us
         ESP_LOGI("LINK", "INFO_Raw datum from %s: (%d bytes)", (is_usb ? "USB" : "LoRa"), len);
         ESP_LOG_BUFFER_HEX("LINK", data, len);
         ESP_LOGI("LINK", "Writing RAW datum to log!");
-        logger_log_data_now(&logger, data, len);
+        logger_log_data_now(&logger, LOG_DTYPE_DATA_RAW, data, len);
         uint8_t buf[256];
         ESP_ERROR_CHECK(logger_read_bytes_raw(&logger, 0, sizeof(buf), buf));
         ESP_LOG_BUFFER_HEX("FLASH CONTENTS", buf, sizeof(buf));
@@ -619,7 +619,7 @@ static void init_tl_spi() {
 }
 
 static void log_timer_task() {
-    esp_err_t e = logger_log_data_now(&logger, (uint8_t*)&log_data, sizeof(log_data));
+    esp_err_t e = logger_log_data_now(&logger, LOG_DTYPE_DATA_DEFAULT, (uint8_t*)&log_data, sizeof(log_data));
     log_data.flags = 0; // Clear flags
     if (e != ESP_OK) {
         ESP_LOGE("LOGGER", "Error logging data in timer task!");
@@ -1094,11 +1094,13 @@ static void adxl_int_worker(void* arg) {
                     // DONE: Start flight timer to switch to LOGSTATE_LOGGING_AUTO_FLIGHT
                     ESP_ERROR_CHECK(esp_timer_start_once(flight_timer, 1000000 * LIFTOFF_DURATION));
 
-                    // TODO: Make sure it's safe to flush here!
-                    link_send_datum(DatumTypeID_INFO_Alert, Alert_fields, &(Alert) {
-                        .type = AlertType_ALT_Liftoff,
+                    Alert alt = {
+                         .type = AlertType_ALT_Liftoff,
                             .has_data = false
-                    });
+                    };
+
+                    // TODO: Make sure it's safe to flush here!
+                    link_send_datum(DatumTypeID_INFO_Alert, Alert_fields, &alt);
                     link_flush();
                 }
                 break;
@@ -1517,7 +1519,7 @@ void app_main(void) {
 
     init_battmon();
 
-    xTaskCreate(adxl_int_worker, "adxl_int", 1024 * 2, NULL, 2, &adxl_int_handler);
+    xTaskCreate(adxl_int_worker, "adxl_int", 1024 * 4, NULL, 2, &adxl_int_handler);
     ESP_LOGI("SYS", "Initializing ADXL375");
     init_adxl375(&adxl_int_handler);
 
