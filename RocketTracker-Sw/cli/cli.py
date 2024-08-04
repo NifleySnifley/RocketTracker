@@ -180,7 +180,7 @@ def init_cli(args):
 def log_stop(args):
     init_cli(args)
 
-    confirm = strtobool(
+    confirm = args.yes or strtobool(
         input("Are you sure you want to stop logging?\n[y/n]:"))
     if (confirm):
         command = protocol.Command_ConfigureLogging(setting=protocol.Stopped)
@@ -247,7 +247,7 @@ def log_arm(args):
 def log_delete(args):
     init_cli(args)
 
-    confirm = strtobool(
+    confirm = args.yes or strtobool(
         input("Are you sure you want to erase the current log? all data will be lost\nThis may take a while\n[y/n]:"))
     if (confirm):
         command = protocol.Command_EraseLog(type=protocol.Erase_Log)
@@ -288,7 +288,7 @@ def log_mark(args):
 
 def log_clean(args):
     init_cli(args)
-    confirm = strtobool(
+    confirm = args.yes or strtobool(
         input("Are you sure you want to CLEAN the log memory? all data will be lost.\nThe entire log memory will be erased, this may take up to 7 minutes!\n[y/n]:"))
     if (confirm):
         command = protocol.Command_EraseLog(type=protocol.Erase_Clean)
@@ -1376,6 +1376,7 @@ def config_load(args):
         else:
             print("Aborted")
 
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         prog='basestation-cli',
@@ -1442,6 +1443,7 @@ if __name__ == "__main__":
 
     parser_log_stop = log_subparsers.add_parser('stop')
     parser_log_stop.set_defaults(func=log_stop)
+    parser_log_stop.add_argument("-y", "--yes", action='store_true')
 
     parser_log_mark = log_subparsers.add_parser('mark')
     parser_log_mark.set_defaults(func=log_mark)
@@ -1457,9 +1459,11 @@ if __name__ == "__main__":
 
     parser_log_delete = log_subparsers.add_parser('delete')
     parser_log_delete.set_defaults(func=log_delete)
+    parser_log_delete.add_argument("-y", "--yes", action='store_true')
 
     parser_log_clean = log_subparsers.add_parser('clean')
     parser_log_clean.set_defaults(func=log_clean)
+    parser_log_clean.add_argument("-y", "--yes", action='store_true')
 
     parser_log_status = log_subparsers.add_parser('status')
     parser_log_status.set_defaults(func=log_status)

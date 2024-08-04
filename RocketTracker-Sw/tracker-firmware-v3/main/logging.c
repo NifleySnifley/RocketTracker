@@ -15,10 +15,10 @@
 #include "configuration.h"
 
 
-int LOG_HZ_AUTO_ARMED = 10;
-int LOG_HZ_AUTO_LIFTOFF = 200;
-int LOG_HZ_AUTO_FLIGHT = 60;
-int LOG_HZ_AUTO_LANDED = 1;
+int32_t LOG_HZ_AUTO_ARMED = 10;
+int32_t LOG_HZ_AUTO_LIFTOFF = 200;
+int32_t LOG_HZ_AUTO_FLIGHT = 60;
+int32_t LOG_HZ_AUTO_LANDED = 1;
 float LOG_AUTO_LIFTOFF_DURATION = 10;
 float LIFTOFF_ACC_THRESHOLD_G = 4.0f;
 float LIFTOFF_DURATION = 10.0f;
@@ -47,6 +47,7 @@ void logger_task(void* arg) {
         // Do logger IO things
         if (xQueueReceive(logger->log_queue, &req, portMAX_DELAY) == pdPASS) {
             logger_log_data(logger, req.typeid, req.data, req.data_length, req.timestamp);
+            // ESP_LOGI("LOGGER", "Logged %d bytes from queue.", req.data_length);
             // THIS IS IMPORTANT!!!
             free(req.data);
         }
@@ -218,6 +219,7 @@ esp_err_t logger_refresh(logger_t* logger) {
         esp_err_t e = logger_read_bytes_raw(logger, cur_end_address, tmp_len, logger_tmp_buffer);
         if (e != ESP_OK) return e;
         // ESP_LOGI("LOGGER", "Refresh read %d bytes starting at address %d.", tmp_len, cur_end_address);
+        // ESP_LOG_BUFFER_HEX("LOGREFRESH", logger_tmp_buffer, tmp_len);
 
         for (int i = 0; i < tmp_len; ++i) {
             if (!lastb_set) {
@@ -246,6 +248,8 @@ esp_err_t logger_refresh(logger_t* logger) {
             done = false;
             break;
         }
+        // Just to reset the WDT!
+        vTaskDelay(1);
     }
 
     if (done) {

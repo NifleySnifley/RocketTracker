@@ -7,27 +7,13 @@ import pickle
 from util import *
 import json
 import csv
-
-LOGGER_COBS_ESC = 0xAA
-LOGGER_COBS_ESC_AA = 0x01
-LOGGER_COBS_ESC_FF = 0x02
-
-
-def cobs_decode(data: bytes) -> bytes:
-    dout = bytes()
-    diter = iter(data)
-    while (d := next(diter, None)) is not None:
-        if (d == LOGGER_COBS_ESC):
-            dout += bytes([LOGGER_COBS_ESC if next(diter, None)
-                          == LOGGER_COBS_ESC_AA else 0xFF])
-        else:
-            dout += bytes([d])
-    return dout
+import gpxpy
+import gpxpy.gpx
+import datetime
 
 
 def getdict(struct):
     result = {}
-    # print struct
 
     def get_value(value):
         if (type(value) not in [int, float, bool]) and not bool(value):
@@ -98,6 +84,41 @@ class LogDataDefaultRaw(Structure):
     ]
 
 
+LOGDATA_EVENT_BOOT = 1
+LOGDATA_EVENT_LIFTOFF = 2
+LOGDATA_EVENT_BURNOUT = 3
+LOGDATA_EVENT_APOGEE = 4
+LOGDATA_EVENT_LANDING = 5
+LOGDATA_EVENT_STATE = 6
+LOGEVENT2STR = {
+    1: "BOOT",
+    2: "LIFTOFF",
+    3: "BURNOUT",
+    4: "APOGEE",
+    5: "LANDING",
+    6: "STATE",
+}
+
+LOGSTATE_LOGGING_STOPPED = 0
+LOGSTATE_LOGGING_AUTO_ARMED = 1,
+LOGSTATE_LOGGING_AUTO_LIFTOFF = 2,
+LOGSTATE_LOGGING_AUTO_FLIGHT = 3,
+LOGSTATE_LOGGING_AUTO_LANDED = 4,
+LOGSTATE_LOGGING_MANUAL_HZ = 5
+
+
+class LogDataEventRaw(Structure):
+    _fields_ = [
+        ("event_type", c_uint8),
+        ("argument", c_uint16),
+    ]
+
+    def parse_state_argument(self):
+        rate_hz = (self.argument & 0b1111111111)
+        state = (self.argument >> 10) & 0b111111
+        return (state, rate_hz)
+
+
 class LogDataDefault():
     _fields_ = [
         ("lps_press", c_float),
@@ -111,6 +132,10 @@ class LogDataDefault():
         ("gps_lon", c_float),
         ("gps_alt", c_float),
 
+        ("orientation_pitch", c_float),
+        ("orientation_yaw", c_float),
+        ("orientation_roll", c_float),
+
         ("lps_press_fresh", c_bool),
         ("lis_mag_fresh", c_bool),
         ("lsm_acc_fresh", c_bool),
@@ -120,12 +145,21 @@ class LogDataDefault():
     ]
 
     def __init__(self, data: LogDataDefaultRaw):
+        # hPa
         self.lps_press = data.lps_press_raw / 1048576.0
+        # mG - sort-of
         self.lis_mag = [1000.0*(v/6842.0) for v in data.lis_mag_raw]
+        # g
         self.lsm_acc = [0.001*(v * 0.488) for v in data.lsm_acc_raw]
+        # deg/sec
         self.lsm_gyr = [0.001*(v * 70.0) for v in data.lsm_gyr_raw]
+        # g
         self.adxl_acc = [v * 49 * 0.001 for v in data.adxl_acc_raw]
+
         self.orientation_quat = data.orientation_quat
+        self.orientation_roll, self.orientation_pitch, self.orientation_yaw = quat2euler(
+            self.orientation_quat)
+
         self.filtered_altitude_m = data.filtered_altitude_m
         self.gps_lat = data.gps_lat
         self.gps_lon = data.gps_lon
@@ -167,6 +201,7 @@ class LogDataDefault():
 
 LOG_FRAMETYPE_TO_CLASS = {
     0: LogDataDefaultRaw,
+    2: LogDataEventRaw
 }
 
 
@@ -191,18 +226,20 @@ class LogFrame():
 
 
 class RTRKLog():
-    def __init__(self):
-        self.frames = []
+    def __init__(self, frames=[]):
+        self.frames = frames
 
-    def load_raw_pickle(self, filename: str) -> bool:
+    def load_raw_pickle(self, filename: str):
         segments = []
         with open(filename, 'rb') as f:
             segments = pickle.load(f)
+        self.load_segments(segments)
+
+    def load_segments(self, segments: list) -> bool:
         segments, ack = segments[:-1], segments[-1]
         crc_xor = ack['log_crc16']
 
         xor = 0
-
         for s in segments:
             xor ^= s['segment_crc16']
         if (xor != crc_xor):
@@ -214,12 +251,56 @@ class RTRKLog():
             databuffer += base64.b64decode(s['data'])
 
         self.frames = [
-            LogFrame(cobs_decode(f))
+            LogFrame(log_cobs_decode(f))
             for f in databuffer.split(b'\xFF')
         ]
         self.frames = [f for f in self.frames if f.valid]
-        self.frames.sort(key=lambda f: f.timestamp)
+        # self.frames.sort(key=lambda f: f.timestamp)
         # print(Counter([len(f) for f in frames_dec]))
+
+    def split_logs(self):
+        frame_buckets = [[]]
+
+        def split():
+            frame_buckets.append([])
+
+        for f in self.frames:
+            if isinstance(f.data, LogDataEventRaw):
+                # print(LOGEVENT2STR[f.data.event_type], f.data.argument)
+                ev = f.data
+
+                if ev.event_type == LOGDATA_EVENT_BOOT:
+                    split()
+                elif ev.event_type == LOGDATA_EVENT_STATE:
+                    state = ev.parse_state_argument()[0]
+                    if state in [LOGSTATE_LOGGING_STOPPED]:
+                        split()
+
+            frame_buckets[-1].append(f)
+
+        logs_out = [RTRKLog(fb) for fb in frame_buckets if len(
+            [f for f in fb if isinstance(f.data, LogDataDefault)])]
+        for l in logs_out:
+            l.sort()
+        return logs_out
+
+    def normalize(self):
+        t0 = min([f.timestamp for f in self.frames])
+        liftoffs = [
+            f for f in self.frames if
+            (isinstance(f.data, LogDataEventRaw)
+             and f.data.event_type == LOGDATA_EVENT_LIFTOFF)
+        ]
+        if len(liftoffs) == 1:
+            # print('lo!')
+            t0 = liftoffs[0].timestamp
+
+        # print(f"t0 = {t0}")
+        for f in self.frames:
+            f.timestamp -= t0
+
+    def sort(self):
+        self.frames.sort(key=lambda f: f.timestamp)
 
     def calibrate(self, calibfilepath):
         cjson = {}
@@ -231,10 +312,11 @@ class RTRKLog():
                 f.data.calibrate(cjson)
 
     def export_json(self, filename):
-        dv = [getdict(f) for f in self.frames]
+        dv = [{"time_seconds": f.timestamp} |
+              getdict(f.data) for f in self.frames]
 
         with open(filename, 'w') as f:
-            json.dump(dv, f)
+            json.dump(dv, f, indent=4)
             f.flush()
 
     def export_csv(self, filename):
@@ -247,11 +329,34 @@ class RTRKLog():
             cw.writeheader()
             cw.writerows(dictrep)
 
+    def export_gpx(self, filename):
+        fresh_gps = [f for f in self.frames if isinstance(
+            f.data, LogDataDefault) and f.data.gps_fresh]
+
+        gpx = gpxpy.gpx.GPX()
+        gpx_track = gpxpy.gpx.GPXTrack()
+        gpx.tracks.append(gpx_track)
+        gpx_segment = gpxpy.gpx.GPXTrackSegment()
+        gpx_track.segments.append(gpx_segment)
+
+        def log2gpxpoint(frame: LogFrame):
+            data: LogDataDefault = frame.data
+            return gpxpy.gpx.GPXTrackPoint(latitude=data.gps_lat, longitude=data.gps_lon, elevation=data.gps_alt, time=datetime.datetime.fromtimestamp(frame.timestamp))
+        gpx_segment.points += [log2gpxpoint(f) for f in fresh_gps]
+
+        with open(filename, 'w') as f:
+            f.write(gpx.to_xml())
+
+    def get_log_duration_sec(self):
+        tss = [f.timestamp for f in self.frames]
+        return (max(tss) - min(tss))
+
 
 if __name__ == "__main__":
     log = RTRKLog()
-    log.load_raw_pickle("./logs/gps_10hz.pickle")
-    print(getdict(log.frames[0].data))
-
+    log.load_raw_pickle("./logs/gps_walk_events.pickle")
     log.calibrate("./logs/tracker2.config.json")
-    # log.export_csv("./logs/gps_10hz.csv")
+
+    individual_logs = log.split_logs()
+    print(f"Contains {len(individual_logs)} individual logs")
+    individual_logs[0].export_gpx("./logs/gps_walk_events.gpx")

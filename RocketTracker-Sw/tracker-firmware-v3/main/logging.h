@@ -54,10 +54,10 @@ typedef struct log_request_t {
     uint8_t* data;
 } log_request_t;
 
-extern int LOG_HZ_AUTO_ARMED;
-extern int LOG_HZ_AUTO_LIFTOFF;
-extern int LOG_HZ_AUTO_FLIGHT;
-extern int LOG_HZ_AUTO_LANDED;
+extern int32_t LOG_HZ_AUTO_ARMED;
+extern int32_t LOG_HZ_AUTO_LIFTOFF;
+extern int32_t LOG_HZ_AUTO_FLIGHT;
+extern int32_t LOG_HZ_AUTO_LANDED;
 extern float LIFTOFF_ACC_THRESHOLD_G;
 extern float LIFTOFF_DURATION;
 
@@ -84,9 +84,21 @@ typedef struct log_data_default_t {
     uint8_t flags;
 } log_data_default_t;
 
+#define LOGDATA_EVENT_BOOT 1
+#define LOGDATA_EVENT_LIFTOFF 2
+#define LOGDATA_EVENT_BURNOUT 3
+#define LOGDATA_EVENT_APOGEE 4
+#define LOGDATA_EVENT_LANDING 5
+#define LOGDATA_EVENT_STATE 6
+typedef struct log_data_event_t {
+    uint8_t event;
+    uint16_t argument;
+} log_data_event_t;
+
 typedef enum log_datatype_t {
-    LOG_DTYPE_DATA_DEFAULT = 0,
-    LOG_DTYPE_DATA_RAW = 0,
+    LOG_DTYPE_DATA_DEFAULT = 0, // log_data_default_t
+    LOG_DTYPE_DATA_RAW = 1, // Bytes, variable length
+    LOG_DTYPE_DATA_EVENT = 2, // log_data_event_t
 } log_datatype_t;
 
 // Instead of 0 being the delimiter, make 0xFF the delimiter!!

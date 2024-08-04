@@ -38,7 +38,7 @@ void prelog_flush_some(prelog_t* prelog) {
             prelog->prelog_ringbuf_idx = (prelog->prelog_ringbuf_idx - 1) % prelog->prelog_ringbuf_capacity;
             if (prelog->prelog_ringbuf_idx < 0)
                 prelog->prelog_ringbuf_idx = prelog->prelog_ringbuf_capacity - 1;
-            ESP_LOGI("PRELOG", "Flushing at idx=%d", prelog->prelog_ringbuf_idx);
+            // ESP_LOGI("PRELOG", "Flushing at idx=%d", prelog->prelog_ringbuf_idx);
             // Grab the data and flush it
             prelog_data_wrapper_t data_to_flush = prelog->prelog_ringbuf[prelog->prelog_ringbuf_idx];
             logger_log_data(prelog->logger, LOG_DTYPE_DATA_DEFAULT, (uint8_t*)&data_to_flush.data, sizeof(log_data_default_t), data_to_flush.timestamp);

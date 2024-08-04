@@ -125,3 +125,20 @@ def argparse_restricted_int(mi: int, ma: int):
                 f"{x} not in range [{mi}, {ma}]")
         return x
     return worker
+
+
+LOGGER_COBS_ESC = 0xAA
+LOGGER_COBS_ESC_AA = 0x01
+LOGGER_COBS_ESC_FF = 0x02
+
+
+def log_cobs_decode(data: bytes) -> bytes:
+    dout = bytes()
+    diter = iter(data)
+    while (d := next(diter, None)) is not None:
+        if (d == LOGGER_COBS_ESC):
+            dout += bytes([LOGGER_COBS_ESC if next(diter, None)
+                          == LOGGER_COBS_ESC_AA else 0xFF])
+        else:
+            dout += bytes([d])
+    return dout

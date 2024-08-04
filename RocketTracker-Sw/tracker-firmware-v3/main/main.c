@@ -533,7 +533,8 @@ void link_send_datum(DatumTypeID type, const pb_msgdesc_t* fields, const void* s
             if (!fmgr_encode_datum(&usb_outgoing_fmgr, type, fields, src_struct)) {
                 while (1) {
                     ESP_LOGE("LINK_USB", "Critical link error: clogged");
-                    vTaskDelay(pdMS_TO_TICKS(500));
+                    fmgr_reset(&usb_outgoing_fmgr);
+                    // vTaskDelay(pdMS_TO_TICKS(500));
                 }
             }
         }
@@ -556,7 +557,8 @@ void link_send_datum(DatumTypeID type, const pb_msgdesc_t* fields, const void* s
             if (!fmgr_encode_datum(&lora_outgoing_fmgr, type, fields, src_struct)) {
                 while (1) {
                     ESP_LOGE("LINK_LoRa", "Critical link error: clogged");
-                    vTaskDelay(pdMS_TO_TICKS(500));
+                    fmgr_reset(&lora_outgoing_fmgr);
+                    // vTaskDelay(pdMS_TO_TICKS(500));
                 }
             }
         }
@@ -675,6 +677,11 @@ void set_logstate(logging_state_t state, int manual_hz) {
             break;
     }
 
+    log_data_event_t* logevent = (log_data_event_t*)calloc(1, sizeof(log_data_event_t));
+    logevent->event = LOGDATA_EVENT_STATE;
+    logevent->argument = (log_state << 10) | (log_state_hz & 0b1111111111);
+    logger_queue_log_data_now(&logger, LOG_DTYPE_DATA_EVENT, (uint8_t*)logevent, sizeof(*logevent));
+
     ESP_LOGI("LOGGER", "Hz: %d", log_state_hz);
 
     if (log_state_hz == 0) {
@@ -718,6 +725,10 @@ static void init_logging() {
     if (err != ESP_OK) {
         ESP_LOGE("FLASH", "Failed to initialize logger.");
     }
+
+    log_data_event_t* logevent = (log_data_event_t*)calloc(1, sizeof(log_data_event_t));
+    logevent->event = LOGDATA_EVENT_BOOT;
+    logger_queue_log_data_now(&logger, LOG_DTYPE_DATA_EVENT, (uint8_t*)logevent, sizeof(*logevent));
 
     logger_flush(&logger);
 
@@ -801,7 +812,7 @@ static void log_download_task(void* arg) {
                     segment_length = min(LOG_MEMORY_SIZE_B - current_address, 4096);
                 }
 
-                ESP_LOGI("LOGGER", "Downloading segment starting at address %d, %d bytes long.", current_address, segment_length);
+                // ESP_LOGI("LOGGER", "Downloading segment starting at address %d, %d bytes long.", current_address, segment_length);
 
                 download_segment.data.size = segment_length;
                 download_segment.start_address = current_address;
@@ -815,13 +826,19 @@ static void log_download_task(void* arg) {
                 if (e != ESP_OK) {
                     download_segment.has_error = true;
                     download_segment.error = e;
-                    link_send_datum(DatumTypeID_RESP_DownloadLog_Segment, Resp_DownloadLog_Segment_fields, &download_segment);
+                    if (USB_AVAILABLE) {
+                        link_send_datum(DatumTypeID_RESP_DownloadLog_Segment, Resp_DownloadLog_Segment_fields, &download_segment);
+                        link_flush();
+                    }
                     ESP_LOGE("LOGGER", "Error while logger_read_bytes_raw in log download: %s", esp_err_to_name(e));
-                    link_flush();
                     break; // Break the downloading inner loop
                 } else {
-                    link_send_datum(DatumTypeID_RESP_DownloadLog_Segment, Resp_DownloadLog_Segment_fields, &download_segment);
-                    link_flush();
+                    if (USB_AVAILABLE) {
+                        link_send_datum(DatumTypeID_RESP_DownloadLog_Segment, Resp_DownloadLog_Segment_fields, &download_segment);
+                    } else {
+                        e = ESP_ERR_NOT_ALLOWED;
+                        break;
+                    }
                     // TODO: wait for ack here, fail download on timeout!
                 }
 
@@ -1123,6 +1140,10 @@ static void adxl_int_worker(void* arg) {
                     // DONE: Start flight timer to switch to LOGSTATE_LOGGING_AUTO_FLIGHT
                     ESP_ERROR_CHECK(esp_timer_start_once(flight_timer, 1000000 * LIFTOFF_DURATION));
 
+                    log_data_event_t* logevent = (log_data_event_t*)calloc(1, sizeof(log_data_event_t));
+                    logevent->event = LOGDATA_EVENT_LIFTOFF;
+                    logger_queue_log_data_now(&logger, LOG_DTYPE_DATA_EVENT, (uint8_t*)logevent, sizeof(*logevent));
+
                     Alert alt = {
                          .type = AlertType_ALT_Liftoff,
                             .has_data = false
@@ -1204,6 +1225,7 @@ static void gps_ubx_callback(uDeviceHandle_t devHandle, const uGnssMessageId_t* 
 }
 
 static void init_gps_worker(void* arg) {
+    gpio_set_level(PIN_LED_R, 1);
     uGnssTransportHandle_t transportHandle;
     int32_t err = uPortInit();
     if (err) {
@@ -1270,6 +1292,7 @@ static void init_gps_worker(void* arg) {
     uGnssMsgReceiveStart(gnssHandle, &messageId, gps_ubx_callback, gps_ubx_buf);
 
     ESP_LOGI("GPS", "Successfully init GPS!");
+    gpio_set_level(PIN_LED_R, 0);
     vTaskSuspend(NULL);
 }
 
@@ -1280,18 +1303,20 @@ static void init_gps() {
 static void battmon_task(void* arg) {
     int battmon_delay_ticks = pdMS_TO_TICKS(1000.0f / BATT_MON_HZ);
     while (true) {
-        if (MAX17048_Exists(&battery_monitor)) {
+        if (gpio_get_level(PIN_SDA) && MAX17048_Exists(&battery_monitor)) {
             float soc = MAX1708_SOC(&battery_monitor);
-            float vbatt = MAX17048_Voltage(&battery_monitor) / 1000.0f;
-            bool on_battery = (!battery_monitor.timed_out) && (vbatt > 3.2f);
-            if (on_battery) {
-                ESP_LOGI("BATT", "Battery SOC: %f", soc);
-                Battery datum;
-                datum.battery_voltage = vbatt;
-                datum.percentage = soc;
+            if (soc <= 105.0f) {
+                float vbatt = MAX17048_Voltage(&battery_monitor) / 1000.0f;
+                bool on_battery = (!battery_monitor.timed_out) && (vbatt > 3.2f);
+                if (on_battery) {
+                    ESP_LOGI("BATT", "Battery SOC: %f", soc);
+                    Battery datum;
+                    datum.battery_voltage = vbatt;
+                    datum.percentage = soc;
 
-                if (telemetry_enable)
-                    link_send_datum(DatumTypeID_INFO_Battery, Battery_fields, &datum);
+                    if (telemetry_enable)
+                        link_send_datum(DatumTypeID_INFO_Battery, Battery_fields, &datum);
+                }
             }
             vTaskDelay(battmon_delay_ticks);
         }
