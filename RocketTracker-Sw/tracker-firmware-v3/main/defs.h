@@ -55,6 +55,14 @@
 #if (DEBUG_ON_EXP)
 #define DEBUG_UART_RX PIN_EXP1
 #define DEBUG_UART_TX PIN_EXP2
+#define DEBUG_UART_BAUD 9600
 #endif
+
+#ifndef DEBUG_UART_BAUD
+#define DEBUG_UART_BAUD 115200
+#endif
+
+#define DEBUG_PRINT_CONFIG false
+#define DEBUG_PRINT_UBXLIB false
 
 #define GRAVITY_G 9.81

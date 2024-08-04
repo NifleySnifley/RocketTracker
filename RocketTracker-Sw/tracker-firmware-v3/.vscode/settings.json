@@ -68,7 +68,11 @@
         "matrixfunctions": "cpp",
         "freertos.h": "c",
         "alignedvector3": "c",
-        "functional": "c"
+        "functional": "c",
+        "u_port_debug.h": "c",
+        "u_port_i2c.h": "c",
+        "i2c.h": "c",
+        "semphr.h": "c"
     },
     "editor.tabSize": 4,
     "editor.insertSpaces": true,

@@ -18,7 +18,7 @@ message GPS {
   required double lat = 1;        // Latitude in degrees North
   required double lon = 2;        // Longitude in degrees West
   required double alt = 3;        // Altitude in meters above SEA LEVEL
-  required uint32 utc_time = 4;   // UTC time in NMEA hhmmsssss as an int
+  required uint64 utc_time = 4;   // UTC time in NMEA hhmmsssss as an int
   optional uint32 sats_used = 5;  // Satellites used for fix
   optional uint32 fix_status = 6; // NMEA fix status (0-6)
 }

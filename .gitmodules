@@ -38,3 +38,6 @@ url = https://github.com/gorbatschow/latlon
 [submodule "RocketTracker-Sw/rtrk_gui/external/stb"]
 path = RocketTracker-Sw/rtrk_gui/external/stb
 url = https://github.com/nothings/stb
+[submodule "ubxlib"]
+	path = RocketTracker-Sw/tracker-firmware-v3/lib/ubxlib-no-i2c
+	url = https://github.com/NifleySnifley/ubxlib-no-i2c

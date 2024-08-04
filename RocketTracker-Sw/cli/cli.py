@@ -727,7 +727,7 @@ def set_configval(key, val):
     elif isinstance(parameter.type, StringType):
         pb.string_value = value
     elif isinstance(parameter.type, EnumType):
-        pb.enum_value = value
+        pb.enum_value = parameter.type.values.index(value)
 
     d.load_protobuf(pb)
 
@@ -1328,13 +1328,11 @@ def config_reset(args):
             print(f"Error erasing config value {vnames[i]}")
 
 
-def config_list(args):
-    init_cli(args)
+def get_configvals():
+    cfgdict = {}
 
     d = Datum(protocol.CMD_ConfigEnumerate)
     tx_queue.put(d)
-
-    print("Requesting device configuration...\n")
 
     while (True):
         enumval = wait_for_datum(
@@ -1343,8 +1341,7 @@ def config_list(args):
             print("Error: timed out")
             break
         elif enumval.typeid == protocol.RESP_ConfigEnumerateDone:
-            print("\nDone.")
-            break
+            return cfgdict
         elif enumval.typeid == protocol.RESP_ConfigValue:
             # val = enumval.to_protobuf()
             response = enumval.to_protobuf()
@@ -1362,7 +1359,92 @@ def config_list(args):
             elif (response.HasField("enum_value")):
                 value = CONFIG_LOOKUP[value_path].type.values[response.enum_value]
 
-            print(f"{value_path} = {value}")
+            # print(f"{value_path} = {value}")
+            cfgdict[value_path] = value
+
+
+def config_list(args):
+    init_cli(args)
+
+    print("Requesting device configuration...\n")
+    d = get_configvals()
+    for k, v in d.items():
+        print(f"{k} = {v}")
+
+
+def config2dict(flat_dict: dict) -> dict:
+    d = {}
+    for k, v in flat_dict.items():
+        path = k.split('.')[1:]
+
+        cdp = d
+        for sp in path[:-1]:
+            if sp not in cdp:
+                cdp[sp] = {}
+            cdp = cdp[sp]
+
+        cdp[path[-1]] = v
+
+    return d
+
+
+def dict2config(recursive_dict: dict):
+    cfg_out = {}
+
+    def worker(d, kp=[]):
+        if isinstance(d, dict):
+            for k, v in d.items():
+                kp.append(k)
+                worker(d[k], kp)
+                kp.pop()
+        else:
+            cfg_out['config.' + '.'.join(kp)] = d
+
+    worker(recursive_dict, kp=[])
+    return cfg_out
+
+
+def config_save(args):
+    init_cli(args)
+
+    print("Requesting device configuration...\n")
+    d = config2dict(get_configvals())
+    print("Saving configuration...")
+    json.dump(d, args.file, indent=4)
+    args.file.flush()
+
+    print("Done!")
+
+
+def config_load(args):
+    init_cli(args)
+
+    d = json.load(args.file)
+    cfg = dict2config(d)
+
+    # print(json.dumps(cfg, indent=4))
+    # Validate configuration
+    for path, v in cfg.items():
+        if (path not in CONFIG_LOOKUP):
+            print("Error, unknown configuration key '{path}'")
+            exit(1)
+        vparsed = CONFIG_LOOKUP[path].type.parse_value(v)
+        if (vparsed is None):
+            print("Error, could not parse value '{v}' for key '{path}'")
+
+    print("Configuration valid!")
+
+    if (not args.dryrun):
+        cont = strtobool(input("Write configuration to device? [y/n]:"))
+        if cont:
+            for k, v in cfg.items():
+                if not set_configval(k, v):
+                    print("Error setting configuration value with key '{k}'")
+                    print("Aborted")
+                    exit(1)
+            print("Successfully wrote configuration!")
+        else:
+            print("Aborted")
 
 
 def argparse_restricted_float(mi, ma):
@@ -1510,6 +1592,15 @@ if __name__ == "__main__":
 
     parser_config_list = config_subparsers.add_parser('list')
     parser_config_list.set_defaults(func=config_list)
+
+    parser_config_save = config_subparsers.add_parser('save')
+    parser_config_save.set_defaults(func=config_save)
+    parser_config_save.add_argument("file", type=argparse.FileType('w'))
+
+    parser_config_load = config_subparsers.add_parser('load')
+    parser_config_load.set_defaults(func=config_load)
+    parser_config_load.add_argument("file", type=argparse.FileType('r'))
+    parser_config_load.add_argument("-d", "--dryrun", action='store_true')
 
     # TODO: Monitor (receiver) logging
 

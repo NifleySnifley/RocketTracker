@@ -53,7 +53,9 @@ void init_config(const char* nvs_namespace) {
         ESP_LOGI("CONFIG", "Error (%s) opening config NVS handle!\n", esp_err_to_name(e));
     }
 
+#if DEBUG_PRINT_CONFIG
     config_print();
+#endif
 }
 
 int config_get_manifest_idx_from_hashed(const char* key_hashed) {

@@ -22,6 +22,10 @@
 #include "adxl375.h"
 #include "driver/ledc.h"
 
+#include "ubxlib.h"
+
+#include "u_debug_utils.h"
+
 #include "max17048.h"
 #include "sensors.h"
 
@@ -362,7 +366,7 @@ void lora_link_flush() {
     uint8_t* data = fmgr_get_frame(&lora_outgoing_fmgr, &size);
     memcpy(tx_buffer, data, size);
     fmgr_reset(&lora_outgoing_fmgr);
-    ESP_LOGI("LINK_LoRa", "Starting TX: %d datum. %d bytes.", ndatum, size);
+    // ESP_LOGI("LINK_LoRa", "Starting TX: %d datum. %d bytes.", ndatum, size);
     xSemaphoreGiveRecursive(fmgr_mutex);
 
     radio_tx(tx_buffer, size);
@@ -890,7 +894,7 @@ void radio_rx_callback(sx127x* device, uint8_t* data, uint16_t data_length) {
 
 // This can't be called from an ISR... right?
 static void radio_txcomplete_callback(sx127x* device) {
-    ESP_LOGI("LINK_LoRa", "TX Completed.");
+    // ESP_LOGI("LINK_LoRa", "TX Completed.");
     // ESP_ERROR_CHECK(sx127x_set_opmod(SX127x_MODE_CAD, SX127x_MODULATION_LORA, radio));
     ESP_ERROR_CHECK(sx127x_set_opmod(SX127x_MODE_RX_CONT, SX127x_MODULATION_LORA, radio));
 
@@ -1112,139 +1116,140 @@ static void adxl_int_worker(void* arg) {
     }
 }
 
-#define GPS_UART_RX_BUF_SIZE        (1024)
-static char gps_buf[GPS_UART_RX_BUF_SIZE + 1];
-// static size_t gps_total_bytes;
-// static char* gps_last_buf_end;
-static QueueHandle_t gps_uart_q;
-
-// const char GPS_INIT_SEQUENCE[] = 
-// "$PUBX,40,GLL,1,1,1,1,1,0*5D\r\n"; // Set rate of GLL to 10Hz
-
 GPS current_gps;
-void gps_uart_task(void* args) {
-    uart_event_t event;
-    nmea_s* data;
+uDeviceHandle_t gnssHandle;
 
-    while (1) {
-        if (xQueueReceive(gps_uart_q, &event, portMAX_DELAY)) {
-            switch (event.type) {
-                case UART_PATTERN_DET:
-                {
-                    int pos = uart_pattern_pop_pos(UART_GPS);
-                    if (pos == -1) {
-                        uart_flush_input(pos);
-                    }
+#define PVT_MESSAGE_BUFFER_LENGTH  (92 + U_UBX_PROTOCOL_OVERHEAD_LENGTH_BYTES)
+static char* gps_ubx_buf;
 
-                    while (pos != -1) {
-                        int len = uart_read_bytes(UART_GPS, gps_buf, pos, 1000 / portTICK_PERIOD_MS);
-                        if (len > 0) {
-                            // Convert GNSS message to GPS so it can be parsed
-                            if (gps_buf[1 + 2] == 'N') {
-                                gps_buf[1 + 2] = 'P';
+static void gps_ubx_callback(uDeviceHandle_t devHandle, const uGnssMessageId_t* pMessageId,
+    int32_t errorCodeOrLength, void* pCallbackParam) {
+    char* pBuffer = (char*)pCallbackParam;
+    int32_t length;
+    uGnssDec_t* pDec;
+    uGnssDecUbxNavPvt_t* pUbxNavPvt;
+    int64_t utcTimeNanoseconds;
 
-                                gps_buf[len] = '\n';
-                                data = nmea_parse(&gps_buf[1], len, 0);
-                                if (data == NULL) {
-                                    ESP_LOGE("GPS", "Failed to a NMEA sentence! Type: %.5s (%d)\n", &gps_buf[1] + 1, nmea_get_type(&gps_buf[1]));
-                                    uart_flush_input(UART_GPS);
-                                } else {
-                                    if (data->errors != 0) {
-                                        ESP_LOGW("GPS", "Sentence struct contains parse errors!\n");
-                                    }
+    static int gpsctr = 0;
 
-                                    // if (NMEA_GPGLL == data->type) {
-                                        // nmea_gpgll_s* pos = (nmea_gpgll_s*)data;
-                                        // current_gps.lat = (pos->latitude.degrees + pos->latitude.minutes / 60.0f) * (pos->latitude.cardinal == 'S' ? -1.f : 1.f);
-                                        // current_gps.lon = (pos->longitude.degrees + pos->longitude.minutes / 60.0f) * (pos->longitude.cardinal == 'W' ? -1.f : 1.f);
+    (void)pMessageId;
 
-                                        // Notify telemetry task that GPS data is ready.
-                                        // xTaskNotify(telemetry_task, 0, eNoAction);
-                                        // ESP_LOGI("GPS", "GLL xTaskNotify");
-                                    // }
-                                    if (NMEA_GPGSA == data->type) {
-                                        nmea_gpgsa_s* gpgsa = (nmea_gpgsa_s*)data;
+    if (errorCodeOrLength >= 0) {
+        // Read the message into our buffer
+        length = uGnssMsgReceiveCallbackRead(devHandle, pBuffer, errorCodeOrLength);
+        if (length >= 0) {
+            // Call the uGnssDec() API to decode the message
+            pDec = pUGnssDecAlloc(pBuffer, length);
+            if ((pDec != NULL) && (pDec->errorCode == 0)) {
+                // No need to check pDec->id (or pMessageId) here since we have
+                // only asked for UBX-NAV-PVT messages.
+                pUbxNavPvt = &(pDec->pBody->ubxNavPvt);
 
-                                        current_gps.has_fix_status = true;
-                                        current_gps.fix_status = gpgsa->fixtype;
-                                    }
-                                    if (NMEA_GPGGA == data->type) {
-                                        nmea_gpgga_s* gpgga = (nmea_gpgga_s*)data;
+                utcTimeNanoseconds = uGnssDecUbxNavPvtGetTimeUtc(pUbxNavPvt);
 
-                                        current_gps.lat = (gpgga->latitude.degrees + gpgga->latitude.minutes / 60.0f) * (gpgga->latitude.cardinal == 'S' ? -1.f : 1.f);
-                                        current_gps.lon = (gpgga->longitude.degrees + gpgga->longitude.minutes / 60.0f) * (gpgga->longitude.cardinal == 'W' ? -1.f : 1.f);
-                                        current_gps.alt = gpgga->altitude;
-                                        current_gps.has_sats_used = true;
-                                        current_gps.sats_used = gpgga->n_satellites;
-                                        current_gps.utc_time = gpgga->time.tm_sec + 100000 * gpgga->time.tm_min + 10000000 * gpgga->time.tm_hour; // TODO: Add day/year/etc?
+                current_gps.lat = ((float)pUbxNavPvt->lat) / 1e7;
+                current_gps.lon = ((float)pUbxNavPvt->lon) / 1e7;
 
-                                        // DONE: Check that GGA works as the primary message
-                                        log_data.gps_lat = current_gps.lat;
-                                        log_data.gps_lon = current_gps.lon;
-                                        log_data.gps_alt = current_gps.alt;
-                                        log_data.flags |= LOG_FLAG_GPS_FRESH;
+                current_gps.alt = pUbxNavPvt->hMSL / 1000.0f;
+                current_gps.utc_time = utcTimeNanoseconds;
 
-                                        xTaskNotify(telemetry_task, 0, eNoAction);
-                                    }
-                                }
-                                nmea_free(data);
-                            }
-                        } else {
-                            ESP_LOGE("GPS", "Pattern read fail.");
-                        }
-                        pos = uart_pattern_pop_pos(UART_GPS);
-                    }
+                current_gps.has_fix_status = true;
+                current_gps.fix_status = pUbxNavPvt->fixType;
+
+                current_gps.has_sats_used = true;
+                current_gps.sats_used = pUbxNavPvt->numSV;
+
+                // DONE: Check that GGA works as the primary message
+                log_data.gps_lat = current_gps.lat;
+                log_data.gps_lon = current_gps.lon;
+                log_data.gps_alt = current_gps.alt;
+                log_data.flags |= LOG_FLAG_GPS_FRESH;
+
+                // Since this runs at 10Hz, only send telemetry every 1Hz
+                if ((gpsctr % 10) == 0) {
+                    xTaskNotify(telemetry_task, 0, eNoAction);
                 }
-                break;
-                case UART_FIFO_OVF:
-                    ESP_LOGW("GPS", "HW FIFO Overflow");
-                    uart_flush(UART_GPS);
-                    xQueueReset(gps_uart_q);
-                    break;
-                case UART_BUFFER_FULL:
-                    ESP_LOGW("GPS", "Ring Buffer Full");
-                    uart_flush(UART_GPS);
-                    xQueueReset(gps_uart_q);
-                    break;
-                case UART_BREAK:
-                    ESP_LOGW("GPS", "Rx Break");
-                    break;
-                case UART_PARITY_ERR:
-                    ESP_LOGE("GPS", "Parity Error");
-                    break;
-                case UART_FRAME_ERR:
-                    ESP_LOGE("GPS", "Frame Error");
-                    break;
-                default:
-                    break;
+                gpsctr = (gpsctr + 1) % 10;
             }
+            uGnssDecFree(pDec);
         }
+    } else {
+        ESP_LOGI("GPS", "Empty or bad message received.");
     }
 }
 
-static void init_gps() {
-    uart_config_t uart_config = {
-        .baud_rate = 9600,
-        .data_bits = UART_DATA_8_BITS,
-        .parity = UART_PARITY_DISABLE,
-        .stop_bits = UART_STOP_BITS_1,
-        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
-        .source_clk = UART_SCLK_DEFAULT,
+static void init_gps_worker(void* arg) {
+    uGnssTransportHandle_t transportHandle;
+    int32_t err = uPortInit();
+    if (err) {
+        ESP_LOGE("GPS", "UBXLIB Port init error: %" PRIi32, err);
+        return;
+    }
+    err = uGnssInit();
+    if (err) {
+        ESP_LOGE("GPS", "UBXLIB GNSS init error: %" PRIi32, err);
+        return;
+    }
+
+
+    transportHandle.uart = uPortUartOpen(UART_GPS, 9600, NULL, U_GNSS_UART_BUFFER_LENGTH_BYTES, PIN_GPS_SDI, PIN_GPS_SDO, -1, -1);
+    err = uGnssAdd(U_GNSS_MODULE_TYPE_M8, U_GNSS_TRANSPORT_UART, transportHandle, -1, true, &gnssHandle);
+    if (err) {
+        ESP_LOGE("GPS", "UBXLIB GNSS add error: %" PRIi32, err);
+        return;
+    }
+
+    // SET BAUD TO 115200!
+    // This message was generated using u-center, it sets the module's UART1 to UBX output at 115200 baud
+    // B5 62 06 00 14 00 01 00 00 00 D0 08 00 00 00 C2 01 00 23 00 01 00 00 00 00 00 DA 52
+    uint8_t cfgmessage[] = {
+        181, 98, 6, 0, 20, 0, 1, 0, 0, 0, 208, 8, 0, 0, 0, 194, 1, 0, 35, 0, 1, 0, 0, 0, 0, 0, 218, 82
     };
-    ESP_ERROR_CHECK(uart_param_config(UART_GPS, &uart_config));
-    ESP_ERROR_CHECK(uart_set_pin(UART_GPS,
-        PIN_GPS_SDI, PIN_GPS_SDO,
-        UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
-    ESP_ERROR_CHECK(uart_driver_install(UART_GPS, GPS_UART_RX_BUF_SIZE * 2, 0, 16, &gps_uart_q, 0));
+    uGnssMsgSend(gnssHandle, (const char*)cfgmessage, sizeof(cfgmessage));
+    vTaskDelay(pdMS_TO_TICKS(3000));
 
-    ESP_ERROR_CHECK(uart_enable_pattern_det_baud_intr(UART_GPS, '\n', 1, 9, 0, 0));
-    ESP_ERROR_CHECK(uart_pattern_queue_reset(UART_GPS, 16));
+    uGnssRemove(gnssHandle);
+    uPortUartClose(transportHandle.uart);
 
-    // TODO: Figure out how to configure the GPS to go at 10Hz
-    // uart_write_bytes(UART_GPS, GPS_INIT_SEQUENCE, sizeof(GPS_INIT_SEQUENCE));
-    ESP_ERROR_CHECK(uart_flush(UART_GPS));
+    // ESP_LOGI("GPS", "Closing port and transitioning to 115200 baud");
 
-    xTaskCreate(&gps_uart_task, "gps_uart_task", 1024 * 4, NULL, 10, NULL);
+    transportHandle.uart = uPortUartOpen(UART_GPS, 115200, NULL, U_GNSS_UART_BUFFER_LENGTH_BYTES, PIN_GPS_SDI, PIN_GPS_SDO, -1, -1);
+    err = uGnssAdd(U_GNSS_MODULE_TYPE_M8, U_GNSS_TRANSPORT_UART, transportHandle, -1, true, &gnssHandle);
+    if (err) {
+        ESP_LOGE("GPS", "UBXLIB GNSS2 re-add error: %" PRIi32, err);
+        return;
+    }
+
+    uGnssSetUbxMessagePrint(gnssHandle, DEBUG_PRINT_UBXLIB);
+    uGnssCfgSetProtocolOut(gnssHandle, U_GNSS_PROTOCOL_NMEA, false);
+    uGnssCfgSetProtocolOut(gnssHandle, U_GNSS_PROTOCOL_UBX, true);
+
+    // Power up the GNSS module
+    uGnssPwrOn(gnssHandle);
+
+    uGnssMessageId_t messageId;
+    messageId.type = U_GNSS_PROTOCOL_UBX;
+    messageId.id.ubx = 0x0107; // The message class/ID of a UBX-NAV-PVT message
+    if (uGnssCfgSetMsgRate(gnssHandle, &messageId, 1) != 0) {
+        ESP_LOGW("GPS", "Error setting UBX NAV_PVT output");
+    }
+
+    err = uGnssCfgSetRate(gnssHandle, 100, 1, -1);
+    if (err) {
+        ESP_LOGE("GPS", "UBXLIB GNSS rate error: %" PRIi32, err);
+        return;
+    }
+
+    gps_ubx_buf = (char*)pUPortMalloc(PVT_MESSAGE_BUFFER_LENGTH);
+
+    uGnssMsgReceiveStart(gnssHandle, &messageId, gps_ubx_callback, gps_ubx_buf);
+
+    ESP_LOGI("GPS", "Successfully init GPS!");
+    vTaskSuspend(NULL);
+}
+
+static void init_gps() {
+    xTaskCreate(&init_gps_worker, "gps_init_task", 1024 * 4, NULL, 10, NULL);
 }
 
 static void battmon_task(void* arg) {
@@ -1457,6 +1462,14 @@ static void once_per_second() {
         }
     }
 
+    // Alert alt = {
+    //     .has_data = false,
+    //     .type = AlertType_ALT_Error
+    // };
+    // link_send_datum(DatumTypeID_INFO_Alert, Alert_fields, &alt);
+    // // DEBUG!!!
+    // link_flush();
+
     seconds += 1;
 }
 
@@ -1485,6 +1498,7 @@ void app_main(void) {
     ESP_ERROR_CHECK(uart_set_pin(UART_NUM_0,
         DEBUG_UART_RX, DEBUG_UART_TX,
         UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
+    ESP_ERROR_CHECK(uart_set_baudrate(UART_NUM_0, DEBUG_UART_BAUD));
 #endif
 
     fmgr_mutex = xSemaphoreCreateRecursiveMutex();

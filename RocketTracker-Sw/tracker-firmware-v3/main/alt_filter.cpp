@@ -29,7 +29,7 @@ void discretize_ab(Eigen::MatrixXf* A, Eigen::MatrixXf* B, float dt) {
 }
 
 void altimetry_filter_init(altimetry_filter_t* filter, float dt, float vertical_acceleration_stdev, float altimetry_stdev) {
-    KalmanFilter* Kf = (KalmanFilter*)filter->Kf;
+    // KalmanFilter* Kf = (KalmanFilter*)filter->Kf;
 
     int n = 2; // 2 States
     int m = 1; // 1 Measurement
