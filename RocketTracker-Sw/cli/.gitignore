@@ -3,3 +3,4 @@ lib/proto
 venv/
 **/*.pyc
 **/__pycache__
+logs/

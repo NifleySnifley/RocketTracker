@@ -609,7 +609,5 @@ void sensors_routine(void* arg) {
 
     altitude_m = altimetry_filter_get_filtered_altitude(&alt_filter);
     v_speed_m_s = altimetry_filter_get_filtered_vspeed(&alt_filter);
-
-    // TODO: Fusion orientation filter & calibration
-    // TODO: Kalman altitude filter
+    log_data.filtered_altitude_m = altitude_m;
 }

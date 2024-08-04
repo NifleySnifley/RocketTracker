@@ -31,6 +31,7 @@ import math
 from pyquaternion import Quaternion
 import socket
 import json
+from util import *
 from colorama import init as colinit
 from colorama import Fore, Back, Style
 colinit()
@@ -507,28 +508,6 @@ def debug(args):
     # args.log.close()
 
 
-def quat2euler(Q):
-    w, x, y, z = Q
-    t0 = +2.0 * (w * x + y * z)
-    t1 = +1.0 - 2.0 * (x * x + y * y)
-    roll_x = math.atan2(t0, t1)
-
-    t2 = +2.0 * (w * y - z * x)
-    t2 = +1.0 if t2 > +1.0 else t2
-    t2 = -1.0 if t2 < -1.0 else t2
-    pitch_y = math.asin(t2)
-
-    t3 = +2.0 * (w * z + x * y)
-    t4 = +1.0 - 2.0 * (y * y + z * z)
-    yaw_z = math.atan2(t3, t4)
-
-    return np.rad2deg(roll_x), np.rad2deg(pitch_y), np.rad2deg(yaw_z)
-
-
-def vector_print_just(vector):
-    return ','.join([f"{v:9.4f}" for v in vector])
-
-
 def sensors3d(args):
     init_cli(args)
     import vpython as vp
@@ -684,23 +663,6 @@ CALIBSTATE_Z_WAITING = 6
 CALIBSTATE_Z_DONE = 7
 CALIBSTATE_DONE = 8
 CALIBSTATE_QUIT = 9
-
-
-# TODO: Also make a misalignment matrix?????? YEZZZZ
-def calculate_2_pt_calibration(reference_a, value_a, reference_b, value_b):
-    # reference_a = (value_a+offset)*scale
-    # reference_b = (value_b+offset)*scale
-
-    offset = (reference_a*value_b - reference_b*value_a) / \
-        (reference_b - reference_a)
-
-    scalar = 1.0
-    if (value_a + offset != 0):
-        scalar = reference_a/(value_a+offset)
-    else:
-        scalar = reference_b/(value_b+offset)
-
-    return (offset, scalar)
 
 
 def set_configval(key, val):
@@ -1372,38 +1334,6 @@ def config_list(args):
         print(f"{k} = {v}")
 
 
-def config2dict(flat_dict: dict) -> dict:
-    d = {}
-    for k, v in flat_dict.items():
-        path = k.split('.')[1:]
-
-        cdp = d
-        for sp in path[:-1]:
-            if sp not in cdp:
-                cdp[sp] = {}
-            cdp = cdp[sp]
-
-        cdp[path[-1]] = v
-
-    return d
-
-
-def dict2config(recursive_dict: dict):
-    cfg_out = {}
-
-    def worker(d, kp=[]):
-        if isinstance(d, dict):
-            for k, v in d.items():
-                kp.append(k)
-                worker(d[k], kp)
-                kp.pop()
-        else:
-            cfg_out['config.' + '.'.join(kp)] = d
-
-    worker(recursive_dict, kp=[])
-    return cfg_out
-
-
 def config_save(args):
     init_cli(args)
 
@@ -1445,35 +1375,6 @@ def config_load(args):
             print("Successfully wrote configuration!")
         else:
             print("Aborted")
-
-
-def argparse_restricted_float(mi, ma):
-    def worker(x):
-        try:
-            x = float(x)
-        except ValueError:
-            raise argparse.ArgumentTypeError(
-                "%r is not a floating-point literal" % (x,))
-        if x < mi or x > ma:
-            raise argparse.ArgumentTypeError(
-                f"{x} not in range [{mi}, {ma}]")
-        return x
-    return worker
-
-
-def argparse_restricted_int(mi: int, ma: int):
-    def worker(x):
-        try:
-            x = int(x)
-        except ValueError:
-            raise argparse.ArgumentTypeError(
-                "%r is not a int literal" % (x,))
-        if x < mi or x > ma:
-            raise argparse.ArgumentTypeError(
-                f"{x} not in range [{mi}, {ma}]")
-        return x
-    return worker
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
