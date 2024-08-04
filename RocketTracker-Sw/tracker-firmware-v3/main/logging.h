@@ -54,11 +54,12 @@ typedef struct log_request_t {
     uint8_t* data;
 } log_request_t;
 
-// TODO: Get this from config!!!
-#define LOG_HZ_AUTO_ARMED 10
-#define LOG_HZ_AUTO_LIFTOFF 200
-#define LOG_HZ_AUTO_FLIGHT 60
-#define LOG_HZ_AUTO_LANDED 1
+extern int LOG_HZ_AUTO_ARMED;
+extern int LOG_HZ_AUTO_LIFTOFF;
+extern int LOG_HZ_AUTO_FLIGHT;
+extern int LOG_HZ_AUTO_LANDED;
+extern float LIFTOFF_ACC_THRESHOLD_G;
+extern float LIFTOFF_DURATION;
 
 #define LOG_FLAG_PRESS_FRESH (1<<0)
 #define LOG_FLAG_MAG_FRESH (1<<1)

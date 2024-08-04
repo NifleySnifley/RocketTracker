@@ -14,6 +14,15 @@
 #include "sys/time.h"
 #include "configuration.h"
 
+
+int LOG_HZ_AUTO_ARMED = 10;
+int LOG_HZ_AUTO_LIFTOFF = 200;
+int LOG_HZ_AUTO_FLIGHT = 60;
+int LOG_HZ_AUTO_LANDED = 1;
+float LOG_AUTO_LIFTOFF_DURATION = 10;
+float LIFTOFF_ACC_THRESHOLD_G = 4.0f;
+float LIFTOFF_DURATION = 10.0f;
+
 log_data_default_t log_data = { 0 };
 
 size_t min(size_t a, size_t b) {
@@ -109,6 +118,13 @@ esp_err_t logger_init(logger_t* logger, esp_flash_t* flash) {
 
     // Create the logger task
     xTaskCreate(logger_task, "logger_task", 1024 * 4, logger, 10, &logger->log_task);
+
+    config_get_int(CONFIG_LOGGING_LIFTOFF_LOGRATE_KEY, &LOG_HZ_AUTO_LIFTOFF);
+    config_get_int(CONFIG_LOGGING_FLIGHT_LOGRATE_KEY, &LOG_HZ_AUTO_FLIGHT);
+    config_get_float(CONFIG_LOGGING_LIFTOFF_DURATION_KEY, &LOG_AUTO_LIFTOFF_DURATION);
+    config_get_float(CONFIG_LOGGING_LAUNCH_THRESHOLD_KEY, &LIFTOFF_ACC_THRESHOLD_G);
+    LOG_HZ_AUTO_ARMED = 10;
+    LOG_HZ_AUTO_LANDED = 1;
 
     return ESP_OK;
 }

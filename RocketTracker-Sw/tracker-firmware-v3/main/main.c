@@ -921,6 +921,7 @@ static void radio_txcomplete_callback(sx127x* device) {
 //     ESP_LOGI("RADIO", "CAD detected\n");
 // }
 
+static int RADIO_CODINGRATE = SX127x_CR_4_5;
 static void init_radio() {
     lora_txdone_sem = xSemaphoreCreateBinary();
     xSemaphoreGive(lora_txdone_sem);
@@ -959,7 +960,30 @@ static void init_radio() {
 
     ESP_ERROR_CHECK(sx127x_lora_set_bandwidth(config_convert_bandwidth(bw_config), radio));
     ESP_ERROR_CHECK(sx127x_lora_set_implicit_header(NULL, radio));
-    ESP_ERROR_CHECK(sx127x_lora_set_modem_config_2(SX127x_SF_7, radio));
+
+    int RADIO_SFS[] = {
+        SX127x_SF_6,
+        SX127x_SF_7,
+        SX127x_SF_8,
+        SX127x_SF_9,
+        SX127x_SF_10,
+        SX127x_SF_11,
+        SX127x_SF_12
+    };
+    int32_t cfg_sf = 7;
+    config_get_int(CONFIG_RADIO_LORA_SPREADING_FACTOR_KEY, &cfg_sf);
+    ESP_ERROR_CHECK(sx127x_lora_set_modem_config_2(RADIO_SFS[cfg_sf - 6], radio));
+
+    int RADIO_CRS[] = {
+        SX127x_CR_4_5,
+        SX127x_CR_4_6,
+        SX127x_CR_4_7,
+        SX127x_CR_4_8,
+    };
+    int32_t cfg_cr = 5;
+    config_get_int(CONFIG_RADIO_LORA_CODING_RATE_KEY, &cfg_cr);
+    RADIO_CODINGRATE = RADIO_CRS[cfg_cr - 5];
+
     // ESP_ERROR_CHECK(sx127x_lora_set_modem_config_1(SX127x_CR_4_5, radio));
     ESP_ERROR_CHECK(sx127x_lora_set_syncword(0x18, radio));
     ESP_ERROR_CHECK(sx127x_set_preamble_length(8, radio));
@@ -970,7 +994,6 @@ static void init_radio() {
 
     ESP_ERROR_CHECK(sx127x_set_opmod(SX127x_MODE_RX_CONT, SX127x_MODULATION_LORA, radio));
     // ESP_ERROR_CHECK(sx127x_set_opmod(SX127x_MODE_CAD, SX127x_MODULATION_LORA, radio));
-
 
     BaseType_t task_code = xTaskCreatePinnedToCore(radio_handle_interrupt_task, "handle interrupt", 8196, radio, 3, &radio_handle_interrupt, xPortGetCoreID());
     if (task_code != pdPASS) {
@@ -987,7 +1010,9 @@ static void init_radio() {
     gpio_set_intr_type((gpio_num_t)PIN_RFM_D0, GPIO_INTR_POSEDGE);
     gpio_isr_handler_add((gpio_num_t)PIN_RFM_D0, radio_handle_interrupt_fromisr, (void*)radio);
 
-    ESP_ERROR_CHECK(sx127x_tx_set_pa_config(SX127x_PA_PIN_BOOST, 20, radio));
+    int32_t cfg_power = CONFIG_RADIO_POWER_DEFAULT;
+    config_get_int(CONFIG_RADIO_POWER_KEY, &cfg_power);
+    ESP_ERROR_CHECK(sx127x_tx_set_pa_config(SX127x_PA_PIN_BOOST, cfg_power, radio));
     // uint8_t paconfig_value = SX127x_PA_PIN_BOOST | 0b00001111 | 0b01110000;
     // sx127x_spi_write_register(0x09, &paconfig_value, 1, spi_device);
     ESP_ERROR_CHECK(sx127x_tx_set_ocp(true, 120, radio));
@@ -1019,7 +1044,7 @@ static void radio_tx(uint8_t* data, int len) {
 
         sx127x_tx_header_t header = {
            .enable_crc = true,
-           .coding_rate = SX127x_CR_4_5 };
+           .coding_rate = RADIO_CODINGRATE };
         ESP_ERROR_CHECK(sx127x_lora_tx_set_explicit_header(&header, radio));
         if (len > 255) {
             ESP_LOGE("RADIO", "Message length overrun!");

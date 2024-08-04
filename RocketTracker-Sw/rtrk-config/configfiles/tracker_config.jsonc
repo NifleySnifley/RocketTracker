@@ -50,15 +50,15 @@
 		},
 		"liftoff_lograte": {
 			"!name": "Logging rate during liftoff",
-			"!type": "float(1,256)",
+			"!type": "int(1,256)",
 			"!suffix": "Hz",
-			"!default": 200.0
+			"!default": 200
 		},
 		"flight_lograte": {
 			"!name": "Logging rate during flight",
-			"!type": "float(1,256)",
+			"!type": "int(1,256)",
 			"!suffix": "Hz",
-			"!default": 60.0
+			"!default": 60
 		},
 		"armed_ringbuf_cap": {
 			"!name": "Pre-launch log buffer size",

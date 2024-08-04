@@ -18,8 +18,6 @@
 
 
 // Noise is about +-0.5g
-#define LIFTOFF_ACC_THRESHOLD_G 4.0
-#define LIFTOFF_DURATION 10.0
 #define LAND_THRESHOLD_G 2
 #define LAND_TIME 10.0
 
