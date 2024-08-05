@@ -336,7 +336,7 @@ int main() {
 			}
 		}
 
-		if (gps_fresh && tud_cdc_n_connected(ITF_TELEM)) {
+		if (gps_fresh && tud_cdc_n_connected(ITF_VGPS)) {
 			gps_fresh = false;
 			write_fake_gps(&current_gps);
 		}

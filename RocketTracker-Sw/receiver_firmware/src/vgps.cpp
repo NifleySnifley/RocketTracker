@@ -3,6 +3,7 @@
 #include "global.h"
 #include <stdlib.h>
 #include "comms/radio.h"
+#include "time.h"
 
 char nmea_buffer[256];
 char rx_buffer[256];
@@ -22,6 +23,25 @@ int gps_deg_to_dmsint(double degrees, char* nwse_out) {
 	return d * 100 * 100000 + round(m * 100000);
 }
 
+int timestamp_to_hhmmss_ss(uint64_t ts) {
+	uint64_t ts_100ths_seconds = (ts / 10000000);
+	uint64_t ts_seconds = (ts_100ths_seconds / 100);
+	uint64_t ts_minutes = (ts_seconds / 60);
+	uint64_t ts_hours = (ts_minutes / 60);
+
+	return (ts_100ths_seconds % 100) + 100 * (ts_seconds % 60) + 100 * 100 * (ts_minutes % 60) + 100 * 100 * 100 * (ts_hours % 24);
+}
+
+int timestamp_to_ddmmyy(uint64_t ts) {
+	uint64_t ts_seconds = (ts / 1000000000);
+	// uint64_t days = 86400;
+	time_t t = ts_seconds;
+	struct tm tso = *localtime(&t);
+
+	return tso.tm_mday + (tso.tm_mon + 1) * 100 + (tso.tm_year % 100) * 10000;
+}
+
+
 uint8_t nmea_checksum(char* message, int len) {
 	uint8_t checksum;
 	for (int i = 1; i < len; ++i)
@@ -36,12 +56,16 @@ void write_fake_gps(GPS* gps) {
 	int sentence_len;
 	uint8_t checksum;
 
+	int utcstamp = timestamp_to_hhmmss_ss(gps->utc_time);
+	int utcdate = timestamp_to_ddmmyy(gps->utc_time);
+
 	// GPGGA
 	sentence_len = snprintf(
 		nmea_buffer,
 		sizeof(nmea_buffer) - NMEA_ENDING_LEN,
-		"$GPGGA,%06d,%d.%05d,%c,%05d.%05d,%c,%d,%02d,%.1f,%.1f,M,%.1f,M,,",
-		gps->utc_time / 1000,
+		"$GPGGA,%06d.%02d,%d.%05d,%c,%05d.%05d,%c,%d,%02d,%.1f,%.1f,M,%.1f,M,,",
+		utcstamp / 100,
+		utcstamp % 100,
 		// gps->utc_time % 1000,
 		lat_dms / 100000,
 		lat_dms % 100000,
@@ -49,8 +73,8 @@ void write_fake_gps(GPS* gps) {
 		lon_dms / 100000,
 		lon_dms % 100000,
 		ew,
-		1, // 1 = Fixed
-		15,//gps->has_sats_used ? gps->sats_used : 0,
+		gps->has_fix_status ? gps->fix_status : 1, // 1 = Fixed
+		gps->has_sats_used ? gps->sats_used : 3,//gps->has_sats_used ? gps->sats_used : 0,
 		0.9, // HDOP
 		gps->alt,
 		0.0 //gps->alt
@@ -75,15 +99,15 @@ void write_fake_gps(GPS* gps) {
 	sentence_len = snprintf(
 		nmea_buffer,
 		sizeof(nmea_buffer) - NMEA_ENDING_LEN,
-		"$GPGLL,%d.%05d,%c,%05d.%05d,%c,%06d.%03d,A,A",
+		"$GPGLL,%d.%05d,%c,%05d.%05d,%c,%06d.%02d,A,A",
 		lat_dms / 100000,
 		lat_dms % 100000,
 		ns,
 		lon_dms / 100000,
 		lon_dms % 100000,
 		ew,
-		gps->utc_time / 1000,
-		gps->utc_time % 1000
+		utcstamp / 100,
+		utcstamp % 100
 	);
 
 	checksum = nmea_checksum(nmea_buffer, sentence_len);
@@ -96,16 +120,16 @@ void write_fake_gps(GPS* gps) {
 	sentence_len = snprintf(
 		nmea_buffer,
 		sizeof(nmea_buffer) - NMEA_ENDING_LEN,
-		"$GPRMC,%06d.%03d,A,%d.%05d,%c,%05d.%05d,%c,,,%d,,,A",
-		gps->utc_time / 1000,
-		gps->utc_time % 1000,
+		"$GPRMC,%06d.%02d,A,%d.%05d,%c,%05d.%05d,%c,,,%06d,,,A",
+		utcstamp / 100,
+		utcstamp % 100,
 		lat_dms / 100000,
 		lat_dms % 100000,
 		ns,
 		lon_dms / 100000,
 		lon_dms % 100000,
 		ew,
-		200823 // Date...
+		utcdate // Date...
 	);
 	nmea_buffer[sentence_len] = '\0';
 
