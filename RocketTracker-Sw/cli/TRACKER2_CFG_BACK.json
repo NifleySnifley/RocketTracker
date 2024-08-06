@@ -51,6 +51,11 @@
         "altitude_stdev": 0.4339637756347656,
         "vert_accel_stdev": 0.018984146416187286
     },
+    "telemetry_divider": 3,
+    "gps": {
+        "nav_count": 1,
+        "nav_period_ms": 100
+    },
     "logging": {
         "launch_threshold": 4.0,
         "liftoff_duration": 10.0,

@@ -1501,8 +1501,9 @@ static void telemetry_tx_task(void* arg) {
         BaseType_t _res = xTaskNotifyWait(0, 0, NULL, portMAX_DELAY);
         if (telemetry_enable) {
             Altitude alt = {
-                .has_v_speed = false,
-                .alt_m = altitude_m
+                .has_v_speed = true,
+                .alt_m = altitude_m,
+                .v_speed = v_speed_m_s
             };
 
             // Flush link every 1 second

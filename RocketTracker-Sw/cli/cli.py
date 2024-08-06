@@ -34,6 +34,7 @@ import link as link
 from lib.comms_lib.crctabgen import crc16
 import serial.tools.list_ports
 import serial.tools
+import urllib.parse
 
 colinit()
 
@@ -149,13 +150,13 @@ def wait_for_datum(valid_types=None, timeout=None) -> None | Datum:
     while ((time.time() - stime) < timeout):
         datum = None
         try:
-            datum = rx_queue.get(timeout=timeout)
-        except SystemExit:
+            datum = rx_queue.get(timeout=0.1)
+        except SystemExit or KeyboardInterrupt:
             return
         except:
             datum = None
         # TODO: Don't discard datums here!!!! just pass them up
-        if (datum is None) or (valid_types is None) or (datum.typeid in valid_types):
+        if (datum is not None) and ((valid_types is None) or (datum.typeid in valid_types)):
             return datum
     return None
 
@@ -172,6 +173,7 @@ def autodetect_receiver(comports):
     rxports = [p for p in comports if p.vid == 0xCAFE]
     rxports.sort(key=lambda v: v.name)
     if (len(rxports) >= 2):
+        # print(f"Data: {rxports[0].name}, VGPS: {rxports[1].name}")
         return (rxports[0], rxports[1])
     else:
         return None
@@ -517,14 +519,23 @@ def monitor(args):
     global EX
     init_cli(args)
 
+    sock = UDPJSONSender(args.udp) if args.udp is not None else None
+
     while (not EX):
         d = wait_for_datum(None, 1.5)
         if d is not None:  # and d.typeid != protocol.DatumTypeID.STATUS_RadioRxStatus
             print(d)
-            # if (args.log)
-            # args.log.writelines([f"{d.to_dict()}"])
+            if (args.log is not None):
+                args.log.writelines([
+                    f"{json.dumps({'timestamp': time.time(), 'datum': d.to_dict()})}\n"
+                ])
+            if (sock is not None):
+                sock.send(d.to_dict())
+
+    if (args.log is not None):
+        args.log.flush()
+        args.log.close()
     exit(0)
-    # args.log.close()
 
 
 def reboot(args):
@@ -551,9 +562,7 @@ def debug(args):
     curses.noecho()
     curses.cbreak()
 
-    port = 9870
-    ip = "127.0.0.1"
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock = UDPJSONSender(args.udp) if args.udp is not None else None
 
     while (not EX):
         d = wait_for_datum([protocol.INFO_Debug], 1.5)
@@ -572,12 +581,77 @@ def debug(args):
             for i, (name, (value, suffix)) in enumerate(datapoints.items()):
                 stdscr.addstr(
                     i+1, 0, f"{name} = {value:9.4f}{suffix}                     ")
-            sock.sendto(bytes(json.dumps(datapoints), 'utf8'), (ip, port))
+            if sock is not None:
+                sock.send(datapoints)
         else:
             stdscr.clear()
             stdscr.addstr(
                 0, 0, "Timed out, maybe you forgot to enable debug monitoring over USB?")
             break
+
+        if (stdscr.getch() == ord('q')):
+            break
+        stdscr.refresh()
+    exit(0)
+    # args.log.close()
+
+
+def telemetry(args):
+    global EX
+    init_cli(args)
+
+    datapoints = {}
+    stdscr = curses.initscr()
+    stdscr.nodelay(True)
+    curses.noecho()
+    curses.cbreak()
+
+    while (not EX):
+        d = wait_for_datum([protocol.INFO_GPS, protocol.INFO_Altitude,
+                           protocol.INFO_Battery, protocol.INFO_LogStatus], 0.1)
+        stdscr.addstr(0, 0, "Press 'q' to exit")
+        if d is not None:  # and d.typeid != protocol.DatumTypeID.STATUS_RadioRxStatus
+            # print(d)
+
+            # datapoints
+            pb = d.to_protobuf()
+            if (d.typeid == protocol.INFO_GPS):
+                stdscr.addstr(1, 0, "GPS:")
+                stdscr.addstr(2, 0, f"\tLatitude: {pb.lat}             ")
+                stdscr.addstr(3, 0, f"\tLongitude: {pb.lon}             ")
+                stdscr.addstr(4, 0, f"\tAltitude: {pb.alt} (m)               ")
+                stdscr.addstr(
+                    5, 0, f"\tFix Quality: {pb.fix_status if pb.HasField('fix_status') else 'unknown'}             ")
+                stdscr.addstr(
+                    6, 0, f"\tSatellites: {pb.sats_used if pb.HasField('sats_used') else 'sats_used'}          ")
+            elif (d.typeid == protocol.INFO_Altitude):
+                stdscr.addstr(7, 0, "Altimetry:")
+                stdscr.addstr(
+                    8, 0, f"\tFiltered Altitude: {pb.alt_m:.2f} (m)                  ")
+                stdscr.addstr(
+                    9, 0, f"\tVertical Speed: {f'{pb.v_speed:.2f} (m/s)' if pb.HasField('v_speed') else 'not available'}                 ")
+            elif (d.typeid == protocol.INFO_Battery):
+                stdscr.addstr(
+                    10, 0, f"Battery: {pb.percentage:.1f}% ({pb.battery_voltage:.2f}v)")
+                pass
+            elif (d.typeid == protocol.INFO_LogStatus):
+                stdscr.addstr(
+                    11, 0, f"Logging:")
+                stdscr.addstr(
+                    12, 0, f"\tSize: {pb.log_size/1000:.1f}KB ({(pb.log_size/pb.log_maxsize)*100:.1f}%)")
+                sstr = ''
+                if pb.is_armed:
+                    sstr = f"Armed {pb.cur_logging_hz if pb.HasField('cur_logging_hz') else '-'}Hz"
+                else:
+                    sstr = f"Logging {pb.cur_logging_hz if pb.HasField('cur_logging_hz') else '-'}Hz"
+                stdscr.addstr(
+                    13, 0, f"\tState: {sstr}           ")
+                pass
+        else:
+            # stdscr.clear()
+            # print("Timed out")
+            # Do something for timeout...
+            pass
 
         if (stdscr.getch() == ord('q')):
             break
@@ -665,9 +739,9 @@ def sensormon(args):
     curses.noecho()
     curses.cbreak()
 
-    port = 9870
-    ip = "127.0.0.1"
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    # port = 9870
+    # ip = "127.0.0.1"
+    sock = UDPJSONSender(args.udp) if args.udp is not None else None
 
     while (not EX):
         d = wait_for_datum([protocol.INFO_SensorData], 1.5)
@@ -712,7 +786,8 @@ def sensormon(args):
             if (args.log):
                 args.log.writelines([f"{d.to_dict()}"])
 
-            sock.sendto(bytes(json.dumps(d.to_dict()), 'utf8'), (ip, port))
+            if (sock is not None):
+                sock.send(d.to_dict())
 
             if (stdscr.getch() != -1):
                 EX = True
@@ -1223,12 +1298,13 @@ def ping(args):
 
 def receiver_config(args):
     # We are talking to the VGPS port now!!
+    rx = autodetect_receiver(serial.tools.list_ports.comports())
 
-    rx = autodetect_receiver()
     vgps = None
     if (args.port):
         vgps = Serial(args.port, baudrate=115200, timeout=0.5)
     elif rx is not None:
+        print(f"Configuring receiver on {rx[1].name}")
         vgps = Serial(rx[1].name, baudrate=115200, timeout=0.5)
     else:
         print("Error, no receiver connected")
@@ -1508,11 +1584,15 @@ if __name__ == "__main__":
 
     parser_monitor = subparsers.add_parser('monitor')
     parser_monitor.add_argument(
-        '-l', '--log', type=argparse.FileType('w'))
+        '-l', '--log', type=argparse.FileType('a'))
     parser_monitor.set_defaults(func=monitor)
+    parser_monitor.add_argument(
+        '-u', '--udp', default=None, type=str)
 
     parser_debug = subparsers.add_parser('debug')
     parser_debug.set_defaults(func=debug)
+    parser_debug.add_argument(
+        '-u', '--udp', default=None, type=str)
 
     parser_reboot = subparsers.add_parser('reboot')
     parser_reboot.set_defaults(func=reboot)
@@ -1541,6 +1621,11 @@ if __name__ == "__main__":
         '-l', '--log', type=argparse.FileType('w'))
     parser_sensormon.add_argument(
         '-r', '--raw', action='store_true')
+    parser_sensormon.add_argument(
+        '-u', '--udp', default=None, type=str)
+
+    parser_telemetry = subparsers.add_parser('telemetry')
+    parser_telemetry.set_defaults(func=telemetry)
 
     parser_3d = subparsers.add_parser('sensors3d')
     parser_3d.set_defaults(func=sensors3d)

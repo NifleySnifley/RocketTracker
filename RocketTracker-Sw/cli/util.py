@@ -2,6 +2,9 @@ import math
 import numpy as np
 import lib.proto.protocol_pb2 as protocol
 import argparse
+import socket
+import urllib3
+import json
 
 
 def quat2euler(Q):
@@ -142,3 +145,14 @@ def log_cobs_decode(data: bytes) -> bytes:
         else:
             dout += bytes([d])
     return dout
+
+
+class UDPJSONSender():
+    def __init__(self, addr=str):
+        result = addr.split(':')
+        self.ip, self.port = result[0], int(result[1])
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+    def send(self, data):
+        self.sock.sendto(bytes(json.dumps(data), 'utf-8'),
+                         (self.ip, self.port))
