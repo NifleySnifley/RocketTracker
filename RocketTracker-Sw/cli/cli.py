@@ -3,37 +3,38 @@ if True:
     import sys
     sys.path.append("../rtrk-config/")
 
-from lib.comms_lib.crctabgen import crc16
-import link as link
-from link import Frame, Datum, cobs_decode, cobs_encode
-import argparse
-from serial import Serial
-import signal
-from queue import Queue
-from threading import Condition
-import time
-import lib.proto.protocol_pb2 as protocol
-from threading import Thread
-import sys
-# if sys.platform:
-from distutils.util import strtobool
-# else:
-# from str2bool import str2bool as strtobool
-import pickle
-from os import path
-from configparse import parse_configuration, flatten_config_values, flatten_config_types, FloatType, EnumType, BoolType, IntType, StringType
-from configgen import encode_key
-from tqdm import tqdm
-import numpy as np
-import curses
-from mag_cal import calibrate_magnetometer, calculate_2_pt_calibration
-import math
-from pyquaternion import Quaternion
-import socket
-import json
-from util import *
-from colorama import init as colinit
 from colorama import Fore, Back, Style
+from colorama import init as colinit
+from util import *
+import json
+import socket
+from pyquaternion import Quaternion
+import math
+from mag_cal import calibrate_magnetometer, calculate_2_pt_calibration
+import curses
+import numpy as np
+from tqdm import tqdm
+from configgen import encode_key
+from configparse import parse_configuration, flatten_config_values, flatten_config_types, FloatType, EnumType, BoolType, IntType, StringType
+from os import path
+import pickle
+from str2bool import str2bool as strtobool
+import sys
+from threading import Thread
+import lib.proto.protocol_pb2 as protocol
+import time
+from threading import Condition
+from queue import Queue
+import signal
+import serial
+from serial import Serial
+import argparse
+from link import Frame, Datum, cobs_decode, cobs_encode
+import link as link
+from lib.comms_lib.crctabgen import crc16
+import serial.tools.list_ports
+import serial.tools
+
 colinit()
 
 
@@ -49,6 +50,7 @@ CONFIG_LOOKUP = {
 }
 
 serialport: Serial | None = None
+serialport_automatic = None
 rx_queue: Queue[Datum] = Queue()
 tx_queue: Queue[Datum] = Queue()
 tx_done = Condition()
@@ -76,7 +78,7 @@ def sigint_handler(signum, frame):
 signal.signal(signal.SIGINT, sigint_handler)
 
 
-def receiver_thread():
+def receiver_thread(args):
     global serialport, EX
     buffer = []
 
@@ -91,12 +93,15 @@ def receiver_thread():
                     # print(length, len(data))
 
                     if (length == (len(data)-2)):
-                        # print(f"Got frame: {length} bytes")
                         f = Frame()
                         f.load_from_bytes(data[2:])
+                        if args.verbose:
+                            print(f"Got frame: {f}")
                         for d in f.datums:
                             # print(d)
                             rx_queue.put(d)
+                    else:
+                        print(f"Received corrupt frame: {data.hex(':')}")
                 buffer.clear()
                 continue
             else:
@@ -104,7 +109,7 @@ def receiver_thread():
     pass
 
 
-def sender_thread():
+def sender_thread(args):
     global serialport, EX
 
     while (True):
@@ -113,6 +118,10 @@ def sender_thread():
             d = tx_queue.get(timeout=0.4)
             f = Frame()
             f.add_datum(d)
+
+            if (args.verbose):
+                print(f"Sending Frame: {f}")
+
             bdata = f.get_bytes()
 
             packet = cobs_encode(int.to_bytes(
@@ -158,23 +167,77 @@ def flush_rx():
     serialport.read_all()
 
 
+# Returns (data port, vgps port)
+def autodetect_receiver(comports):
+    rxports = [p for p in comports if p.vid == 0xCAFE]
+    rxports.sort(key=lambda v: v.name)
+    if (len(rxports) >= 2):
+        return (rxports[0], rxports[1])
+    else:
+        return None
+
+
+def autodetect_tracker(comports):
+    trackerports = [p for p in comports if p.vid == 0x303A]
+    if (len(trackerports) >= 1):
+        return (trackerports[0], None)
+    else:
+        return None
+
+
 def init_cli(args):
-    global send_thread, recv_thread, serialport
+    global send_thread, recv_thread, serialport, serialport_automatic
+
+    if (args.port is None):
+        comports = serial.tools.list_ports.comports()
+        # Autodetect
+        tracker = autodetect_tracker(comports)
+        if tracker is not None:
+            args.port = tracker[0].name
+            serialport_automatic = tracker[0]
+        else:
+            rx = autodetect_receiver(comports)
+            if rx is not None:
+                args.port = rx[0].name
+                serialport_automatic = rx[0]
 
     try:
         serialport = Serial(baudrate=115200, timeout=0.5)
         serialport.port = args.port
         serialport.rts = False  # Don't reset the esp32
         serialport.open()
+        serialport.flush()
+        serialport.read_all()
     except:
         print("Error! could not open serial port")
         exit(1)
 
-    send_thread = Thread(target=sender_thread, daemon=True)
-    recv_thread = Thread(target=receiver_thread, daemon=True)
+    send_thread = Thread(target=sender_thread, daemon=True, args=[args])
+    recv_thread = Thread(target=receiver_thread, daemon=True, args=[args])
 
     send_thread.start()
     recv_thread.start()
+
+
+def ensure_usb():
+    global serialport, serialport_automatic
+    if (serialport_automatic is not None):
+        is_tracker = serialport_automatic.vid == 0x303A
+        if is_tracker:
+            return
+    else:
+        # Need to ping
+        d = Datum(protocol.CMD_Ping)
+        d.load_protobuf(protocol.Command_Ping(link=protocol.USBSerial))
+
+        tx_queue.put(d)
+
+        pong = wait_for_datum([protocol.RESP_Ping], 1.5)
+        if (pong is not None and pong.to_protobuf().link == protocol.USBSerial):
+            return
+
+    print("Error, this function requires direct USB connection to the tracker")
+    exit(1)
 
 
 def log_stop(args):
@@ -342,21 +405,22 @@ def log_download(args):
     # -> ACK_Download_Complete
     init_cli(args)
 
-    print("Testing connection... ")
-    d = Datum(protocol.CMD_Ping)
-    d.load_protobuf(protocol.Command_Ping(link=protocol.USBSerial))
+    # print("Testing connection... ")
+    # d = Datum(protocol.CMD_Ping)
+    # d.load_protobuf(protocol.Command_Ping(link=protocol.USBSerial))
 
-    tx_queue.put(d)
+    # tx_queue.put(d)
 
-    pong = wait_for_datum([protocol.RESP_Ping], 1.5)
-    if (pong is None):
-        print("Error: timed out")
-        return 2
-    elif (pong.to_protobuf().link == protocol.LoRa):
-        print("Error: Cannot download logs over LoRa/receiver connection")
-        return 1
-    else:
-        print("connected over USB")
+    # pong = wait_for_datum([protocol.RESP_Ping], 1.5)
+    # if (pong is None):
+    #     print("Error: timed out")
+    #     return 2
+    # elif (pong.to_protobuf().link == protocol.LoRa):
+    #     print("Error: Cannot download logs over LoRa/receiver connection")
+    #     return 1
+    # else:
+    #     print("connected over USB")
+    ensure_usb()
 
     d = Datum(protocol.CMD_ConfigureLogging)
     d.load_protobuf(protocol.Command_ConfigureLogging(
@@ -463,9 +527,23 @@ def monitor(args):
     # args.log.close()
 
 
+def reboot(args):
+    init_cli(args)
+
+    confirm = args.yes or strtobool(
+        input("Are you sure you want to reboot the device? [y/n]:"))
+    if (confirm):
+        d = Datum(protocol.CMD_Reboot)
+        tx_queue.put(d)
+        print("Attempted to reboot the device")
+    else:
+        print("Aborted")
+
+
 def debug(args):
     global EX
     init_cli(args)
+    ensure_usb()
 
     datapoints = {}
     stdscr = curses.initscr()
@@ -575,6 +653,7 @@ def sensormon(args):
 
     global EX
     init_cli(args)
+    ensure_usb()
 
     d = Datum(protocol.CMD_ConfigSensorOutput)
     d.load_protobuf(protocol.Command_ConfigSensorOutput(
@@ -720,6 +799,7 @@ def set_2_pt_calibration(basename, calib):
 def calibrate_acc(args):
     global EX
     init_cli(args)
+    ensure_usb()
 
     d = Datum(protocol.CMD_ConfigSensorOutput)
     d.load_protobuf(protocol.Command_ConfigSensorOutput(
@@ -747,7 +827,7 @@ def calibrate_acc(args):
     curses.cbreak()
 
     stdscr.addstr(
-        0, 0, "Place the tracker flat on a stable, level surface and press <enter> or <space> to begin calibration.")
+        0, 0, "Place the tracker flat on a stable, level surface and press <space> to begin calibration.")
 
     # Z -> X -> Y
 
@@ -769,7 +849,7 @@ def calibrate_acc(args):
             stdscr.addstr(1, 0, "Collecting data...")
             if len(neg_x_adxl_samples) < N_SAMPLES:
                 # Collect more data
-                d = wait_for_datum([protocol.INFO_SensorData], 0.1)
+                d = wait_for_datum([protocol.INFO_SensorData], 1.0)
                 if d is None:
                     stdscr.clear()
                     stdscr.addstr(0, 0, "Error! timed out")
@@ -786,7 +866,7 @@ def calibrate_acc(args):
             # Next: Y
             stdscr.clear()
             stdscr.addstr(
-                0, 0, "Place the tracker resting on it's right side (GPS down) and press <enter> or <space> to continue calibration.")
+                0, 0, "Place the tracker resting on it's right side (GPS down) and press <space> to continue calibration.")
             stdscr.refresh()
 
             ch = stdscr.getch()
@@ -801,7 +881,7 @@ def calibrate_acc(args):
             stdscr.addstr(1, 0, "Collecting data...")
             if len(neg_y_adxl_samples) < N_SAMPLES:
                 # Collect more data
-                d = wait_for_datum([protocol.INFO_SensorData], 0.1)
+                d = wait_for_datum([protocol.INFO_SensorData], 1.0)
                 if d is None:
                     stdscr.clear()
                     stdscr.addstr(0, 0, "Error! timed out")
@@ -821,7 +901,7 @@ def calibrate_acc(args):
             stdscr.addstr(1, 0, "Collecting data...")
             if len(pos_z_adxl_samples) < N_SAMPLES:
                 # Collect more data
-                d = wait_for_datum([protocol.INFO_SensorData], 0.1)
+                d = wait_for_datum([protocol.INFO_SensorData], 1.0)
                 if d is None:
                     stdscr.clear()
                     stdscr.addstr(0, 0, "Error! timed out")
@@ -838,7 +918,7 @@ def calibrate_acc(args):
             # Next: X
             stdscr.clear()
             stdscr.addstr(
-                0, 0, "Place the tracker resting on it's bottom (antenna up) and press <enter> or <space> to continue calibration.")
+                0, 0, "Place the tracker resting on it's bottom (antenna up) and press <space> to continue calibration.")
             stdscr.refresh()
 
             ch = stdscr.getch()
@@ -940,6 +1020,7 @@ def calibrate_acc(args):
 # Simple null-offset calibration for the gyro
 def calibrate_gyr(args):
     init_cli(args)
+    ensure_usb()
 
     NSAMPLES = 200*4
     gyro_samples = []
@@ -989,6 +1070,7 @@ def calibrate_gyr(args):
 
 def calibrate_altimetry(args):
     init_cli(args)
+    ensure_usb()
 
     NSAMPLES = 256*10
     alt_samples = []
@@ -1043,6 +1125,7 @@ def calibrate_altimetry(args):
 
 def calibrate_mag(args):
     init_cli(args)
+    ensure_usb()
 
     mag_samples = []
 
@@ -1140,7 +1223,16 @@ def ping(args):
 
 def receiver_config(args):
     # We are talking to the VGPS port now!!
-    vgps = Serial(args.port, baudrate=115200, timeout=0.5)
+
+    rx = autodetect_receiver()
+    vgps = None
+    if (args.port):
+        vgps = Serial(args.port, baudrate=115200, timeout=0.5)
+    elif rx is not None:
+        vgps = Serial(rx[1].name, baudrate=115200, timeout=0.5)
+    else:
+        print("Error, no receiver connected")
+        exit(1)
 
     if args.spreading_factor is not None:
         vgps.write(f"$PSF,{args.spreading_factor}\r\n".encode('ascii'))
@@ -1298,7 +1390,8 @@ def get_configvals():
 
     while (True):
         enumval = wait_for_datum(
-            [protocol.RESP_ConfigEnumerateDone, protocol.RESP_ConfigValue], 1.5)
+            # [protocol.RESP_ConfigEnumerateDone, protocol.RESP_ConfigValue], 1.5)
+            [protocol.RESP_ConfigEnumerateDone, protocol.RESP_ConfigValue], 10.0)
         if (enumval is None):
             print("Error: timed out")
             break
@@ -1330,7 +1423,7 @@ def config_list(args):
 
     print("Requesting device configuration...\n")
     d = get_configvals()
-    for k, v in d.items():
+    for k, v in sorted(d.items()):
         print(f"{k} = {v}")
 
 
@@ -1344,6 +1437,23 @@ def config_save(args):
     args.file.flush()
 
     print("Done!")
+
+
+def config_diff(args):
+    init_cli(args)
+    print("Requesting device configuration...\n")
+    d_local = dict2config(json.load(args.file))
+    d_remote = get_configvals()
+
+    nodiff = True
+    for k, lv, rv in [(k, d_local.get(k, None), d_remote.get(k, None)) for k in sorted(d_local.keys() | d_remote.keys())]:
+        if (lv != rv):
+            print(
+                f"{k} = {Fore.RED}{lv:{'' if lv is None else '.4f'}} (local){Style.RESET_ALL} -> {Fore.GREEN}{rv:{'' if rv is None else '.4f'}} (remote){Style.RESET_ALL}")
+            nodiff = False
+
+    if nodiff:
+        print(Fore.GREEN + "No differences!" + Style.RESET_ALL)
 
 
 def config_load(args):
@@ -1382,7 +1492,8 @@ if __name__ == "__main__":
         prog='basestation-cli',
         description='CLI interface for rocket tracking system components (receiver and tracker v0.3)')
     subparsers = parser.add_subparsers(help='sub-command help')
-    parser.add_argument('-p', '--port', required=True, type=str)
+    parser.add_argument('-p', '--port', required=False, type=str)
+    parser.add_argument('-v', '--verbose', action='store_true')
 
     parser_rxconfig = subparsers.add_parser('rxconfig')
     parser_rxconfig.set_defaults(func=receiver_config)
@@ -1402,6 +1513,10 @@ if __name__ == "__main__":
 
     parser_debug = subparsers.add_parser('debug')
     parser_debug.set_defaults(func=debug)
+
+    parser_reboot = subparsers.add_parser('reboot')
+    parser_reboot.set_defaults(func=reboot)
+    parser_reboot.add_argument("-y", "--yes", action='store_true')
 
     parser_calib = subparsers.add_parser('calibrate')
     calib_subparsers = parser_calib.add_subparsers()
@@ -1506,6 +1621,10 @@ if __name__ == "__main__":
     parser_config_load.set_defaults(func=config_load)
     parser_config_load.add_argument("file", type=argparse.FileType('r'))
     parser_config_load.add_argument("-d", "--dryrun", action='store_true')
+
+    parser_config_diff = config_subparsers.add_parser('diff')
+    parser_config_diff.set_defaults(func=config_diff)
+    parser_config_diff.add_argument("file", type=argparse.FileType('r'))
 
     # TODO: Monitor (receiver) logging
 

@@ -1,5 +1,4 @@
 import numpy as np
-import matplotlib.pyplot as plt
 import pickle
 
 
@@ -23,6 +22,8 @@ REJECT_PERCENT = 0.25
 
 
 def calibrate_magnetometer(vals: list[float]):
+    import matplotlib.pyplot as plt
+
     data = np.array(vals)
 
     cuts = [

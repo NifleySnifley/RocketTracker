@@ -187,3 +187,7 @@ class Frame:
 
         return crc16(data) == self.crc
         # TODO: Check CRC!!!
+
+    def __repr__(self) -> str:
+        sds = ', '.join([str(d) for d in self.datums])
+        return f"{sds} (CRC {crc16(self.get_payload_bytes())})"

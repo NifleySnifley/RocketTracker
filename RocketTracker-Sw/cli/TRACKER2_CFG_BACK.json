@@ -1,0 +1,77 @@
+{
+    "radio": {
+        "freq_hz": 914000000,
+        "bandwidth": "125kHz",
+        "power": 20,
+        "lora": {
+            "coding_rate": 5,
+            "spreading_factor": 7
+        }
+    },
+    "calibration": {
+        "lsm6dsm": {
+            "accel": {
+                "x_offset": -0.0027108401991426945,
+                "x_scale": 0.9884498715400696,
+                "y_offset": 0.0032403201330453157,
+                "y_scale": 0.9925193190574646,
+                "z_offset": -0.039057083427906036,
+                "z_scale": 1.0224021673202515
+            },
+            "gyro": {
+                "x_offset": -1.3867875337600708,
+                "y_offset": 2.241487503051758,
+                "z_offset": 0.3726625144481659
+            }
+        },
+        "adxl375": {
+            "x_offset": -0.2989000082015991,
+            "x_scale": 1.0565965175628662,
+            "y_offset": 0.07496999949216843,
+            "y_scale": 0.9619685411453247,
+            "z_offset": -0.7930650115013123,
+            "z_scale": 1.0100550651550293
+        },
+        "lis3mdl": {
+            "x_offset": 41.06986999511719,
+            "x_scale": 0.5335308909416199,
+            "y_offset": 262.8617248535156,
+            "y_scale": 0.468565970659256,
+            "z_offset": 289.1697998046875,
+            "z_scale": 0.5223698616027832
+        },
+        "lps22": {
+            "offset": 0.0
+        }
+    },
+    "sensors": {
+        "ahrs_no_mag": false,
+        "acc_trans_lo": 15.5,
+        "acc_trans_hi": 15.899999618530273,
+        "altitude_stdev": 0.4339637756347656,
+        "vert_accel_stdev": 0.018984146416187286
+    },
+    "logging": {
+        "launch_threshold": 4.0,
+        "liftoff_duration": 10.0,
+        "liftoff_lograte": 200,
+        "flight_lograte": 60,
+        "armed_ringbuf_cap": 200,
+        "armed_ringbuf_hz": 200
+    },
+    "misc": {
+        "batt_hz": 0.10000000149011612,
+        "debug_monitor_en": false,
+        "debug_monitor_usb": true,
+        "debug_monitor": {
+            "hz": 60.0,
+            "lps22": true,
+            "lsm6dsm": false,
+            "lis3mdl": false,
+            "adxl375": false,
+            "compass": false,
+            "orientation": false,
+            "world_acc": true
+        }
+    }
+}

@@ -2,6 +2,7 @@ import lib.proto.protocol_pb2 as protocol
 from link import Datum, DatumTypeID, Frame
 from ctypes import *
 from collections import Counter
+from io import BufferedReader
 import base64
 import pickle
 from util import *
@@ -60,6 +61,10 @@ def split_dict_vectors(d: dict):
     return outd
 
 
+def convert_bools(d: dict):
+    return {k: (int(v) if isinstance(v, bool) else v) for k, v in d.items()}
+
+
 LOG_DEFAULT_FLAG_PRESS_FRESH = (1 << 0)
 LOG_DEFAULT_FLAG_MAG_FRESH = (1 << 1)
 LOG_DEFAULT_FLAG_LSM_ACC_FRESH = (1 << 2)
@@ -98,6 +103,14 @@ LOGEVENT2STR = {
     5: "LANDING",
     6: "STATE",
 }
+LOGEVENT2STR_HUMAN = {
+    1: "Device boot",
+    2: "Liftoff",
+    3: "Engine burnout",
+    4: "Apogee",
+    5: "Landed",
+    6: "Log rate",
+}
 
 LOGSTATE_LOGGING_STOPPED = 0
 LOGSTATE_LOGGING_AUTO_ARMED = 1,
@@ -117,6 +130,12 @@ class LogDataEventRaw(Structure):
         rate_hz = (self.argument & 0b1111111111)
         state = (self.argument >> 10) & 0b111111
         return (state, rate_hz)
+
+    def __str__(self) -> str:
+        s = f"{LOGEVENT2STR_HUMAN.get(self.event_type, '<unknown>')}"
+        if (self.event_type == LOGDATA_EVENT_STATE):
+            s += f" {self.parse_state_argument()[1]}Hz"
+        return s
 
 
 class LogDataDefault():
@@ -224,15 +243,24 @@ class LogFrame():
         else:
             self.data = None
 
+    def __str__(self) -> str:
+        return f"{self.data} @ T{self.timestamp:+.2f}s"
+
+# TODO: Log data resampling from freshness!!!
+
 
 class RTRKLog():
     def __init__(self, frames=[]):
         self.frames = frames
+        self.raw_size_bytes = 0
 
-    def load_raw_pickle(self, filename: str):
+    def load_raw_pickle(self, filename):
         segments = []
-        with open(filename, 'rb') as f:
-            segments = pickle.load(f)
+        if not isinstance(filename, str):
+            segments = pickle.load(filename)
+        else:
+            with open(filename, 'rb') as f:
+                segments = pickle.load(f)
         self.load_segments(segments)
 
     def load_segments(self, segments: list) -> bool:
@@ -248,7 +276,9 @@ class RTRKLog():
 
         databuffer = bytes()
         for s in segments:
-            databuffer += base64.b64decode(s['data'])
+            ddec = base64.b64decode(s['data'])
+            self.raw_size_bytes += len(ddec)
+            databuffer += ddec
 
         self.frames = [
             LogFrame(log_cobs_decode(f))
@@ -304,8 +334,16 @@ class RTRKLog():
 
     def calibrate(self, calibfilepath):
         cjson = {}
-        with open(calibfilepath, 'r') as f:
-            cjson = dict2config(json.load(f))
+        f = None
+        if isinstance(calibfilepath, str):
+            f = open(calibfilepath, 'r')
+        else:
+            f = calibfilepath
+
+        cjson = dict2config(json.load(f))
+        f.flush()
+        f.close()
+
         for f in self.frames:
             if callable(getattr(f.data, 'calibrate', None)):
                 # print("Calib")
@@ -315,19 +353,29 @@ class RTRKLog():
         dv = [{"time_seconds": f.timestamp} |
               getdict(f.data) for f in self.frames]
 
-        with open(filename, 'w') as f:
-            json.dump(dv, f, indent=4)
-            f.flush()
+        f = filename
+        if isinstance(filename, str):
+            f = open(filename, 'w', newline='', encoding='utf-8')
+        json.dump(dv, f, indent=4)
+        f.flush()
+        f.close()
 
     def export_csv(self, filename):
         dictrep = [{"time_seconds": f.timestamp} |
-                   split_dict_vectors(getdict(f.data)) for f in self.frames]
+                   convert_bools(split_dict_vectors(getdict(f.data))) for f in self.frames]
         allkeys = set().union(*(d.keys() for d in dictrep))
+        allkeys = list(sorted(allkeys))
 
-        with open(filename, 'w', newline='', encoding='utf-8') as f:
-            cw = csv.DictWriter(f, allkeys)
-            cw.writeheader()
-            cw.writerows(dictrep)
+        f = filename
+        if isinstance(filename, str):
+            f = open(filename, 'w', newline='', encoding='utf-8')
+
+        cw = csv.DictWriter(f, allkeys)
+        cw.writeheader()
+        cw.writerows(dictrep)
+
+        f.flush()
+        f.close()
 
     def export_gpx(self, filename):
         fresh_gps = [f for f in self.frames if isinstance(
@@ -344,12 +392,18 @@ class RTRKLog():
             return gpxpy.gpx.GPXTrackPoint(latitude=data.gps_lat, longitude=data.gps_lon, elevation=data.gps_alt, time=datetime.datetime.fromtimestamp(frame.timestamp))
         gpx_segment.points += [log2gpxpoint(f) for f in fresh_gps]
 
-        with open(filename, 'w') as f:
-            f.write(gpx.to_xml())
+        if isinstance(filename, str):
+            with open(filename, 'w') as f:
+                f.write(gpx.to_xml())
+        else:
+            filename.write(gpx.to_xml())
 
     def get_log_duration_sec(self):
         tss = [f.timestamp for f in self.frames]
         return (max(tss) - min(tss))
+
+    def get_events(self):
+        return [f for f in self.frames if isinstance(f.data, LogDataEventRaw)]
 
 
 if __name__ == "__main__":

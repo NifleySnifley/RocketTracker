@@ -33,6 +33,26 @@
 			"!suffix": "m/s"
 		}
 	},
+	"telemetry_divider": {
+		"!name": "Telemetry Hz = 1000 / (nav_period_ms * nav_count)) / telemetry_divider",
+		"!type": "int(1,1000)",
+		"!default": 1,
+		"!suffix": "GPS/"
+	},
+	"gps": {
+		"!name": "GPS Settings (Advanced)",
+		"nav_count": {
+			"!name": "GPS measurements per navigation fix",
+			"!type": "int(1,10)",
+			"!default": 1
+		},
+		"nav_period_ms": {
+			"!name": "GPS milliseconds per measurement",
+			"!type": "int(100,10000)",
+			"!default": 100,
+			"!suffix": "ms"
+		}
+	},
 	"logging": {
 		"!name": "Logger Settings",
 		"launch_threshold": {

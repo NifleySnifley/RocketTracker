@@ -306,16 +306,18 @@ void link_decode_datum(int i, DatumTypeID id, int len, uint8_t* data, bool is_us
             ESP_LOGW("LINK", "Setting sensor date output rate to %dHz", (int)cmd.rate_hz);
             if ((sensor_output_hz == 0) && (cmd.rate_hz > 0)) {
                 // Start
+                sensor_output_hz = cmd.rate_hz;
                 xTaskCreate(sensor_output_task, "sensor_output", 1024 * 4, NULL, 10, &sensor_output_task_handle);
-            } else if ((sensor_output_hz > 0) && (cmd.rate_hz == 0)) {
+            } else if ((sensor_output_hz > 0) && (cmd.rate_hz <= 0)) {
                 // Stop
+                sensor_output_hz = 0;
                 vTaskDelete(sensor_output_task_handle);
             } else if ((sensor_output_hz > 0) && (cmd.rate_hz > 0)) {
                 // Reconfigure timing
                 // For now, do nothing!
+                sensor_output_hz = cmd.rate_hz;
             }
 
-            sensor_output_hz = cmd.rate_hz;
         } else {
             ESP_LOGW("LINK", "Error decoding Command_ConfigSensorOutput");
         }
@@ -331,6 +333,8 @@ void link_decode_datum(int i, DatumTypeID id, int len, uint8_t* data, bool is_us
         }
     } else if (id == DatumTypeID_CMD_ConfigEnumerate) {
         // TODO: USB ONLY???
+        telemetry_enable = false;
+
         int num = 0;
         for (config_iterator_t it = config_iterator_first(); !config_iterator_done(it); it = config_iterator_next(it)) {
             config_entry_t entry = config_iterator_get_value(it);
@@ -344,6 +348,11 @@ void link_decode_datum(int i, DatumTypeID id, int len, uint8_t* data, bool is_us
             .num_values = num
         };
         link_send_datum(DatumTypeID_RESP_ConfigEnumerateDone, Resp_ConfigEnumerateDone_fields, &finish);
+        link_flush();
+        telemetry_enable = true;
+    } else if (id == DatumTypeID_CMD_Reboot) {
+        // Welp, it reboots!
+        esp_restart();
     }
 }
 
@@ -355,21 +364,20 @@ void link_usb_decode_datum(int i, DatumTypeID id, int len, uint8_t* data) {
     link_decode_datum(i, id, len, data, true);
 }
 
-uint8_t tx_buffer[256];
+
 void lora_link_flush() {
     int size, ndatum;
+    uint8_t* tx_buffer = (uint8_t*)calloc(1, 256);
     xSemaphoreTakeRecursive(fmgr_mutex, portMAX_DELAY);
-
     ndatum = fmgr_get_n_datum_encoded(&lora_outgoing_fmgr);
 
     fmgr_set_frame_id(&lora_outgoing_fmgr, TalkerID_Tracker_V3);
     uint8_t* data = fmgr_get_frame(&lora_outgoing_fmgr, &size);
     memcpy(tx_buffer, data, size);
     fmgr_reset(&lora_outgoing_fmgr);
-    // ESP_LOGI("LINK_LoRa", "Starting TX: %d datum. %d bytes.", ndatum, size);
     xSemaphoreGiveRecursive(fmgr_mutex);
-
     radio_tx(tx_buffer, size);
+    free(tx_buffer);
 }
 
 static void usb_receive_task(void* args) {
@@ -549,9 +557,11 @@ void link_send_datum(DatumTypeID type, const pb_msgdesc_t* fields, const void* s
         if (!fmgr_encode_datum(&lora_outgoing_fmgr, type, fields, src_struct)) {
             // TODO: Encode this data into a backlog, then schedule to send asynchronously rather than block
 
+            ESP_LOGW("LINK_LoRa", "Automatically Flushing");
             lora_link_flush();
 
             // Wait for TX done!
+            // xSemaphoreTake(lora_txdone_sem, portMAX_DELAY);
             // xSemaphoreTake(lora_txdone_sem, portMAX_DELAY);
 
             if (!fmgr_encode_datum(&lora_outgoing_fmgr, type, fields, src_struct)) {
@@ -865,37 +875,72 @@ static void log_download_task(void* arg) {
     }
 }
 
+SemaphoreHandle_t radio_interrupt_semaphore;
 TaskHandle_t radio_handle_interrupt;
 void IRAM_ATTR radio_handle_interrupt_fromisr(void* arg) {
-    xTaskResumeFromISR(radio_handle_interrupt);
+    // xTaskResumeFromISR(radio_handle_interrupt);
+    xSemaphoreGiveFromISR(radio_interrupt_semaphore, NULL);
 }
 
 void radio_handle_interrupt_task(void* arg) {
     while (1) {
-        vTaskSuspend(NULL);
+        // vTaskSuspend(NULL);
+        xSemaphoreTake(radio_interrupt_semaphore, portMAX_DELAY);
         sx127x_handle_interrupt((sx127x*)arg);
     }
 }
 
-void radio_rx_callback(sx127x* device, uint8_t* data, uint16_t data_length) {
-    // gpio_set_level(PIN_LED_G, 0);
-
-    // if (xSemaphoreTake(radio_mutex, pdMS_TO_TICKS(500)) != pdTRUE) {
-    //     ESP_LOGE("RADIO", "Error acquiring radio for receive information!");
-    // }
-
-    if (xSemaphoreTake(tl_spi_hold_sem, 1000) != pdTRUE) {
-        ESP_LOGE("RADIO", "Aborted Rx because bus is held.");
+QueueHandle_t radio_rx_dispatching_queue;
+typedef struct radio_rx_data_t {
+    sx127x* device;
+    uint8_t* data;
+    uint16_t data_length
+} radio_rx_data_t;
+void radio_rx_callback_dispatcher(sx127x* device, uint8_t* data, uint16_t data_length) {
+    if (data_length > 256) {
+        ESP_LOGE("RADIO", "Error dispatching receive callback: too much data!");
         return;
-    } else {
-        int16_t rssi;
-        ESP_ERROR_CHECK(sx127x_rx_get_packet_rssi(device, &rssi));
-        float snr;
-        ESP_ERROR_CHECK(sx127x_lora_rx_get_packet_snr(device, &snr));
-        // int32_t frequency_error;
-        // ESP_ERROR_CHECK(sx127x_rx_get_frequency_error(device, &frequency_error));
+    }
+    uint8_t* data_owned = (uint8_t*)calloc(1, data_length);
+    memcpy(data_owned, data, data_length);
 
-        // xSemaphoreGive(radio_mutex);
+    radio_rx_data_t rxdat = {
+        .device = device,
+        .data = data_owned,
+        .data_length = data_length
+    };
+    xQueueSend(radio_rx_dispatching_queue, &rxdat, portMAX_DELAY);
+}
+
+void radio_rx_callback_worker(void* args) {
+    radio_rx_data_t arg;
+    ESP_LOGI("RADIO", "Started receiving worker");
+
+    while (1) {
+        xQueueReceive(radio_rx_dispatching_queue, &arg, portMAX_DELAY);
+        sx127x* device = arg.device;
+        uint8_t* data = arg.data;
+        uint16_t data_length = arg.data_length;
+
+        // gpio_set_level(PIN_LED_G, 0);
+
+        // if (xSemaphoreTake(radio_mutex, pdMS_TO_TICKS(500)) != pdTRUE) {
+        //     ESP_LOGE("RADIO", "Error acquiring radio for receive information!");
+        // }
+
+        // THIS IS NOT NECCESARY IF NO RSSI IS NEEDED!
+        // if (xSemaphoreTake(tl_spi_hold_sem, 1000) != pdTRUE) {
+        //     ESP_LOGE("RADIO", "Aborted Rx because bus is held.");
+        //     continue
+        // } else {
+            // int16_t rssi;
+            // ESP_ERROR_CHECK(sx127x_rx_get_packet_rssi(device, &rssi));
+            // float snr;
+            // ESP_ERROR_CHECK(sx127x_lora_rx_get_packet_snr(device, &snr));
+            // int32_t frequency_error;
+            // ESP_ERROR_CHECK(sx127x_rx_get_frequency_error(device, &frequency_error));
+
+            // xSemaphoreGive(radio_mutex);
         xSemaphoreGive(tl_spi_hold_sem);
 
         fmgr_load_frame(&lora_incoming_fmgr, data, data_length);
@@ -906,12 +951,14 @@ void radio_rx_callback(sx127x* device, uint8_t* data, uint16_t data_length) {
         }
 
         // ESP_ERROR_CHECK(sx127x_set_opmod(SX127x_MODE_CAD, SX127x_MODULATION_LORA, device));
+        // }
+        free(arg.data);
     }
 }
 
 // This can't be called from an ISR... right?
 static void radio_txcomplete_callback(sx127x* device) {
-    // ESP_LOGI("LINK_LoRa", "TX Completed.");
+    // ESP_LOGI("RADIO", "TX Completed.");
     // ESP_ERROR_CHECK(sx127x_set_opmod(SX127x_MODE_CAD, SX127x_MODULATION_LORA, radio));
     ESP_ERROR_CHECK(sx127x_set_opmod(SX127x_MODE_RX_CONT, SX127x_MODULATION_LORA, radio));
 
@@ -944,6 +991,9 @@ static void init_radio() {
     xSemaphoreGive(lora_txdone_sem);
     // radio_mutex = xSemaphoreCreateBinary();
     // xSemaphoreGive(radio_mutex);
+    radio_rx_dispatching_queue = xQueueCreate(16, sizeof(radio_rx_data_t));
+
+    radio_interrupt_semaphore = xSemaphoreCreateBinary();
 
     spi_device_interface_config_t dev_cfg = {
         .clock_speed_hz = 10e6, // 10MHz is sx1276's max SPI freq
@@ -1006,7 +1056,7 @@ static void init_radio() {
     ESP_ERROR_CHECK(sx127x_set_preamble_length(8, radio));
 
     sx127x_tx_set_callback(radio_txcomplete_callback, radio);
-    sx127x_rx_set_callback(radio_rx_callback, radio);
+    sx127x_rx_set_callback(radio_rx_callback_dispatcher, radio);
     // sx127x_lora_cad_set_callback(radio_cad_callback, radio);
 
     ESP_ERROR_CHECK(sx127x_set_opmod(SX127x_MODE_RX_CONT, SX127x_MODULATION_LORA, radio));
@@ -1018,6 +1068,8 @@ static void init_radio() {
         sx127x_destroy(radio);
         return;
     }
+
+    xTaskCreate(radio_rx_callback_worker, "radio_rx_worker", 1024 * 8, NULL, 4, NULL);
 
 
     gpio_reset_pin(PIN_RFM_D0);
@@ -1055,7 +1107,14 @@ static void init_radio() {
 static void radio_tx(uint8_t* data, int len) {
     if (xSemaphoreTake(tl_spi_hold_sem, pdMS_TO_TICKS(5)) == pdTRUE) {
         // How to not TX while RXing...
-        xSemaphoreTake(lora_txdone_sem, portMAX_DELAY);
+        if (xSemaphoreTake(lora_txdone_sem, pdMS_TO_TICKS(5000)) != pdTRUE) {
+            ESP_LOGE("RADIO", "Transmit timed out (5sec). Attempting to continue.");
+            // xSemaphoreGive(lora_txdone_sem);
+            xSemaphoreGive(tl_spi_hold_sem);
+            return;
+        }
+
+        // ESP_LOGI("RADIO", "Starting TX: %d bytes.", len);
 
         gpio_set_level(PIN_LED_R, 1);
 
@@ -1167,6 +1226,7 @@ uDeviceHandle_t gnssHandle;
 
 #define PVT_MESSAGE_BUFFER_LENGTH  (92 + U_UBX_PROTOCOL_OVERHEAD_LENGTH_BYTES)
 static char* gps_ubx_buf;
+static int32_t TELEM_DIV = 1;
 
 static void gps_ubx_callback(uDeviceHandle_t devHandle, const uGnssMessageId_t* pMessageId,
     int32_t errorCodeOrLength, void* pCallbackParam) {
@@ -1212,10 +1272,10 @@ static void gps_ubx_callback(uDeviceHandle_t devHandle, const uGnssMessageId_t* 
                 log_data.flags |= LOG_FLAG_GPS_FRESH;
 
                 // Since this runs at 10Hz, only send telemetry every 1Hz
-                if ((gpsctr % 10) == 0) {
+                if ((gpsctr % TELEM_DIV) == 0) {
                     xTaskNotify(telemetry_task, 0, eNoAction);
                 }
-                gpsctr = (gpsctr + 1) % 10;
+                gpsctr++;
             }
             uGnssDecFree(pDec);
         }
@@ -1281,7 +1341,13 @@ static void init_gps_worker(void* arg) {
         ESP_LOGW("GPS", "Error setting UBX NAV_PVT output");
     }
 
-    err = uGnssCfgSetRate(gnssHandle, 100, 1, -1);
+    config_get_int(CONFIG_TELEMETRY_DIVIDER_KEY, &TELEM_DIV);
+    int32_t measprdms = CONFIG_GPS_NAV_PERIOD_MS_DEFAULT;
+    int32_t measpernav = CONFIG_GPS_NAV_COUNT_DEFAULT;
+    config_get_int(CONFIG_GPS_NAV_PERIOD_MS_KEY, &measprdms);
+    config_get_int(CONFIG_GPS_NAV_COUNT_KEY, &measpernav);
+
+    err = uGnssCfgSetRate(gnssHandle, measprdms, measpernav, -1);
     if (err) {
         ESP_LOGE("GPS", "UBXLIB GNSS rate error: %" PRIi32, err);
         return;
@@ -1486,7 +1552,7 @@ static void sensor_output_task(void* arg) {
 
         if (USB_AVAILABLE) {
             link_send_datum(DatumTypeID_INFO_SensorData, SensorData_fields, &data);
-            ESP_LOGW("SENSOR", "OUT!");
+            // ESP_LOGW("SENSOR", "OUT!");
         } else {
             // Do literally nothing
         }
@@ -1511,14 +1577,6 @@ static void once_per_second() {
             link_send_datum(DatumTypeID_INFO_LogStatus, LogStatus_fields, &stat);
         }
     }
-
-    // Alert alt = {
-    //     .has_data = false,
-    //     .type = AlertType_ALT_Error
-    // };
-    // link_send_datum(DatumTypeID_INFO_Alert, Alert_fields, &alt);
-    // // DEBUG!!!
-    // link_flush();
 
     seconds += 1;
 }
