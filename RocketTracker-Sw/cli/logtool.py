@@ -20,9 +20,12 @@ def log_info(args):
     print(f"Total time: {totaltime:0.2f} seconds")
     print(
         f"Log dump contains {len(sublogs)} log{'' if len(sublogs) == 1 else 's'}")
+    if len(sublogs) == 0:
+        sublogs = [log]
     for i, sl in enumerate(sublogs):
-        sl.normalize()
-        sl.sort()
+        if not args.raw:
+            sl.normalize()
+            sl.sort()
         print(f"- Log {i}:")
         print(f"\t{sl.get_log_duration_sec():.2f} seconds")
         events = sl.get_events()

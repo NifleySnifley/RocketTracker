@@ -131,7 +131,16 @@ enum DatumTypeID {
   RESP_ConfigEnumerateDone = 150; // -> Resp_ConfigEnumerateDone
 
 
-  CMD_Reboot = 151; // -> NO BODY
+  CMD_Reboot = 151; // NO BODY
+
+  CMD_RequestDeviceInfo = 152; // NO BODY -> RESP_DeviceInfo
+  RESP_DeviceInfo = 153; // DeviceInfo
+}
+
+message DeviceInfo {
+  optional string name = 1;
+  required string fw_version = 2;
+  required TalkerID device_type = 3;
 }
 
 enum ConfigMode {

@@ -58,6 +58,19 @@ void init_config(const char* nvs_namespace) {
 #endif
 }
 
+bool config_is_set(char* key_hash) {
+    nvs_type_t out_type;
+    esp_err_t e = nvs_find_key(GLOBAL_CONFIG.nvs, key_hash, &out_type);
+    if (e == ESP_OK) {
+        return true;
+    } else if (e == ESP_ERR_NVS_NOT_FOUND) {
+        return false;
+    } else {
+        ESP_LOGW("CONFIG", "Error %s checking existance of config value", esp_err_to_name(e));
+        return false;
+    }
+}
+
 int config_get_manifest_idx_from_hashed(const char* key_hashed) {
     int i = 0;
     for (config_iterator_t it = config_iterator_first(); !config_iterator_done(it); it = config_iterator_next(it)) {

@@ -75,6 +75,9 @@ if __name__ == "__main__":
         if (isinstance(v.type, BoolType)):
             defs.append(
                 f"#define {vpath_clean.upper()}_DEFAULT {'true' if defval else 'false'}")
+        elif (isinstance(v.type, StringType)):
+            defs.append(
+                f"#define {vpath_clean.upper()}_DEFAULT \"{defval}\"")
         else:
             defs.append(f"#define {vpath_clean.upper()}_DEFAULT {defval}")
         defs.append('')
@@ -82,7 +85,7 @@ if __name__ == "__main__":
     cw.add_lines("""typedef union config_value_t {
     float float_value;
     int32_t int_value;
-    char* string_value;
+    const char* string_value;
     bool bool_value;
     int32_t enum_value;
     } config_value_t;""")

@@ -68,7 +68,12 @@ class IntType(TypeBase):
         return self
 
     def __repr__(self) -> str:
-        return f"IntType(min={self.min},max={self.max},valid={self.validvals})"
+        inner = ""
+        if self.validvals is None:
+            inner = f"min={self.min}, max={self.max}"
+        else:
+            inner = f"valid={self.validvals}"
+        return f"int({inner})"
 
     def parse_value(self, nativeval: any):
         if not isinstance(nativeval, int):
@@ -113,7 +118,12 @@ class FloatType(TypeBase):
         return self
 
     def __repr__(self) -> str:
-        return f"FloatType(min={self.min},max={self.max},valid={self.validvals})"
+        inner = ""
+        if self.validvals is None:
+            inner = f"min={self.min}, max={self.max}"
+        else:
+            inner = f"valid={self.validvals}"
+        return f"float({inner})"
 
     def parse_value(self, nativeval: any):
         if not isinstance(nativeval, float):
@@ -141,7 +151,7 @@ class StringType(TypeBase):
         return self
 
     def __repr__(self) -> str:
-        return f"StringType(maxlen={self.maxlen})"
+        return f"string(maxlen={self.maxlen})"
 
     def parse_value(self, nativeval: any):
         if not (isinstance(nativeval, str) and len(nativeval) <= self.maxlen):
@@ -159,7 +169,7 @@ class EnumType(TypeBase):
         return self
 
     def __repr__(self) -> str:
-        return f"EnumType(values={self.values})"
+        return f"enum({', '.join(self.values)})"
 
     def parse_value(self, nativeval: any):
         if not (isinstance(nativeval, str) and nativeval in self.values):
@@ -213,7 +223,7 @@ class ParameterBase:
         }
 
     def __repr__(self) -> str:
-        return f"{self.path} (type={self.type}, default={self.default})"
+        return f"{self.path} type: {self.type} default: {self.default}"
 
 
 class CollectionBase:

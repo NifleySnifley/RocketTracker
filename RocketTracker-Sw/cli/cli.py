@@ -34,7 +34,7 @@ import link as link
 from lib.comms_lib.crctabgen import crc16
 import serial.tools.list_ports
 import serial.tools
-import urllib.parse
+from logtool import log_convert, log_info
 
 colinit()
 
@@ -820,9 +820,13 @@ CALIBSTATE_QUIT = 9
 
 
 def set_configval(key, val):
-    if (key not in CONFIG_LOOKUP):
+    if ((key not in CONFIG_KEY_ENCODE) and (key not in CONFIG_KEY_DECODE)):
         print(f"Error, config value not found with key '{key}'")
         return False
+
+    if key in CONFIG_KEY_DECODE:
+        key = CONFIG_KEY_DECODE[key]
+
     parameter = CONFIG_LOOKUP[key]
 
     d = Datum(protocol.CMD_Config)
@@ -1296,6 +1300,28 @@ def ping(args):
                     f"Got pong! connected over link type '{protocol.LinkID.DESCRIPTOR.values_by_number[pong.to_protobuf().link].name}'")
 
 
+def devinfo(args):
+    init_cli(args)
+
+    d = Datum(protocol.CMD_RequestDeviceInfo)
+    tx_queue.put(d)
+
+    print("Requested device info...")
+    print()
+
+    resp = wait_for_datum([protocol.RESP_DeviceInfo], 1.5)
+    if (resp is None):
+        print("Error: timed out")
+    else:
+        pb = resp.to_protobuf()
+        print(
+            f"Device Type: {Fore.GREEN}{protocol.TalkerID.DESCRIPTOR.values_by_number[pb.device_type].name}{Style.RESET_ALL}")
+        print(
+            f"Device name: {Fore.GREEN if pb.HasField('name') else Fore.RED}{pb.name if pb.HasField('name') else '<not set>'}{Style.RESET_ALL}")
+        print(
+            f"Firmware Version: {Fore.GREEN}{pb.fw_version}{Style.RESET_ALL}")
+
+
 def receiver_config(args):
     # We are talking to the VGPS port now!!
     rx = autodetect_receiver(serial.tools.list_ports.comports())
@@ -1326,10 +1352,12 @@ def receiver_config(args):
 def config_get(args):
     init_cli(args)
 
-    if (args.key not in CONFIG_KEY_ENCODE):
+    if ((args.key not in CONFIG_KEY_ENCODE) and (args.key not in CONFIG_KEY_DECODE)):
         print(f"Error, key {args.key} not found")
         exit(1)
 
+    if args.key in CONFIG_KEY_DECODE:
+        args.key = CONFIG_KEY_DECODE[args.key]
     parameter = CONFIG_LOOKUP[args.key]
 
     d = Datum(protocol.CMD_Config)
@@ -1366,16 +1394,28 @@ def config_get(args):
 def config_set(args):
     init_cli(args)
 
-    if (args.key not in CONFIG_KEY_ENCODE):
+    if ((args.key not in CONFIG_KEY_ENCODE) and (args.key not in CONFIG_KEY_DECODE)):
         print(f"Error, key {args.key} not found")
         exit(1)
 
+    if args.key in CONFIG_KEY_DECODE:
+        args.key = CONFIG_KEY_DECODE[args.key]
     parameter = CONFIG_LOOKUP[args.key]
 
     d = Datum(protocol.CMD_Config)
     pb = protocol.Config(
         key_hashed=CONFIG_KEY_ENCODE[args.key], mode=protocol.ConfigSet)
-    value = parameter.type.parse_value(eval(args.value))
+    value = None
+    if isinstance(parameter.type, FloatType):
+        value = float(args.value)
+    elif isinstance(parameter.type, IntType):
+        value = int(args.value)
+    elif isinstance(parameter.type, StringType) or isinstance(parameter.type, EnumType):
+        value = str(args.value)
+    elif isinstance(parameter.type, BoolType):
+        value = bool(args.value)
+    value = parameter.type.parse_value(value)
+
     if (value is None):
         print("Error parsing value!")
         print(f"Type: {parameter.type}")
@@ -1500,7 +1540,30 @@ def config_list(args):
     print("Requesting device configuration...\n")
     d = get_configvals()
     for k, v in sorted(d.items()):
-        print(f"{k} = {v}")
+        if (not args.calibration) and k.startswith("config.calibration"):
+            continue
+        print(f"{k} = {Fore.GREEN}{v}{Style.RESET_ALL}")
+
+
+def config_list_default(args):
+    init_cli(args)
+    d = CONFIG_LOOKUP
+    for k, v in sorted(d.items()):
+        if (not args.calibration) and k.startswith("config.calibration"):
+            continue
+        # print(str(v))
+        print(
+            f"{Fore.GREEN}{v.path}{Style.RESET_ALL} {Fore.YELLOW}({encode_key(v.path)}){Style.RESET_ALL}")
+        print(f"\tname: {v.name}")
+        if ('!description' in v.data):
+            print(f"\tdesc: {v.data['!description']}")
+        print(f"\ttype: {v.type}")
+        suf = ""
+        if '!suffix' in v.data:
+            suf = v.data['!suffix']
+            print(f"\tunits: {suf}")
+        print(f"\tdefault: {Fore.RED}{v.default}{suf}{Style.RESET_ALL}")
+        print("\n")
 
 
 def config_save(args):
@@ -1524,8 +1587,10 @@ def config_diff(args):
     nodiff = True
     for k, lv, rv in [(k, d_local.get(k, None), d_remote.get(k, None)) for k in sorted(d_local.keys() | d_remote.keys())]:
         if (lv != rv):
+            lstr = f"{lv:{'' if (lv is None)or isinstance(lv, str) else '.4f'}}"
+            rstr = f"{rv:{'' if (rv is None) or isinstance(rv, str) else '.4f'}}"
             print(
-                f"{k} = {Fore.RED}{lv:{'' if lv is None else '.4f'}} (local){Style.RESET_ALL} -> {Fore.GREEN}{rv:{'' if rv is None else '.4f'}} (remote){Style.RESET_ALL}")
+                f"{k} = {Fore.RED}{lstr} (local){Style.RESET_ALL} -> {Fore.GREEN}{rstr} (remote){Style.RESET_ALL}")
             nodiff = False
 
     if nodiff:
@@ -1565,13 +1630,17 @@ def config_load(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        prog='basestation-cli',
-        description='CLI interface for rocket tracking system components (receiver and tracker v0.3)')
+        prog='cli',
+        description='CLI interface for rocket tracking system components (receiver and tracker)')
     subparsers = parser.add_subparsers(help='sub-command help')
-    parser.add_argument('-p', '--port', required=False, type=str)
-    parser.add_argument('-v', '--verbose', action='store_true')
+    subparsers.required = True
+    parser.add_argument('-p', '--port', required=False, type=str,
+                        help="Serial port of tracker/receiver. If not specified, tracker/receiver will be automatically detected")
+    parser.add_argument('-v', '--verbose', action='store_true',
+                        help="Prints all messages to/from the connected device")
 
-    parser_rxconfig = subparsers.add_parser('rxconfig')
+    parser_rxconfig = subparsers.add_parser(
+        'rxconfig', description="Set configuration parameters of a receiver")
     parser_rxconfig.set_defaults(func=receiver_config)
     parser_rxconfig.add_argument(
         '-f', '--freq-mhz', type=argparse_restricted_float(903.0, 927.0))
@@ -1582,136 +1651,213 @@ if __name__ == "__main__":
     parser_rxconfig.add_argument(
         '-p', '--power', type=int, choices=[3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 20])
 
-    parser_monitor = subparsers.add_parser('monitor')
+    parser_monitor = subparsers.add_parser(
+        'monitor', description="View the stream of incoming data from a connected tracker or receiver")
     parser_monitor.add_argument(
-        '-l', '--log', type=argparse.FileType('a'))
+        '-l', '--log', type=argparse.FileType('a'), help="Write all received data (JSON) to a file")
     parser_monitor.set_defaults(func=monitor)
     parser_monitor.add_argument(
-        '-u', '--udp', default=None, type=str)
+        '-u', '--udp', default=None, type=str, help="Send all received data (JSON) to ip:port")
 
-    parser_debug = subparsers.add_parser('debug')
+    parser_debug = subparsers.add_parser(
+        'debug', description="View the stream of debug data from a tracker")
     parser_debug.set_defaults(func=debug)
     parser_debug.add_argument(
-        '-u', '--udp', default=None, type=str)
+        '-u', '--udp', default=None, type=str, help="Send all received data (JSON) to ip:port")
 
-    parser_reboot = subparsers.add_parser('reboot')
+    parser_reboot = subparsers.add_parser(
+        'reboot', description="Reboot a connected tracker")
     parser_reboot.set_defaults(func=reboot)
-    parser_reboot.add_argument("-y", "--yes", action='store_true')
+    parser_reboot.add_argument(
+        "-y", "--yes", action='store_true', help="bypass confirmation dialog")
 
-    parser_calib = subparsers.add_parser('calibrate')
+    parser_calib = subparsers.add_parser(
+        'calibrate', description="Sensor calibration tools. USB connection required.")
     calib_subparsers = parser_calib.add_subparsers()
+    calib_subparsers.required = True
 
-    parser_calib_acc = calib_subparsers.add_parser("accel")
+    parser_calib_acc = calib_subparsers.add_parser(
+        "accel", description="Calibrate the accelerometer of a connected tracker")
     parser_calib_acc.set_defaults(func=calibrate_acc)
 
-    parser_calib_gyr = calib_subparsers.add_parser("gyro")
+    parser_calib_gyr = calib_subparsers.add_parser(
+        "gyro", description="Calibrate the gyro of a connected tracker")
     parser_calib_gyr.set_defaults(func=calibrate_gyr)
 
-    parser_calib_mag = calib_subparsers.add_parser("mag")
+    parser_calib_mag = calib_subparsers.add_parser(
+        "mag", description="Calibrate the magnetometer of a connected tracker")
     parser_calib_mag.set_defaults(func=calibrate_mag)
 
-    parser_calib_mag = calib_subparsers.add_parser("altimetry")
+    parser_calib_mag = calib_subparsers.add_parser(
+        "altimetry", description="Calibrate the altimetry filter of a connected tracker")
     parser_calib_mag.set_defaults(func=calibrate_altimetry)
 
-    parser_sensormon = subparsers.add_parser('sensormon')
+    parser_sensormon = subparsers.add_parser(
+        'sensormon', description="View sensor data from a connected tracker. USB connection required.")
     parser_sensormon.set_defaults(func=sensormon)
     parser_sensormon.add_argument(
-        "-f", "--frequency", default=60, type=argparse_restricted_int(1, 256))
+        "-f", "--frequency", default=60, type=argparse_restricted_int(1, 256), help="Update rate of sensor data")
     parser_sensormon.add_argument(
-        '-l', '--log', type=argparse.FileType('w'))
+        '-l', '--log', type=argparse.FileType('w'), help="Write all received data (JSON) to log file")
     parser_sensormon.add_argument(
-        '-r', '--raw', action='store_true')
+        '-r', '--raw', action='store_true', help="Raw sensor output (disable calibration)")
     parser_sensormon.add_argument(
-        '-u', '--udp', default=None, type=str)
+        '-u', '--udp', default=None, type=str, help="Send all received data (JSON) to ip:port")
 
-    parser_telemetry = subparsers.add_parser('telemetry')
+    parser_telemetry = subparsers.add_parser(
+        'telemetry', description="View telemetry information from a connected tracker")
     parser_telemetry.set_defaults(func=telemetry)
 
-    parser_3d = subparsers.add_parser('sensors3d')
+    parser_3d = subparsers.add_parser(
+        'sensors3d', description="Visualize the orientation of a connected tracker in 3D. Requires USB connection and a web browser with OpenGL support")
     parser_3d.set_defaults(func=sensors3d)
     parser_3d.add_argument(
-        "-f", "--frequency", default=60, type=argparse_restricted_int(1, 256))
+        "-f", "--frequency", default=60, type=argparse_restricted_int(1, 256), help="Update rate of orientation information")
 
-    parser_ping = subparsers.add_parser('ping')
+    parser_ping = subparsers.add_parser(
+        'ping', description="Test the connection to a tracker")
     parser_ping.set_defaults(func=ping)
     parser_ping.add_argument('-r', '--repeat', action='store_true')
 
+    parser_info = subparsers.add_parser(
+        'info', description="Get the board type, name, and firmware revision of a connected tracker")
+    parser_info.set_defaults(func=devinfo)
+
     # TODO: Add proper help/usage for __ALL__ commands and subcommands!!!
-    parser_log = subparsers.add_parser('log')
+    parser_log = subparsers.add_parser(
+        'log', description="Logging commands, configuration and downloading")
     log_subparsers = parser_log.add_subparsers()
+    log_subparsers.required = True
     # parser_log.add_argument('bar', type=int, help='bar help')
 
-    parser_log_stop = log_subparsers.add_parser('stop')
+    parser_log_stop = log_subparsers.add_parser(
+        'stop', description="Stop logging")
     parser_log_stop.set_defaults(func=log_stop)
     parser_log_stop.add_argument("-y", "--yes", action='store_true')
 
-    parser_log_mark = log_subparsers.add_parser('mark')
-    parser_log_mark.set_defaults(func=log_mark)
-    parser_log_mark.add_argument('data', nargs='?', default='DEADBEEF')
+    # parser_log_mark = log_subparsers.add_parser('mark')
+    # parser_log_mark.set_defaults(func=log_mark)
+    # parser_log_mark.add_argument('data', nargs='?', default='DEADBEEF')
 
-    parser_log_start = log_subparsers.add_parser('start')
+    parser_log_start = log_subparsers.add_parser(
+        'start', description="Manually start logging at a specified rate")
     parser_log_start.set_defaults(func=log_start)
     parser_log_start.add_argument(
         "hz", type=argparse_restricted_int(0, 200))
 
-    parser_log_arm = log_subparsers.add_parser('arm')
+    parser_log_arm = log_subparsers.add_parser(
+        'arm', description="Arm logging")
     parser_log_arm.set_defaults(func=log_arm)
 
-    parser_log_delete = log_subparsers.add_parser('delete')
+    parser_log_delete = log_subparsers.add_parser(
+        'delete', description="Delete all logs stored in a tracker's log memory")
     parser_log_delete.set_defaults(func=log_delete)
-    parser_log_delete.add_argument("-y", "--yes", action='store_true')
+    parser_log_delete.add_argument(
+        "-y", "--yes", action='store_true', help="bypass confirmation dialog")
 
-    parser_log_clean = log_subparsers.add_parser('clean')
+    parser_log_clean = log_subparsers.add_parser(
+        'clean', description="Erase a tracker's entire log memory")
     parser_log_clean.set_defaults(func=log_clean)
-    parser_log_clean.add_argument("-y", "--yes", action='store_true')
+    parser_log_clean.add_argument(
+        "-y", "--yes", action='store_true', help="bypass confirmation dialog")
 
-    parser_log_status = log_subparsers.add_parser('status')
+    parser_log_status = log_subparsers.add_parser(
+        'status', description="Request a tracker's current logging mode and rate")
     parser_log_status.set_defaults(func=log_status)
 
-    parser_log_download = log_subparsers.add_parser('download')
+    parser_log_download = log_subparsers.add_parser(
+        'download', description="Download the contents of a connected tracker's log memory. USB connection required.")
     parser_log_download.add_argument(
-        '-o', '--outfile', required=True, type=argparse.FileType('wb'))
+        '-o', '--outfile', required=True, type=argparse.FileType('wb'), help="Output file")
     # TODO: Log parsing and output formats!
-    # parser_log_download.add_argument(
-    # '-f', '--format', required=True, type=str, choices=['rlog', 'csv', 'json'])
     parser_log_download.set_defaults(func=log_download)
 
-    parser_config = subparsers.add_parser('config')
+    parser_config = subparsers.add_parser(
+        'config', description="Tracker configuration tools")
     config_subparsers = parser_config.add_subparsers()
+    config_subparsers.required = True
 
-    parser_config_get = config_subparsers.add_parser('get')
+    parser_config_get = config_subparsers.add_parser(
+        'get', description="Retrieve the value of a specific configuration parameter")
     parser_config_get.set_defaults(func=config_get)
-    parser_config_get.add_argument("key", type=str)
+    parser_config_get.add_argument(
+        "key", type=str)
 
-    parser_config_set = config_subparsers.add_parser('set')
+    parser_config_set = config_subparsers.add_parser(
+        'set', description="Set the value of a specific configuration parameter")
     parser_config_set.set_defaults(func=config_set)
     parser_config_set.add_argument("key", type=str)
     parser_config_set.add_argument("value", type=str)
 
-    parser_config_erase = config_subparsers.add_parser('erase')
+    parser_config_erase = config_subparsers.add_parser(
+        'erase', description="Erase (set to default) a single configuration value")
     parser_config_erase.set_defaults(func=config_erase)
     parser_config_erase.add_argument("key", type=str)
 
-    parser_config_reset = config_subparsers.add_parser('reset')
+    parser_config_reset = config_subparsers.add_parser(
+        'reset', description="Erase configuration memory, all values will be restored to default")
     parser_config_reset.set_defaults(func=config_reset)
 
-    parser_config_list = config_subparsers.add_parser('list')
+    parser_config_list = config_subparsers.add_parser(
+        'list', description="List the keys and values of all configuration parameters of a attached tracker")
     parser_config_list.set_defaults(func=config_list)
+    parser_config_list.add_argument(
+        "-c", "--calibration", action='store_true', help="Display calibration parameters")
 
-    parser_config_save = config_subparsers.add_parser('save')
+    parser_config_dlist = config_subparsers.add_parser(
+        'list_defaults', description="List the keys and default values for all available configuration values")
+    parser_config_dlist.set_defaults(func=config_list_default)
+    parser_config_dlist.add_argument(
+        "-c", "--calibration", action='store_true', help="Display calibration parameters")
+
+    parser_config_save = config_subparsers.add_parser(
+        'save', description="Save configuration to a JSON file")
     parser_config_save.set_defaults(func=config_save)
-    parser_config_save.add_argument("file", type=argparse.FileType('w'))
+    parser_config_save.add_argument(
+        "file", type=argparse.FileType('w'), help="Output file")
 
-    parser_config_load = config_subparsers.add_parser('load')
+    parser_config_load = config_subparsers.add_parser(
+        'load', description="Load and write configuration from a JSON file")
     parser_config_load.set_defaults(func=config_load)
-    parser_config_load.add_argument("file", type=argparse.FileType('r'))
-    parser_config_load.add_argument("-d", "--dryrun", action='store_true')
+    parser_config_load.add_argument(
+        "file", type=argparse.FileType('r'), help="Input file")
+    parser_config_load.add_argument(
+        "-d", "--dryrun", action='store_true', help="Dry-run mode, only validates configuration file")
 
-    parser_config_diff = config_subparsers.add_parser('diff')
+    parser_config_diff = config_subparsers.add_parser(
+        'diff', description="Show the differences between a connected device's configuration, and the configuration stored in a JSON file")
     parser_config_diff.set_defaults(func=config_diff)
-    parser_config_diff.add_argument("file", type=argparse.FileType('r'))
+    parser_config_diff.add_argument(
+        "file", type=argparse.FileType('r'), help="Input file")
 
-    # TODO: Monitor (receiver) logging
+    parser_util = subparsers.add_parser(
+        'util', description="Miscellaneous Tools")
+    util_subparsers = parser_util.add_subparsers()
+    util_subparsers.required = True
+
+    parser_loginfo = util_subparsers.add_parser(
+        'log_info', description="Summary of a log memory dump")
+    parser_loginfo.set_defaults(func=log_info)
+    parser_loginfo.add_argument("logfile", type=argparse.FileType('rb'))
+    parser_loginfo.add_argument(
+        "-r", "--raw", action='store_true', help="Preserve raw timestamps")
+
+    parser_logconvert = util_subparsers.add_parser(
+        'log_convert', description="Converts a log memory dump (download) to various formats")
+    parser_logconvert.set_defaults(func=log_convert)
+    parser_logconvert.add_argument("input", type=argparse.FileType('rb'))
+    parser_logconvert.add_argument(
+        "-e", "--events", action='store_true', help="Preserve events in log export")
+    parser_logconvert.add_argument(
+        "-r", "--raw", action='store_true', help="Preserve raw timestamps")
+    parser_logconvert.add_argument(
+        "-s", "--sublog", type=int, help="Split the memory dump into multiple logs, and select one (indices start at 0)")
+    parser_logconvert.add_argument(
+        "-c", "--calibrate", type=argparse.FileType('r'), help="Apply calibration to the log using a JSON configuration file")
+    parser_logconvert.add_argument(
+        "-o", "--output", required=False, type=argparse.FileType('w'), help="Output file")
+    parser_logconvert.add_argument(
+        "-f", "--format", required=True, choices=['json', 'csv', 'gpx'], help="Export format")
 
     opts = parser.parse_args()
     opts.func(opts)

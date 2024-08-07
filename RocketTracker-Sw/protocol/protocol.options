@@ -20,3 +20,6 @@ Config.string_value max_size:64
 
 DebugDataOutput.name max_size:64
 DebugDataOutput.suffix max_size:32
+
+DeviceInfo.name max_size:32
+DeviceInfo.fw_version max_size:32

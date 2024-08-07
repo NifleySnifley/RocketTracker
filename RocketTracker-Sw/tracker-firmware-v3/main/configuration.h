@@ -42,6 +42,7 @@ esp_err_t config_set_int(char* key_hash, int32_t val);
 esp_err_t config_set_enum(char* key_hash, int32_t val);
 
 void config_reset_to_default(int manifest_idx);
+bool config_is_set(char* key_hash);
 
 // Miscellany
 

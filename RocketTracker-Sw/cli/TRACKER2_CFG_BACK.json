@@ -52,6 +52,7 @@
         "vert_accel_stdev": 0.018984146416187286
     },
     "telemetry_divider": 3,
+    "device_name": "tracker_2",
     "gps": {
         "nav_count": 1,
         "nav_period_ms": 100

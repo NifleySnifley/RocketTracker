@@ -34,10 +34,15 @@
 		}
 	},
 	"telemetry_divider": {
-		"!name": "Telemetry Hz = 1000 / (nav_period_ms * nav_count)) / telemetry_divider",
+		"!name": "GPS Telemetry divider",
+		"!description": "Telemetry Hz = 1000 / (nav_period_ms * nav_count)) / telemetry_divider",
 		"!type": "int(1,1000)",
-		"!default": 1,
-		"!suffix": "GPS/"
+		"!default": 1
+	},
+	"device_name": {
+		"!name": "User-programmable device name",
+		"!type": "string(32)",
+		"!default": ""
 	},
 	"gps": {
 		"!name": "GPS Settings (Advanced)",

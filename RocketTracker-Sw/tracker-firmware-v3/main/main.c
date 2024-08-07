@@ -21,6 +21,7 @@
 #include "esp_task_wdt.h"
 #include "adxl375.h"
 #include "driver/ledc.h"
+#include "esp_app_desc.h"
 
 #include "ubxlib.h"
 
@@ -353,6 +354,22 @@ void link_decode_datum(int i, DatumTypeID id, int len, uint8_t* data, bool is_us
     } else if (id == DatumTypeID_CMD_Reboot) {
         // Welp, it reboots!
         esp_restart();
+    } else if (id == DatumTypeID_CMD_RequestDeviceInfo) {
+        DeviceInfo info = {
+            .device_type = TalkerID_Tracker_V3,
+            .has_name = false
+        };
+
+        char* appvers = esp_app_get_description()->version;
+        memcpy(info.fw_version, appvers, 32);
+
+        if (config_is_set(CONFIG_DEVICE_NAME_KEY)) {
+            info.has_name = true;
+            config_get_string(CONFIG_DEVICE_NAME_KEY, (char*)info.name);
+        }
+
+        link_send_datum(DatumTypeID_RESP_DeviceInfo, DeviceInfo_fields, &info);
+        link_flush();
     }
 }
 
@@ -918,7 +935,7 @@ void radio_rx_callback_worker(void* args) {
 
     while (1) {
         xQueueReceive(radio_rx_dispatching_queue, &arg, portMAX_DELAY);
-        sx127x* device = arg.device;
+        // sx127x* device = arg.device;
         uint8_t* data = arg.data;
         uint16_t data_length = arg.data_length;
 

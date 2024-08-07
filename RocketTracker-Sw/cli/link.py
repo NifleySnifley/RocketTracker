@@ -77,6 +77,10 @@ DATUMTYPEID_TO_CLASS = {
     RESP_ConfigSet: Config,
     RESP_ConfigEnumerateDone: Resp_ConfigEnumerateDone,
 
+    CMD_Reboot: None,
+    CMD_RequestDeviceInfo: None,
+    RESP_DeviceInfo: DeviceInfo,
+
     CMD_LogStatus: LogStatus,
 }
 

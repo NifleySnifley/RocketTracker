@@ -16,12 +16,12 @@
 	"!name": "Radio Configuration",
 	"!description": "Configuration for the integrated radio used for remote control and telemetry",
 	"freq_hz": {
-		"!type": "int(903000000, 927000000)",
+		"!type": "int(903000000,927000000)",
 		"!default": 914000000,
 		"!display": "spin",
 		"!name": "Frequency",
 		"!suffix": "Hz",
-		"!description": "Frequency of the telemetry/command radio module. Valid frequencies are between 903 and 927 MHz (the ISM band)"
+		"!description": "Frequency of the LoRa radio. Valid frequencies are between 903 and 927 MHz (the ISM band)"
 	},
 	"bandwidth": {
 		"!type": "LoRa_Bandwidth",
