@@ -18,6 +18,11 @@ adxl375_handle_t adxl;
 spi_device_handle_t adxl_device;
 TaskHandle_t adxl_int_handler;
 
+bool LIS3MDL_DISABLE = false;
+bool LSM6DSM_DISABLE = false;
+bool ADXL_DISABLE = false;
+bool LPS22_DISABLE = false;
+
 volatile float pressure_hPa;
 volatile float magnetic_mG[3];
 volatile float acceleration_g[3];
@@ -225,7 +230,7 @@ void init_adxl375(TaskHandle_t* interrupt_task) {
     };
 
     esp_err_t e = spi_bus_add_device(SENSORS_SPI, &devcfg, &adxl_device);
-    ESP_ERROR_CHECK(e);
+    // ESP_ERROR_CHECK(e);
 
     platform_delay(10);
 
@@ -234,6 +239,7 @@ void init_adxl375(TaskHandle_t* interrupt_task) {
     e = adxl375_init(&adxl, &adxl_device, PIN_ADXL_CS);
     if (e != ESP_OK) {
         ESP_LOGE("ADXL", "Error initializing sensor");
+        ADXL_DISABLE = true;
         return;
     }
 
@@ -280,6 +286,8 @@ void init_lps22() {
 
     if (whoamI != LPS22HH_ID) {
         ESP_LOGE("LPS22", "Error initializing sensor.");
+        LPS22_DISABLE = true;
+        return;
     }
 
     /* Restore default configuration */
@@ -326,6 +334,8 @@ void init_lis3mdl() {
 
     if (whoamI != LIS3MDL_ID) {
         ESP_LOGE("LIS3MDL", "Error initializing sensor. (%d)", whoamI);
+        LIS3MDL_DISABLE = true;
+        return;
     }
 
     /* Restore default configuration */
@@ -375,6 +385,8 @@ void init_lsm6dsm() {
 
     if (whoamI != LSM6DSM_ID) {
         ESP_LOGE("LSM6DSM", "Error initializing sensor. (%d)", whoamI);
+        LSM6DSM_DISABLE = true;
+        return;
     }
 
     /* Restore default configuration */
@@ -452,130 +464,137 @@ void sensors_routine(void* arg) {
     if (xSemaphoreTake(sensors_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
 
         ///////////////////////// LPS22 /////////////////////////
-        lps22hh_reg_t lps_reg;
-        lps22hh_read_reg(&lps22, LPS22HH_STATUS, (uint8_t*)&lps_reg, 1);
+        if (!LPS22_DISABLE) {
+            lps22hh_reg_t lps_reg;
+            lps22hh_read_reg(&lps22, LPS22HH_STATUS, (uint8_t*)&lps_reg, 1);
 
-        if (lps_reg.status.p_da) {
-            memset(&data_raw_pressure, 0x00, sizeof(uint32_t));
-            lps22hh_pressure_raw_get(&lps22, &data_raw_pressure);
-            pressure_hPa_raw = lps22hh_from_lsb_to_hpa(data_raw_pressure);
+            if (lps_reg.status.p_da) {
+                memset(&data_raw_pressure, 0x00, sizeof(uint32_t));
+                lps22hh_pressure_raw_get(&lps22, &data_raw_pressure);
+                pressure_hPa_raw = lps22hh_from_lsb_to_hpa(data_raw_pressure);
 
-            // CALIBRATE!
-            pressure_hPa = apply_2pt_calibration(pressure_hPa_raw, lps_calib);
+                // CALIBRATE!
+                pressure_hPa = apply_2pt_calibration(pressure_hPa_raw, lps_calib);
 
-            log_data.lps_press_raw = data_raw_pressure;
-            log_data.flags |= LOG_FLAG_PRESS_FRESH;
+                log_data.lps_press_raw = data_raw_pressure;
+                log_data.flags |= LOG_FLAG_PRESS_FRESH;
 
-            altitude_m_raw = pressure_hPa_to_alt_m(pressure_hPa);
-            altimetry_filter_correct(&alt_filter, altitude_m_raw);
+                altitude_m_raw = pressure_hPa_to_alt_m(pressure_hPa);
+                altimetry_filter_correct(&alt_filter, altitude_m_raw);
+            }
         }
-
-        // TODO: Raw data, raw output configuration with message for calibration
 
         ///////////////////////// LIS3MDL /////////////////////////
-        uint8_t reg;
-        /* Read output only if new value is available */
-        lis3mdl_mag_data_ready_get(&lis3mdl, &reg);
+        if (!LIS3MDL_DISABLE) {
+            uint8_t reg;
+            /* Read output only if new value is available */
+            lis3mdl_mag_data_ready_get(&lis3mdl, &reg);
 
-        if (reg) {
-            /* Read magnetic field data */
-            memset(data_raw_magnetic, 0x00, 3 * sizeof(int16_t));
-            lis3mdl_magnetic_raw_get(&lis3mdl, data_raw_magnetic);
-            // +X global is sensor Y
-            magnetic_mG_raw[0] = 1000 * lis3mdl_from_fs4_to_gauss(
-                data_raw_magnetic[0]);
-            // +Y global is -sensor X
-            magnetic_mG_raw[1] = 1000 * lis3mdl_from_fs4_to_gauss(
-                data_raw_magnetic[1]);
-            // +Z global is sensor Z
-            magnetic_mG_raw[2] = 1000 * lis3mdl_from_fs4_to_gauss(
-                data_raw_magnetic[2]);
+            if (reg) {
+                /* Read magnetic field data */
+                memset(data_raw_magnetic, 0x00, 3 * sizeof(int16_t));
+                lis3mdl_magnetic_raw_get(&lis3mdl, data_raw_magnetic);
+                // +X global is sensor Y
+                magnetic_mG_raw[0] = 1000 * lis3mdl_from_fs4_to_gauss(
+                    data_raw_magnetic[0]);
+                // +Y global is -sensor X
+                magnetic_mG_raw[1] = 1000 * lis3mdl_from_fs4_to_gauss(
+                    data_raw_magnetic[1]);
+                // +Z global is sensor Z
+                magnetic_mG_raw[2] = 1000 * lis3mdl_from_fs4_to_gauss(
+                    data_raw_magnetic[2]);
 
 
-            // CALIBRATE!
-            memcpy((float*)magnetic_mG, (float*)magnetic_mG_raw, sizeof(magnetic_mG));
-            apply_2pt_calibrations_inplace((float*)magnetic_mG, lis_mag_calib, 3);
+                // CALIBRATE!
+                memcpy((float*)magnetic_mG, (float*)magnetic_mG_raw, sizeof(magnetic_mG));
+                apply_2pt_calibrations_inplace((float*)magnetic_mG, lis_mag_calib, 3);
 
-            // memset(&data_raw_temperature, 0x00, sizeof(int16_t));
-            // lis3mdl_temperature_raw_get(&lis3mdl, &data_raw_temperature);
-            // temperature_degC = lis3mdl_from_lsb_to_celsius(data_raw_temperature);
+                // memset(&data_raw_temperature, 0x00, sizeof(int16_t));
+                // lis3mdl_temperature_raw_get(&lis3mdl, &data_raw_temperature);
+                // temperature_degC = lis3mdl_from_lsb_to_celsius(data_raw_temperature);
 
-            // log_data.lis_mag_raw
-            memcpy(log_data.lis_mag_raw, data_raw_magnetic, sizeof(data_raw_magnetic));
-            log_data.flags |= LOG_FLAG_MAG_FRESH;
+                // log_data.lis_mag_raw
+                memcpy(log_data.lis_mag_raw, data_raw_magnetic, sizeof(data_raw_magnetic));
+                log_data.flags |= LOG_FLAG_MAG_FRESH;
+            }
+            lis3mdl_operating_mode_set(&lis3mdl, LIS3MDL_CONTINUOUS_MODE); // THIS FIXES IT!!!
         }
-        lis3mdl_operating_mode_set(&lis3mdl, LIS3MDL_CONTINUOUS_MODE); // THIS FIXES IT!!!
 
         ///////////////////////// LSM6DSM /////////////////////////
-        lsm6dsm_reg_t lsm_reg;
-        /* Read output only if new value is available */
-        lsm6dsm_status_reg_get(&lsm6dsm, &lsm_reg.status_reg);
+        if (!LSM6DSM_DISABLE) {
+            lsm6dsm_reg_t lsm_reg;
+            /* Read output only if new value is available */
+            lsm6dsm_status_reg_get(&lsm6dsm, &lsm_reg.status_reg);
 
-        if (lsm_reg.status_reg.xlda) {
-            /* Read acceleration field data */
-            memset(data_raw_acceleration, 0x00, 3 * sizeof(int16_t));
-            lsm6dsm_acceleration_raw_get(&lsm6dsm, data_raw_acceleration);
-            // X global is sensor Y
-            acceleration_g_raw[0] =
-                lsm6dsm_from_fs16g_to_mg(data_raw_acceleration[0]) * 0.001f;
-            // Y global is -sensor X
-            acceleration_g_raw[1] =
-                lsm6dsm_from_fs16g_to_mg(data_raw_acceleration[1]) * 0.001f;
-            // Z global is sensor Z
-            acceleration_g_raw[2] =
-                lsm6dsm_from_fs16g_to_mg(data_raw_acceleration[2]) * 0.001f;
+            if (lsm_reg.status_reg.xlda) {
+                /* Read acceleration field data */
+                memset(data_raw_acceleration, 0x00, 3 * sizeof(int16_t));
+                lsm6dsm_acceleration_raw_get(&lsm6dsm, data_raw_acceleration);
+                // X global is sensor Y
+                acceleration_g_raw[0] =
+                    lsm6dsm_from_fs16g_to_mg(data_raw_acceleration[0]) * 0.001f;
+                // Y global is -sensor X
+                acceleration_g_raw[1] =
+                    lsm6dsm_from_fs16g_to_mg(data_raw_acceleration[1]) * 0.001f;
+                // Z global is sensor Z
+                acceleration_g_raw[2] =
+                    lsm6dsm_from_fs16g_to_mg(data_raw_acceleration[2]) * 0.001f;
 
-            // CALIBRATE!
-            memcpy((float*)acceleration_g, (float*)acceleration_g_raw, sizeof(acceleration_g));
-            apply_2pt_calibrations_inplace((float*)acceleration_g, lsm_acc_calib, 3);
+                // CALIBRATE!
+                memcpy((float*)acceleration_g, (float*)acceleration_g_raw, sizeof(acceleration_g));
+                apply_2pt_calibrations_inplace((float*)acceleration_g, lsm_acc_calib, 3);
 
 
-            memcpy(log_data.lsm_acc_raw, data_raw_acceleration, sizeof(data_raw_acceleration));
-            log_data.flags |= LOG_FLAG_LSM_ACC_FRESH;
+                memcpy(log_data.lsm_acc_raw, data_raw_acceleration, sizeof(data_raw_acceleration));
+                log_data.flags |= LOG_FLAG_LSM_ACC_FRESH;
+            }
+
+            if (lsm_reg.status_reg.gda) {
+                /* Read angular rate field data */
+                memset(data_raw_angular_rate, 0x00, 3 * sizeof(int16_t));
+                lsm6dsm_angular_rate_raw_get(&lsm6dsm, data_raw_angular_rate);
+                // TODO: Confirm that this inversion is neccesary with the axes inversion of X and Y
+                angular_rate_dps_raw[0] =
+                    lsm6dsm_from_fs2000dps_to_mdps(data_raw_angular_rate[0]) * 0.001f;
+                angular_rate_dps_raw[1] =
+                    lsm6dsm_from_fs2000dps_to_mdps(data_raw_angular_rate[1]) * 0.001f;
+                angular_rate_dps_raw[2] =
+                    lsm6dsm_from_fs2000dps_to_mdps(data_raw_angular_rate[2]) * 0.001f;
+
+                // CALIBRATE!
+                memcpy((float*)angular_rate_dps, (float*)angular_rate_dps_raw, sizeof(angular_rate_dps));
+                apply_2pt_calibrations_inplace((float*)angular_rate_dps, lsm_gyr_calib, 3);
+
+                memcpy(log_data.lsm_gyr_raw, data_raw_angular_rate, sizeof(data_raw_angular_rate));
+                log_data.flags |= LOG_FLAG_LSM_GYR_FRESH;
+            }
         }
 
-        if (lsm_reg.status_reg.gda) {
-            /* Read angular rate field data */
-            memset(data_raw_angular_rate, 0x00, 3 * sizeof(int16_t));
-            lsm6dsm_angular_rate_raw_get(&lsm6dsm, data_raw_angular_rate);
-            // TODO: Confirm that this inversion is neccesary with the axes inversion of X and Y
-            angular_rate_dps_raw[0] =
-                lsm6dsm_from_fs2000dps_to_mdps(data_raw_angular_rate[0]) * 0.001f;
-            angular_rate_dps_raw[1] =
-                lsm6dsm_from_fs2000dps_to_mdps(data_raw_angular_rate[1]) * 0.001f;
-            angular_rate_dps_raw[2] =
-                lsm6dsm_from_fs2000dps_to_mdps(data_raw_angular_rate[2]) * 0.001f;
+        if (!ADXL_DISABLE) {
+            uint8_t adxl_intsrcs;
+            adxl375_get_int_source(&adxl, &adxl_intsrcs);
+            if (adxl_intsrcs & ADXL_INT_DRDY) {
+                /* Read angular rate field data */
+                memset(data_raw_acceleration_adxl, 0x00, 3 * sizeof(int16_t));
+                adxl375_get_acceleration_raw(&adxl, data_raw_acceleration_adxl);
 
-            // CALIBRATE!
-            memcpy((float*)angular_rate_dps, (float*)angular_rate_dps_raw, sizeof(angular_rate_dps));
-            apply_2pt_calibrations_inplace((float*)angular_rate_dps, lsm_gyr_calib, 3);
+                // Global X is sensor Y
+                adxl_acceleration_g_raw[0] = (data_raw_acceleration_adxl[0] * 49) * 0.001f;
+                // Global Y is -sensor X
+                adxl_acceleration_g_raw[1] = (data_raw_acceleration_adxl[1] * 49) * 0.001f;
+                // Z is Z
+                adxl_acceleration_g_raw[2] = (data_raw_acceleration_adxl[2] * 49) * 0.001f;
 
-            memcpy(log_data.lsm_gyr_raw, data_raw_angular_rate, sizeof(data_raw_angular_rate));
-            log_data.flags |= LOG_FLAG_LSM_GYR_FRESH;
+                // CALIBRATE!
+                memcpy((float*)adxl_acceleration_g, (float*)adxl_acceleration_g_raw, sizeof(adxl_acceleration_g));
+                apply_2pt_calibrations_inplace((float*)adxl_acceleration_g, adxl_acc_calib, 3);
+
+                memcpy(log_data.adxl_acc_raw, data_raw_acceleration_adxl, sizeof(data_raw_acceleration_adxl));
+                log_data.flags |= LOG_FLAG_ADXL_ACC_FRESH;
+            }
+            xSemaphoreGive(sensors_mutex);
         }
 
-        uint8_t adxl_intsrcs;
-        adxl375_get_int_source(&adxl, &adxl_intsrcs);
-        if (adxl_intsrcs & ADXL_INT_DRDY) {
-            /* Read angular rate field data */
-            memset(data_raw_acceleration_adxl, 0x00, 3 * sizeof(int16_t));
-            adxl375_get_acceleration_raw(&adxl, data_raw_acceleration_adxl);
-
-            // Global X is sensor Y
-            adxl_acceleration_g_raw[0] = (data_raw_acceleration_adxl[0] * 49) * 0.001f;
-            // Global Y is -sensor X
-            adxl_acceleration_g_raw[1] = (data_raw_acceleration_adxl[1] * 49) * 0.001f;
-            // Z is Z
-            adxl_acceleration_g_raw[2] = (data_raw_acceleration_adxl[2] * 49) * 0.001f;
-
-            // CALIBRATE!
-            memcpy((float*)adxl_acceleration_g, (float*)adxl_acceleration_g_raw, sizeof(adxl_acceleration_g));
-            apply_2pt_calibrations_inplace((float*)adxl_acceleration_g, adxl_acc_calib, 3);
-
-            memcpy(log_data.adxl_acc_raw, data_raw_acceleration_adxl, sizeof(data_raw_acceleration_adxl));
-            log_data.flags |= LOG_FLAG_ADXL_ACC_FRESH;
-        }
-        xSemaphoreGive(sensors_mutex);
     }
 
     FusionVector gyro, accel, mag;
@@ -593,7 +612,7 @@ void sensors_routine(void* arg) {
     accel = FusionAxesSwap(accel, SENSORS_ALIGNMENT);
     mag = FusionAxesSwap(mag, SENSORS_ALIGNMENT);
 
-    if (ahrs_no_magnetometer) {
+    if (ahrs_no_magnetometer || LIS3MDL_DISABLE) {
         FusionAhrsUpdateNoMagnetometer(&ahrs, gyro, accel, 1.0f / SENSOR_HZ);
     } else {
         FusionAhrsUpdate(&ahrs, gyro, accel, mag, 1.0f / SENSOR_HZ);

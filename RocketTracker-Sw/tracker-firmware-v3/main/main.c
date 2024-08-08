@@ -753,10 +753,6 @@ static void init_logging() {
         ESP_LOGE("FLASH", "Failed to initialize logger.");
     }
 
-    log_data_event_t* logevent = (log_data_event_t*)calloc(1, sizeof(log_data_event_t));
-    logevent->event = LOGDATA_EVENT_BOOT;
-    logger_queue_log_data_now(&logger, LOG_DTYPE_DATA_EVENT, (uint8_t*)logevent, sizeof(*logevent));
-
     logger_flush(&logger);
 
     // uint8_t buf[256];
@@ -1659,18 +1655,28 @@ void app_main(void) {
 
     init_battmon();
 
+    config_get_bool(CONFIG_SENSORS_ADXL375_DISABLE_KEY, &ADXL_DISABLE);
+    config_get_bool(CONFIG_SENSORS_LIS3MDL_DISABLE_KEY, &LIS3MDL_DISABLE);
+    config_get_bool(CONFIG_SENSORS_LSM6DSM_DISABLE_KEY, &LSM6DSM_DISABLE);
+    config_get_bool(CONFIG_SENSORS_LPS22_DISABLE_KEY, &LPS22_DISABLE);
+
     xTaskCreate(adxl_int_worker, "adxl_int", 1024 * 4, NULL, 2, &adxl_int_handler);
-    ESP_LOGI("SYS", "Initializing ADXL375");
-    init_adxl375(&adxl_int_handler);
-
-    ESP_LOGI("SYS", "Initializing LSM6DSM");
-    init_lsm6dsm();
-
-    ESP_LOGI("SYS", "Initializing LIS3MDL");
-    init_lis3mdl();
-
-    ESP_LOGI("SYS", "Initializing LPS22");
-    init_lps22();
+    if (!ADXL_DISABLE) {
+        ESP_LOGI("SYS", "Initializing ADXL375");
+        init_adxl375(&adxl_int_handler);
+    }
+    if (!LSM6DSM_DISABLE) {
+        ESP_LOGI("SYS", "Initializing LSM6DSM");
+        init_lsm6dsm();
+    }
+    if (!LIS3MDL_DISABLE) {
+        ESP_LOGI("SYS", "Initializing LIS3MDL");
+        init_lis3mdl();
+    }
+    if (!LPS22_DISABLE) {
+        ESP_LOGI("SYS", "Initializing LPS22");
+        init_lps22();
+    }
 
     init_sensors();
 
@@ -1678,6 +1684,13 @@ void app_main(void) {
 
     // Stack overflowing... when no battery...
     xTaskCreate(battmon_task, "battmon_task", 4 * 1024, NULL, 10, NULL);
+
+    // Log the boot, also log sensor disabilities
+    log_data_event_t* logevent = (log_data_event_t*)calloc(1, sizeof(log_data_event_t));
+    logevent->event = LOGDATA_EVENT_BOOT;
+    logevent->argument = ((uint16_t)(LIS3MDL_DISABLE & 1) << 0) | ((uint16_t)(LSM6DSM_DISABLE & 1) << 1) | ((uint16_t)(LPS22_DISABLE & 1) << 2) | ((uint16_t)(ADXL_DISABLE & 1) << 3);
+    logger_queue_log_data_now(&logger, LOG_DTYPE_DATA_EVENT, (uint8_t*)logevent, sizeof(*logevent));
+    logger_flush(&logger);
 
     bool debug_mon_on;
     config_get_bool(CONFIG_MISC_DEBUG_MONITOR_EN_KEY, &debug_mon_on);

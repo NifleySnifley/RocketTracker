@@ -49,6 +49,12 @@ extern volatile float temperature_degC_raw;
 extern volatile float adxl_acceleration_g_raw[3];
 extern volatile float altitude_m_raw;
 
+extern bool LIS3MDL_DISABLE;
+extern bool LSM6DSM_DISABLE;
+extern bool ADXL_DISABLE;
+extern bool LPS22_DISABLE;
+
+
 extern SemaphoreHandle_t sensors_mutex;
 
 extern FusionAhrs ahrs;

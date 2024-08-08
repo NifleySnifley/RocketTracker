@@ -31,13 +31,33 @@
 			"!type": "float",
 			"!default": 0.01,
 			"!suffix": "m/s"
+		},
+		"lsm6dsm_disable": {
+			"!name": "Disable LSM6DSM",
+			"!type": "bool",
+			"!default": false
+		},
+		"adxl375_disable": {
+			"!name": "Disable ADXL375",
+			"!type": "bool",
+			"!default": false
+		},
+		"lis3mdl_disable": {
+			"!name": "Disable LIS3MDL",
+			"!type": "bool",
+			"!default": false
+		},
+		"LPS22_disable": {
+			"!name": "Disable LPS22",
+			"!type": "bool",
+			"!default": false
 		}
 	},
 	"telemetry_divider": {
 		"!name": "GPS Telemetry divider",
 		"!description": "Telemetry Hz = 1000 / (nav_period_ms * nav_count)) / telemetry_divider",
 		"!type": "int(1,1000)",
-		"!default": 1
+		"!default": 3
 	},
 	"device_name": {
 		"!name": "User-programmable device name",
