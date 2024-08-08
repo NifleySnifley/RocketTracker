@@ -606,9 +606,11 @@ def telemetry(args):
     curses.noecho()
     curses.cbreak()
 
+    sock = UDPJSONSender(args.udp) if args.udp is not None else None
+
     while (not EX):
         d = wait_for_datum([protocol.INFO_GPS, protocol.INFO_Altitude,
-                           protocol.INFO_Battery, protocol.INFO_LogStatus], 0.1)
+                           protocol.INFO_Battery, protocol.INFO_LogStatus, protocol.STATUS_RadioRxStatus], 0.1)
         stdscr.addstr(0, 0, "Press 'q' to exit")
         if d is not None:  # and d.typeid != protocol.DatumTypeID.STATUS_RadioRxStatus
             # print(d)
@@ -624,16 +626,17 @@ def telemetry(args):
                     5, 0, f"\tFix Quality: {pb.fix_status if pb.HasField('fix_status') else 'unknown'}             ")
                 stdscr.addstr(
                     6, 0, f"\tSatellites: {pb.sats_used if pb.HasField('sats_used') else 'sats_used'}          ")
+
             elif (d.typeid == protocol.INFO_Altitude):
                 stdscr.addstr(7, 0, "Altimetry:")
                 stdscr.addstr(
                     8, 0, f"\tFiltered Altitude: {pb.alt_m:.2f} (m)                  ")
                 stdscr.addstr(
-                    9, 0, f"\tVertical Speed: {f'{pb.v_speed:.2f} (m/s)' if pb.HasField('v_speed') else 'not available'}                 ")
+                    9, 0, f"\tVertical Speed: {f'{pb.v_speed:.2f} (m/s)' if pb.HasField('v_speed') else 'not available'}")
             elif (d.typeid == protocol.INFO_Battery):
                 stdscr.addstr(
                     10, 0, f"Battery: {pb.percentage:.1f}% ({pb.battery_voltage:.2f}v)")
-                pass
+
             elif (d.typeid == protocol.INFO_LogStatus):
                 stdscr.addstr(
                     11, 0, f"Logging:")
@@ -646,7 +649,17 @@ def telemetry(args):
                     sstr = f"Logging {pb.cur_logging_hz if pb.HasField('cur_logging_hz') else '-'}Hz"
                 stdscr.addstr(
                     13, 0, f"\tState: {sstr}           ")
-                pass
+
+            elif (d.typeid == protocol.STATUS_RadioRxStatus):
+                stdscr.addstr(
+                    14, 0, f"Receiver:")
+                stdscr.addstr(
+                    15, 0, f"\tRSSI: {pb.RSSI}dBm           ")
+                stdscr.addstr(
+                    16, 0, f"\tSNR: {pb.SNR}           ")
+
+            if sock is not None:
+                sock.send(d.to_dict())
         else:
             # stdscr.clear()
             # print("Timed out")
@@ -1336,6 +1349,19 @@ def receiver_config(args):
         print("Error, no receiver connected")
         exit(1)
 
+    if args.configfile is not None:
+        cfgjson = dict2config(json.load(args.configfile))
+        if args.spreading_factor is None and 'config.radio.lora.spreading_factor' in cfgjson:
+            args.spreading_factor = cfgjson['config.radio.lora.spreading_factor']
+        if args.freq_mhz is None and 'config.radio.freq_hz' in cfgjson:
+            args.freq_mhz = cfgjson['config.radio.freq_hz'] * 1e-6
+        if args.bandwidth is None and 'config.radio.bandwidth' in cfgjson:
+            # Convert...
+            args.bandwidth = float(
+                cfgjson['config.radio.bandwidth'].removesuffix('kHz'))
+        if args.power is None and 'config.radio.power' in cfgjson:
+            args.power = cfgjson['config.radio.power']
+
     if args.spreading_factor is not None:
         vgps.write(f"$PSF,{args.spreading_factor}\r\n".encode('ascii'))
     if args.freq_mhz is not None:
@@ -1542,7 +1568,8 @@ def config_list(args):
     for k, v in sorted(d.items()):
         if (not args.calibration) and k.startswith("config.calibration"):
             continue
-        print(f"{k} = {Fore.GREEN}{v}{Style.RESET_ALL}")
+        vv = f"\"{v}\"" if isinstance(v, str) else v
+        print(f"{k} = {Fore.GREEN}{vv}{Style.RESET_ALL}")
 
 
 def config_list_default(args):
@@ -1562,7 +1589,8 @@ def config_list_default(args):
         if '!suffix' in v.data:
             suf = v.data['!suffix']
             print(f"\tunits: {suf}")
-        print(f"\tdefault: {Fore.RED}{v.default}{suf}{Style.RESET_ALL}")
+        vv = f"\"{v.default}\"" if isinstance(v.default, str) else v.default
+        print(f"\tdefault: {Fore.RED}{vv}{suf}{Style.RESET_ALL}")
         print("\n")
 
 
@@ -1616,7 +1644,8 @@ def config_load(args):
     print("Configuration valid!")
 
     if (not args.dryrun):
-        cont = strtobool(input("Write configuration to device? [y/n]:"))
+        cont = args.yes or strtobool(
+            input("Write configuration to device? [y/n]:"))
         if cont:
             for k, v in cfg.items():
                 if not set_configval(k, v):
@@ -1650,6 +1679,8 @@ if __name__ == "__main__":
         '-bw', '--bandwidth', type=str, choices=["500", "250", "125", "62.5", "41.7", "31.25", "20.8", "15.6", "10.4", "7.8"])
     parser_rxconfig.add_argument(
         '-p', '--power', type=int, choices=[3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 20])
+    parser_rxconfig.add_argument(
+        '-c', '--configfile', type=argparse.FileType('r'))
 
     parser_monitor = subparsers.add_parser(
         'monitor', description="View the stream of incoming data from a connected tracker or receiver")
@@ -1707,6 +1738,8 @@ if __name__ == "__main__":
     parser_telemetry = subparsers.add_parser(
         'telemetry', description="View telemetry information from a connected tracker")
     parser_telemetry.set_defaults(func=telemetry)
+    parser_telemetry.add_argument(
+        '-u', '--udp', default=None, type=str, help="Send all received data (JSON) to ip:port")
 
     parser_3d = subparsers.add_parser(
         'sensors3d', description="Visualize the orientation of a connected tracker in 3D. Requires USB connection and a web browser with OpenGL support")
@@ -1823,6 +1856,8 @@ if __name__ == "__main__":
         "file", type=argparse.FileType('r'), help="Input file")
     parser_config_load.add_argument(
         "-d", "--dryrun", action='store_true', help="Dry-run mode, only validates configuration file")
+    parser_config_load.add_argument(
+        "-y", "--yes", action='store_true', help="bypass confirmation dialog")
 
     parser_config_diff = config_subparsers.add_parser(
         'diff', description="Show the differences between a connected device's configuration, and the configuration stored in a JSON file")

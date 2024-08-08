@@ -32,7 +32,7 @@ class BoolType(TypeBase):
         return self
 
     def __repr__(self) -> str:
-        return "BoolType"
+        return "bool"
 
     def parse_value(self, nativeval: any):
         if not isinstance(nativeval, bool):

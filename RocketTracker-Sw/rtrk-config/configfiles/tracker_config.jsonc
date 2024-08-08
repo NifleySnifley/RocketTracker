@@ -33,22 +33,22 @@
 			"!suffix": "m/s"
 		},
 		"lsm6dsm_disable": {
-			"!name": "Disable LSM6DSM",
+			"!name": "Disable LSM6DSM (Gyro & 16g Accelerometer)",
 			"!type": "bool",
 			"!default": false
 		},
 		"adxl375_disable": {
-			"!name": "Disable ADXL375",
+			"!name": "Disable ADXL375 (200g Accelerometer)",
 			"!type": "bool",
 			"!default": false
 		},
 		"lis3mdl_disable": {
-			"!name": "Disable LIS3MDL",
+			"!name": "Disable LIS3MDL (Magnetometer/Compass)",
 			"!type": "bool",
 			"!default": false
 		},
 		"LPS22_disable": {
-			"!name": "Disable LPS22",
+			"!name": "Disable LPS22 (Pressure Sensor)",
 			"!type": "bool",
 			"!default": false
 		}
