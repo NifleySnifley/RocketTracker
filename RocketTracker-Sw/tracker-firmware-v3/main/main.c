@@ -130,6 +130,7 @@ static void flight_timer_callback(void* arg);
 void start_autolog();
 void stop_autolog();
 static void sensor_output_task(void* arg);
+static bool tcp_flush();
 // static void radio_tx_blocking(uint8_t* data, int len);
 
 // USB
@@ -383,8 +384,8 @@ void link_decode_datum(int i, DatumTypeID id, int len, uint8_t* data, LinkID lin
             .has_name = false
         };
 
-        char* appvers = esp_app_get_description()->version;
-        memcpy(info.fw_version, appvers, 32);
+        const char* appvers = esp_app_get_description()->version;
+        memcpy(info.fw_version, (char*)appvers, 32);
 
         if (config_is_set(CONFIG_DEVICE_NAME_KEY)) {
             info.has_name = true;
@@ -497,6 +498,7 @@ static void usb_receive_task(void* args) {
                         ESP_LOGW("LINK_USB", "Error decoding frame!");
                     fmgr_reset(&usb_incoming_fmgr);
 
+
                     // For command/response, will need a set of semaphores to signal that the response has been received so that task can do this
                     // link_send_datum(cmd)
                     // <<wait for semaphore to signal response>>
@@ -542,30 +544,28 @@ void link_flush() {
             fmgr_set_frame_id(&lora_outgoing_fmgr, TalkerID_Tracker_V3);
             uint8_t* data = fmgr_get_frame(&lora_outgoing_fmgr, &size);
             if (tcp_tx(data, size) != ESP_OK) {
-                ESP_LOGW("LINK_USB", "Error transmitting frame");
+                ESP_LOGW("LINK_TCP", "Error transmitting frame");
             }
             fmgr_reset(&lora_outgoing_fmgr);
-
         }
         if (n_tcp_datum > 0) {
             fmgr_set_frame_id(&tcp_outgoing_fmgr, TalkerID_Tracker_V3);
             uint8_t* data = fmgr_get_frame(&tcp_outgoing_fmgr, &size);
             if (tcp_tx(data, size) != ESP_OK) {
-                ESP_LOGW("LINK_USB", "Error transmitting frame");
+                ESP_LOGW("LINK_TCP", "Error transmitting frame");
             }
             fmgr_reset(&tcp_outgoing_fmgr);
         }
         if (n_usb_datum > 0) {
             fmgr_set_frame_id(&usb_outgoing_fmgr, TalkerID_Tracker_V3);
             uint8_t* data = fmgr_get_frame(&usb_outgoing_fmgr, &size);
-            // ESP_LOGI("LINK_USB", "Flushing %d bytes", size);
 
             if (tcp_tx(data, size) != ESP_OK) {
-                ESP_LOGW("LINK_USB", "Error transmitting frame");
+                ESP_LOGW("LINK_TCP", "Error transmitting frame");
             }
             fmgr_reset(&usb_outgoing_fmgr);
         }
-    } if (USB_AVAILABLE) {
+    } else if (USB_AVAILABLE) {
         // ESP_LOGI("LINK_USB", "Sending datum (%d USB, %d LoRa)", n_usb_datum, n_lora_datum);
         xSemaphoreTakeRecursive(fmgr_mutex, portMAX_DELAY);
 
@@ -626,7 +626,9 @@ void link_send_datum(DatumTypeID type, const pb_msgdesc_t* fields, const void* s
                 }
             }
         }
-    } if (USB_AVAILABLE) {
+        // This should also be "sorta" instant...
+        link_flush();
+    } else if (USB_AVAILABLE) {
         // Send with USB link
         // Keep trying!!!
         if (!fmgr_encode_datum(&usb_outgoing_fmgr, type, fields, src_struct)) {
@@ -655,7 +657,11 @@ void link_send_datum(DatumTypeID type, const pb_msgdesc_t* fields, const void* s
             // TODO: Encode this data into a backlog, then schedule to send asynchronously rather than block
 
             ESP_LOGW("LINK_LoRa", "Automatically Flushing");
-            lora_link_flush();
+            if (USB_AVAILABLE || TCP_AVAILABLE) {
+                link_flush();
+            } else {
+                lora_link_flush();
+            }
 
             // Wait for TX done!
             // xSemaphoreTake(lora_txdone_sem, portMAX_DELAY);
@@ -1644,7 +1650,7 @@ static void sensor_output_task(void* arg) {
         data.filtered_altimetry.v_speed = v_speed_m_s;
         data.filtered_altimetry.has_v_speed = true;
 
-        if (USB_AVAILABLE) {
+        if (USB_AVAILABLE || TCP_AVAILABLE) {
             link_send_datum(DatumTypeID_INFO_SensorData, SensorData_fields, &data);
             // ESP_LOGW("SENSOR", "OUT!");
         } else {
@@ -1752,6 +1758,9 @@ void init_wifi_ap(void) {
         WIFI_SSID, WIFI_PASS, WIFI_CHANNEL);
 }
 
+char tcp_tx_writebuf[1024];
+size_t tcp_tx_writebuf_fill = 0;
+
 static bool tcp_write_byte(uint8_t b) {
     static uint8_t tmpbuf[2] = { 0 };
     int bufl = 1;
@@ -1767,7 +1776,30 @@ static bool tcp_write_byte(uint8_t b) {
         tmpbuf[0] = b;
         bufl = 1;
     }
-    send(TCP_ACTIVE_SOCK, tmpbuf, bufl, 0);
+    if (tcp_tx_writebuf_fill + bufl >= sizeof(tcp_tx_writebuf)) {
+        if (!tcp_flush()) {
+            return false;
+        }
+    }
+    memcpy(&tcp_tx_writebuf[tcp_tx_writebuf_fill], tmpbuf, bufl);
+    tcp_tx_writebuf_fill += bufl;
+    return true;
+}
+
+static bool tcp_flush() {
+    // ESP_LOGI("LINK_TCP", "Starting flush");
+    int to_write = tcp_tx_writebuf_fill;
+    while (to_write > 0) {
+        int written = send(TCP_ACTIVE_SOCK, tcp_tx_writebuf + (tcp_tx_writebuf_fill - to_write), to_write, 0);
+        if (written < 0) {
+            ESP_LOGE("LINK_TCP", "Error occurred during sending: errno %d", errno);
+            tcp_tx_writebuf_fill = 0;
+            return false;
+        }
+        to_write -= written;
+    }
+    tcp_tx_writebuf_fill = 0;
+    // ESP_LOGI("LINK_TCP", "Done");
     return true;
 }
 
@@ -1783,6 +1815,8 @@ static esp_err_t tcp_tx(uint8_t* data, int len) {
 
         for (int i = 0; i < len; ++i)
             sent &= tcp_write_byte(data[i]);
+
+        tcp_flush();
 
         // uint8_t zero = 0x00;
         // for (int i = 0; i < 10; ++i)
@@ -1858,7 +1892,7 @@ void link_wifi_tcp_task(void* arg) {
 
         struct sockaddr_storage source_addr; // Large enough for both IPv4 or IPv6
         socklen_t addr_len = sizeof(source_addr);
-        int TCP_ACTIVE_SOCK = accept(listen_sock, (struct sockaddr*)&source_addr, &addr_len);
+        TCP_ACTIVE_SOCK = accept(listen_sock, (struct sockaddr*)&source_addr, &addr_len);
         if (TCP_ACTIVE_SOCK < 0) {
             ESP_LOGE("LINK_TCP", "Unable to accept connection: errno %d", errno);
             break;
@@ -1899,10 +1933,10 @@ void link_wifi_tcp_task(void* arg) {
 
                         ESP_LOGI("LINK_TCP", "Frame received over TCP, %d bytes.", frame_len);
                         fmgr_load_frame(&tcp_incoming_fmgr, decoded_buffer, frame_len);
-                        bool ok = fmgr_decode_frame(&usb_incoming_fmgr, link_tcp_decode_datum);
+                        bool ok = fmgr_decode_frame(&tcp_incoming_fmgr, link_tcp_decode_datum);
                         if (!ok)
                             ESP_LOGW("LINK_TCP", "Error decoding frame!");
-                        fmgr_reset(&usb_incoming_fmgr);
+                        fmgr_reset(&tcp_incoming_fmgr);
 
                         encoded_reader_reset(&tcp_reader);
                     }

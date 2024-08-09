@@ -52,7 +52,7 @@ void encoded_reader_give_byte(encoded_reader_t* reader, uint8_t byte) {
             if (reader->frame_idx >= reader->frame_size) {
                 reader->state = READER_STATE_DONE;
 
-                ESP_LOGI("READER", "Frame received over usb, %" PRIu16 " bytes.", reader->frame_size);
+                ESP_LOGI("READER", "Frame received, %" PRIu16 " bytes.", reader->frame_size);
 
                 // fmgr_load_frame(&usb_incoming_fmgr, buffer, frame_size);
                 // bool ok = fmgr_decode_frame(&usb_incoming_fmgr, link_usb_decode_datum);

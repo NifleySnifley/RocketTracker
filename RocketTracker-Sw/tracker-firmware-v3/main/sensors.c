@@ -437,6 +437,12 @@ FusionVector get_interpolated_acceleration() {
     memcpy(lsm_accel.array, (float*)acceleration_g, sizeof(lsm_accel.array));
     memcpy(adxl_accel.array, (float*)adxl_acceleration_g, sizeof(adxl_accel.array));
 
+    if (ADXL_DISABLE) {
+        return lsm_accel;
+    } else if (LSM6DSM_DISABLE) {
+        return adxl_accel;
+    }
+
     // if (FusionVectorMagnitudeSquared(adxl_accel))
     for (int axis = 0; axis < 3; axis++) {
         float abs_avg = fabsf((lsm_accel.array[axis] + adxl_accel.array[axis]) * 0.5f);
