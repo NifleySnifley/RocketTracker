@@ -12,6 +12,7 @@ enum LinkID {
   LinkReserved = 0;
   USBSerial = 1;
   LoRa = 2;
+  TCP = 3;
 }
 
 message GPS {

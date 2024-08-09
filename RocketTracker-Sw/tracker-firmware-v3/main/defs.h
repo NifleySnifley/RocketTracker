@@ -51,11 +51,16 @@
 
 // Switches the pins of the debug UART (UART0) to be pins on the expansion header
 #define DEBUG_ON_EXP true
+#define DEBUG_RADIO false
 
 #if (DEBUG_ON_EXP)
 #define DEBUG_UART_RX PIN_EXP1
 #define DEBUG_UART_TX PIN_EXP2
+#if (DEBUG_RADIO)
 #define DEBUG_UART_BAUD 9600
+#else
+#define DEBUG_UART_BAUD 115200
+#endif
 #endif
 
 #ifndef DEBUG_UART_BAUD
@@ -66,3 +71,8 @@
 #define DEBUG_PRINT_UBXLIB false
 
 #define GRAVITY_G 9.81
+
+#define WIFI_NETMASK "255.255.255.0"
+#define WIFI_STATIC_IP "192.168.4.2"
+#define WIFI_GATEWAY "192.168.4.1"
+#define WIFI_DNS "192.168.4.1"

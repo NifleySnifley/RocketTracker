@@ -64,6 +64,12 @@
 		"!type": "string(32)",
 		"!default": ""
 	},
+	"wifi_enabled": {
+		"!name": "Enable WiFi",
+		"!type": "bool",
+		"!default": true
+	},
+	"wifi": "!include(wifi_config.jsonc)",
 	"gps": {
 		"!name": "GPS Settings (Advanced)",
 		"nav_count": {

@@ -46,6 +46,17 @@
 #include "logging.h"
 #include "prelog.h"
 
+#include "esp_mac.h"
+#include "esp_wifi.h"
+#include "esp_event.h"
+#include "lwip/err.h"
+#include "lwip/sockets.h"
+#include "lwip/sys.h"
+#include <lwip/netdb.h>
+#include <string.h>
+
+#include "encoded_reader.h"
+
 #include "configuration.h"
 config_provider_t GLOBAL_CONFIG; // Define this here
 
@@ -64,8 +75,17 @@ spi_device_handle_t radio_spi_device;
 ////////////////// GLOBAL HANDLES //////////////////
 fmgr_t lora_outgoing_fmgr;
 fmgr_t lora_incoming_fmgr;
+fmgr_t tcp_outgoing_fmgr;
+fmgr_t tcp_incoming_fmgr;
 SemaphoreHandle_t lora_txdone_sem;
 SemaphoreHandle_t fmgr_mutex;
+
+char WIFI_SSID[32] = { 0 };
+char WIFI_PASS[32] = { 0 };
+int32_t LINK_TCP_PORT = CONFIG_WIFI_TCP_PORT_DEFAULT;
+#define WIFI_CHANNEL 1
+bool WIFI_ENABLED = CONFIG_WIFI_ENABLED_DEFAULT;
+int TCP_ACTIVE_SOCK = -1;
 
 fmgr_t usb_outgoing_fmgr;
 fmgr_t usb_incoming_fmgr;
@@ -102,6 +122,7 @@ static bool sensor_output_raw = false;
 void link_send_datum(DatumTypeID type, const pb_msgdesc_t* fields, const void* src_struct);
 static void radio_tx(uint8_t* data, int len);
 static esp_err_t usb_tx(uint8_t* data, int len);
+static esp_err_t tcp_tx(uint8_t* data, int len);
 void set_logstate(logging_state_t state, int manual_hz);
 static void log_download_task(void* arg);
 void link_flush();
@@ -113,7 +134,9 @@ static void sensor_output_task(void* arg);
 
 // USB
 static bool usb_active = false;
+static bool tcp_active = false;
 #define USB_AVAILABLE (usb_serial_jtag_is_connected() && usb_active)
+#define TCP_AVAILABLE (tcp_active && WIFI_ENABLED)
 
 #define LED_G_CHANNEL LEDC_CHANNEL_0
 #define LED_G_TIMER LEDC_TIMER_0
@@ -168,16 +191,16 @@ static void init_battmon() {
 }
 
 // GLOBAL DATUM DECODING HERE
-void link_decode_datum(int i, DatumTypeID id, int len, uint8_t* data, bool is_usb) {
+void link_decode_datum(int i, DatumTypeID id, int len, uint8_t* data, LinkID link) {
     pb_istream_t istream = pb_istream_from_buffer(data, len);
     if (id == DatumTypeID_INFO_Raw) {
-        ESP_LOGI("LINK", "INFO_Raw datum from %s: (%d bytes)", (is_usb ? "USB" : "LoRa"), len);
+        ESP_LOGI("LINK", "INFO_Raw datum from %s: (%d bytes)", ((link == LinkID_USBSerial) ? "USB" : (link == LinkID_TCP ? "TCP" : "LoRa")), len);
         ESP_LOG_BUFFER_HEX("LINK", data, len);
         ESP_LOGI("LINK", "Writing RAW datum to log!");
         logger_log_data_now(&logger, LOG_DTYPE_DATA_RAW, data, len);
-        uint8_t buf[256];
-        ESP_ERROR_CHECK(logger_read_bytes_raw(&logger, 0, sizeof(buf), buf));
-        ESP_LOG_BUFFER_HEX("FLASH CONTENTS", buf, sizeof(buf));
+        // uint8_t buf[256];
+        // ESP_ERROR_CHECK(logger_read_bytes_raw(&logger, 0, sizeof(buf), buf));
+        // ESP_LOG_BUFFER_HEX("FLASH CONTENTS", buf, sizeof(buf));
     } else if (id == DatumTypeID_CMD_EraseLog) {
         Command_EraseLog cmd;
         Resp_BasicError resp;
@@ -227,7 +250,7 @@ void link_decode_datum(int i, DatumTypeID id, int len, uint8_t* data, bool is_us
         if (pb_decode(&istream, Command_Ping_fields, &cmd)) {
             ESP_LOGI("LINK", "Pong!");
             // Link info is unneccesary
-            resp.link = is_usb ? LinkID_USBSerial : LinkID_LoRa;
+            resp.link = link;
             link_send_datum(DatumTypeID_RESP_Ping, Resp_Ping_fields, &resp);
             link_flush();
         }
@@ -374,11 +397,15 @@ void link_decode_datum(int i, DatumTypeID id, int len, uint8_t* data, bool is_us
 }
 
 void link_lora_decode_datum(int i, DatumTypeID id, int len, uint8_t* data) {
-    link_decode_datum(i, id, len, data, false);
+    link_decode_datum(i, id, len, data, LinkID_LoRa);
 }
 
 void link_usb_decode_datum(int i, DatumTypeID id, int len, uint8_t* data) {
-    link_decode_datum(i, id, len, data, true);
+    link_decode_datum(i, id, len, data, LinkID_USBSerial);
+}
+
+void link_tcp_decode_datum(int i, DatumTypeID id, int len, uint8_t* data) {
+    link_decode_datum(i, id, len, data, LinkID_TCP);
 }
 
 
@@ -504,12 +531,41 @@ void link_flush() {
     xSemaphoreTakeRecursive(fmgr_mutex, portMAX_DELAY);
     int n_lora_datum = fmgr_get_n_datum_encoded(&lora_outgoing_fmgr);
     int n_usb_datum = fmgr_get_n_datum_encoded(&usb_outgoing_fmgr);
+    int n_tcp_datum = fmgr_get_n_datum_encoded(&tcp_outgoing_fmgr);
     xSemaphoreGiveRecursive(fmgr_mutex);
 
     int size;
 
-    // Use USB active!
-    if (USB_AVAILABLE) {
+    // TODO: One FMGR (high capacity) for USB/TCP?
+    if (TCP_AVAILABLE) {
+        if (n_lora_datum > 0) {
+            fmgr_set_frame_id(&lora_outgoing_fmgr, TalkerID_Tracker_V3);
+            uint8_t* data = fmgr_get_frame(&lora_outgoing_fmgr, &size);
+            if (tcp_tx(data, size) != ESP_OK) {
+                ESP_LOGW("LINK_USB", "Error transmitting frame");
+            }
+            fmgr_reset(&lora_outgoing_fmgr);
+
+        }
+        if (n_tcp_datum > 0) {
+            fmgr_set_frame_id(&tcp_outgoing_fmgr, TalkerID_Tracker_V3);
+            uint8_t* data = fmgr_get_frame(&tcp_outgoing_fmgr, &size);
+            if (tcp_tx(data, size) != ESP_OK) {
+                ESP_LOGW("LINK_USB", "Error transmitting frame");
+            }
+            fmgr_reset(&tcp_outgoing_fmgr);
+        }
+        if (n_usb_datum > 0) {
+            fmgr_set_frame_id(&usb_outgoing_fmgr, TalkerID_Tracker_V3);
+            uint8_t* data = fmgr_get_frame(&usb_outgoing_fmgr, &size);
+            // ESP_LOGI("LINK_USB", "Flushing %d bytes", size);
+
+            if (tcp_tx(data, size) != ESP_OK) {
+                ESP_LOGW("LINK_USB", "Error transmitting frame");
+            }
+            fmgr_reset(&usb_outgoing_fmgr);
+        }
+    } if (USB_AVAILABLE) {
         // ESP_LOGI("LINK_USB", "Sending datum (%d USB, %d LoRa)", n_usb_datum, n_lora_datum);
         xSemaphoreTakeRecursive(fmgr_mutex, portMAX_DELAY);
 
@@ -522,6 +578,14 @@ void link_flush() {
             fmgr_reset(&lora_outgoing_fmgr);
 
         }
+        if (n_tcp_datum > 0) {
+            fmgr_set_frame_id(&tcp_outgoing_fmgr, TalkerID_Tracker_V3);
+            uint8_t* data = fmgr_get_frame(&tcp_outgoing_fmgr, &size);
+            if (usb_tx(data, size) != ESP_OK) {
+                ESP_LOGW("LINK_USB", "Error transmitting frame");
+            }
+            fmgr_reset(&tcp_outgoing_fmgr);
+        }
         if (n_usb_datum > 0) {
             fmgr_set_frame_id(&usb_outgoing_fmgr, TalkerID_Tracker_V3);
             uint8_t* data = fmgr_get_frame(&usb_outgoing_fmgr, &size);
@@ -532,6 +596,7 @@ void link_flush() {
             }
             fmgr_reset(&usb_outgoing_fmgr);
         }
+
 
         xSemaphoreGiveRecursive(fmgr_mutex);
     } else {
@@ -546,7 +611,22 @@ void link_send_datum(DatumTypeID type, const pb_msgdesc_t* fields, const void* s
     // DONE: Switch between USB and LoRa accordingly
     // ESP_LOGI("LINK", "Sending datum %d", (int)type);
 
-    if (USB_AVAILABLE) {
+    if (TCP_AVAILABLE) {
+        if (!fmgr_encode_datum(&tcp_outgoing_fmgr, type, fields, src_struct)) {
+            ESP_LOGW("LINK_TCP", "Failed to encode datum");
+
+            // TX should be "instant" (blocking buffer-copy)
+            link_flush();
+
+            if (!fmgr_encode_datum(&tcp_outgoing_fmgr, type, fields, src_struct)) {
+                while (1) {
+                    ESP_LOGE("LINK_TCP", "Critical link error: clogged");
+                    fmgr_reset(&tcp_outgoing_fmgr);
+                    // vTaskDelay(pdMS_TO_TICKS(500));
+                }
+            }
+        }
+    } if (USB_AVAILABLE) {
         // Send with USB link
         // Keep trying!!!
         if (!fmgr_encode_datum(&usb_outgoing_fmgr, type, fields, src_struct)) {
@@ -1611,7 +1691,241 @@ static void init_nvs() {
     }
 }
 
-static bool s_led_state = false;
+static void wifi_event_handler(void* arg, esp_event_base_t event_base,
+    int32_t event_id, void* event_data) {
+    // if (event_id == WIFI_EVENT_AP_STACONNECTED) {
+    //     wifi_event_ap_staconnected_t* event = (wifi_event_ap_staconnected_t*)event_data;
+    //      ESP_LOGI("WIFI", "station "MACSTR" join, AID=%d",
+    //          MAC2STR(event->mac), event->aid);
+    // } else if (event_id == WIFI_EVENT_AP_STADISCONNECTED) {
+    //     wifi_event_ap_stadisconnected_t* event = (wifi_event_ap_stadisconnected_t*)event_data;
+    //      ESP_LOGI("WIFI", "station "MACSTR" leave, AID=%d, reason=%d",
+    //          MAC2STR(event->mac), event->aid, event->reason);
+    // }
+}
+
+void init_wifi_ap(void) {
+    ESP_ERROR_CHECK(esp_netif_init());
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
+    esp_netif_create_default_wifi_ap();
+
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT,
+        ESP_EVENT_ANY_ID,
+        &wifi_event_handler,
+        NULL,
+        NULL));
+
+    wifi_config_t wifi_config = {
+        .ap = {
+            // .ssid = (uint8_t*)WIFI_SSID,
+            // .ssid_len = strlen(WIFI_SSID),
+            .channel = WIFI_CHANNEL,
+            // .password = (uint8_t*)WIFI_PASS,
+            .max_connection = 4,
+#ifdef CONFIG_ESP_WIFI_SOFTAP_SAE_SUPPORT
+            .authmode = WIFI_AUTH_WPA3_PSK,
+            .sae_pwe_h2e = WPA3_SAE_PWE_BOTH,
+#else /* CONFIG_ESP_WIFI_SOFTAP_SAE_SUPPORT */
+            .authmode = WIFI_AUTH_WPA2_PSK,
+#endif
+            .pmf_cfg = {
+                    .required = true,
+            },
+        },
+    };
+
+    memcpy(wifi_config.ap.ssid, WIFI_SSID, strlen(WIFI_SSID));
+    wifi_config.ap.ssid_len = strlen(WIFI_SSID);
+    memcpy(wifi_config.ap.password, WIFI_PASS, strlen(WIFI_PASS));
+    if (strlen(WIFI_PASS) == 0) {
+        wifi_config.ap.authmode = WIFI_AUTH_OPEN;
+    }
+
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_config));
+    ESP_ERROR_CHECK(esp_wifi_start());
+
+    ESP_LOGI("WIFI", "wifi_init_softap finished. SSID:%s password:%s channel:%d",
+        WIFI_SSID, WIFI_PASS, WIFI_CHANNEL);
+}
+
+static bool tcp_write_byte(uint8_t b) {
+    static uint8_t tmpbuf[2] = { 0 };
+    int bufl = 1;
+    if (b == 0) {
+        tmpbuf[0] = USB_SER_ESC;
+        tmpbuf[1] = USB_SER_ESC_NULL;
+        bufl = 2;
+    } else if (b == USB_SER_ESC) {
+        tmpbuf[0] = USB_SER_ESC;
+        tmpbuf[1] = USB_SER_ESC_ESC;
+        bufl = 2;
+    } else {
+        tmpbuf[0] = b;
+        bufl = 1;
+    }
+    send(TCP_ACTIVE_SOCK, tmpbuf, bufl, 0);
+    return true;
+}
+
+
+static esp_err_t tcp_tx(uint8_t* data, int len) {
+    if (!TCP_AVAILABLE) {
+        return ESP_ERR_INVALID_STATE;
+    } else {
+        uint16_t len_b = len;
+        // LSB first
+        bool sent = tcp_write_byte((len_b) & 0xFF);
+        sent &= tcp_write_byte((len_b >> 8) & 0xFF);
+
+        for (int i = 0; i < len; ++i)
+            sent &= tcp_write_byte(data[i]);
+
+        // uint8_t zero = 0x00;
+        // for (int i = 0; i < 10; ++i)
+        //     sent &= usb_serial_jtag_write_bytes(&zero, 1, pdMS_TO_TICKS(10));
+        uint8_t zeros[10] = { 0 };
+        send(TCP_ACTIVE_SOCK, zeros, sizeof(zeros), 0);
+
+        if (!sent) {
+            ESP_LOGE("LINK_TCP", "Error sending over TCP");
+            return ESP_ERR_NOT_FINISHED;
+        } else
+            return ESP_OK;
+    }
+}
+
+void link_wifi_tcp_task(void* arg) {
+    ESP_LOGI("LINK_TCP", "Starting TCP task");
+    char addr_str[128];
+    int ip_protocol = 0;
+    int keepAlive = 1;
+    int keepIdle = 5;
+    int keepInterval = 5;
+    int keepCount = 3;
+    struct sockaddr_storage dest_addr;
+
+    fmgr_init(&tcp_outgoing_fmgr, USB_SERIAL_BUF_SIZE);
+    fmgr_init(&tcp_incoming_fmgr, USB_SERIAL_BUF_SIZE);
+
+    int bufsize = 0;
+    uint8_t* fmgr_in_buffer = fmgr_get_buffer(&tcp_incoming_fmgr, &bufsize);
+
+    encoded_reader_t tcp_reader = { 0 };
+    encoded_reader_init(&tcp_reader, fmgr_in_buffer, bufsize);
+
+    config_get_int(CONFIG_WIFI_TCP_PORT_KEY, &LINK_TCP_PORT);
+
+    // Get IPV4 address
+    struct sockaddr_in* dest_addr_ip4 = (struct sockaddr_in*)&dest_addr;
+    dest_addr_ip4->sin_addr.s_addr = htonl(INADDR_ANY);
+    dest_addr_ip4->sin_family = AF_INET;
+    dest_addr_ip4->sin_port = htons(LINK_TCP_PORT);
+    ip_protocol = IPPROTO_IP;
+
+
+
+    int listen_sock = socket(AF_INET, SOCK_STREAM, ip_protocol);
+    if (listen_sock < 0) {
+        ESP_LOGE("LINK_WiFi", "Unable to create socket: errno %d", errno);
+        vTaskDelete(NULL);
+        return;
+    }
+    int opt = 1;
+    setsockopt(listen_sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+    ESP_LOGI("LINK_TCP", "Socket created");
+
+    int err = bind(listen_sock, (struct sockaddr*)&dest_addr, sizeof(dest_addr));
+    if (err != 0) {
+        ESP_LOGE("LINK_TCP", "Socket unable to bind: errno %d", errno);
+        goto CLEAN_UP;
+    }
+    ESP_LOGI("LINK_TCP", "Socket bound, port %" PRIi32, LINK_TCP_PORT);
+
+    err = listen(listen_sock, 1);
+    if (err != 0) {
+        ESP_LOGE("LINK_TCP", "Error occurred during listen: errno %d", errno);
+        goto CLEAN_UP;
+    }
+
+    uint8_t rx_buffer[5000];
+    while (1) {
+        ESP_LOGI("LINK_TCP", "Socket listening");
+
+        struct sockaddr_storage source_addr; // Large enough for both IPv4 or IPv6
+        socklen_t addr_len = sizeof(source_addr);
+        int TCP_ACTIVE_SOCK = accept(listen_sock, (struct sockaddr*)&source_addr, &addr_len);
+        if (TCP_ACTIVE_SOCK < 0) {
+            ESP_LOGE("LINK_TCP", "Unable to accept connection: errno %d", errno);
+            break;
+        }
+
+        // Set tcp keepalive option
+        setsockopt(TCP_ACTIVE_SOCK, SOL_SOCKET, SO_KEEPALIVE, &keepAlive, sizeof(int));
+        setsockopt(TCP_ACTIVE_SOCK, IPPROTO_TCP, TCP_KEEPIDLE, &keepIdle, sizeof(int));
+        setsockopt(TCP_ACTIVE_SOCK, IPPROTO_TCP, TCP_KEEPINTVL, &keepInterval, sizeof(int));
+        setsockopt(TCP_ACTIVE_SOCK, IPPROTO_TCP, TCP_KEEPCNT, &keepCount, sizeof(int));
+
+        if (source_addr.ss_family == PF_INET) {
+            inet_ntoa_r(((struct sockaddr_in*)&source_addr)->sin_addr, addr_str, sizeof(addr_str) - 1);
+        }
+
+        ESP_LOGI("LINK_TCP", "Socket accepted ip address: %s", addr_str);
+
+        // do_retransmit(sock);
+        // Do stuff with socket
+
+        int len = 0;
+        tcp_active = true;
+        do {
+            len = recv(TCP_ACTIVE_SOCK, rx_buffer, sizeof(rx_buffer) - 1, 0);
+            if (len < 0) {
+                ESP_LOGI("LINK_TCP", "Error reading from socket, errno: %d", errno);
+                break;
+            } else if (len == 0) {
+                ESP_LOGI("LINK_TCP", "Connection closed");
+                break;
+            } else {
+                // Read!!
+                for (int i = 0; i < len; ++i) {
+                    encoded_reader_give_byte(&tcp_reader, rx_buffer[i]);
+                    if (encoded_reader_has_frame(&tcp_reader)) {
+                        size_t frame_len = 0;
+                        uint8_t* decoded_buffer = encoded_reader_get_frame(&tcp_reader, &frame_len);
+
+                        ESP_LOGI("LINK_TCP", "Frame received over TCP, %d bytes.", frame_len);
+                        fmgr_load_frame(&tcp_incoming_fmgr, decoded_buffer, frame_len);
+                        bool ok = fmgr_decode_frame(&usb_incoming_fmgr, link_tcp_decode_datum);
+                        if (!ok)
+                            ESP_LOGW("LINK_TCP", "Error decoding frame!");
+                        fmgr_reset(&usb_incoming_fmgr);
+
+                        encoded_reader_reset(&tcp_reader);
+                    }
+                }
+                // ESP_LOG_BUFFER_CHAR("LINK_TCP", rx_buffer, len);
+            }
+        } while (len != 0);
+        tcp_active = false;
+
+        shutdown(TCP_ACTIVE_SOCK, 0);
+        close(TCP_ACTIVE_SOCK);
+    }
+
+CLEAN_UP:
+    close(listen_sock);
+    vTaskDelete(NULL);
+}
+
+void link_wifi_init() {
+    init_wifi_ap();
+    // Priority 11?
+    xTaskCreate(link_wifi_tcp_task, "link_tcp_task", 1024 * 8, NULL, 10, NULL);
+}
 
 void app_main(void) {
     gpio_install_isr_service(0);
@@ -1635,6 +1949,11 @@ void app_main(void) {
     init_nvs();
 
     init_config("config");
+    config_get_string(CONFIG_WIFI_SSID_KEY, WIFI_SSID);
+    if (strlen(WIFI_SSID) == 0) {
+        config_get_string(CONFIG_DEVICE_NAME_KEY, WIFI_SSID);
+    }
+    config_get_string(CONFIG_WIFI_PASSWORD_KEY, WIFI_PASS);
 
     init_usb();
 
@@ -1682,6 +2001,11 @@ void app_main(void) {
 
     init_gps();
 
+    config_get_bool(CONFIG_WIFI_ENABLED_KEY, &WIFI_ENABLED);
+    // Init WiFi + TCP link
+    if (WIFI_ENABLED)
+        link_wifi_init();
+
     // Stack overflowing... when no battery...
     xTaskCreate(battmon_task, "battmon_task", 4 * 1024, NULL, 10, NULL);
 
@@ -1717,9 +2041,6 @@ void app_main(void) {
 
     while (1) {
         /* Toggle the LED state */
-        s_led_state = !s_led_state;
-        // gpio_set_level(PIN_LED_G, s_led_state);
-        // gpio_set_level(PIN_LED_R, !s_led_state);
-        vTaskDelay(pdMS_TO_TICKS(500));
+        vTaskDelay(portMAX_DELAY);
     }
 }

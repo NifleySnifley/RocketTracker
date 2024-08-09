@@ -1,0 +1,19 @@
+{
+	"!name": "Wifi Configuration",
+	"ssid": {
+		"!name": "Wifi AP SSID",
+		"!type": "string(32)",
+		"!default": "" // Will be automatically set to device name if left blank
+	},
+	"password": {
+		"!name": "Wifi AP Password",
+		"!description": "If left blank, the wifi network will be unsecured",
+		"!type": "string(32)",
+		"!default": ""
+	},
+	"tcp_port": {
+		"!name": "Link TCP port",
+		"!type": "int(0,65535)",
+		"!default": 2000
+	}
+}

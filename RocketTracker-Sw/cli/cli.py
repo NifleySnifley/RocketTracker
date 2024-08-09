@@ -35,6 +35,7 @@ from lib.comms_lib.crctabgen import crc16
 import serial.tools.list_ports
 import serial.tools
 from logtool import log_convert, log_info
+from tcp_link import TCPFakeSerial
 
 colinit()
 
@@ -85,6 +86,8 @@ def receiver_thread(args):
 
     while (True):
         for char in serialport.read_all():
+            if args.verbose:
+                print(char)
             if (char == 0x00):
                 if (len(buffer)):
                     # TODO: Process buffer!!!
@@ -203,16 +206,20 @@ def init_cli(args):
                 args.port = rx[0].name
                 serialport_automatic = rx[0]
 
-    try:
-        serialport = Serial(baudrate=115200, timeout=0.5)
-        serialport.port = args.port
-        serialport.rts = False  # Don't reset the esp32
-        serialport.open()
-        serialport.flush()
-        serialport.read_all()
-    except:
-        print("Error! could not open serial port")
-        exit(1)
+    if (":" in args.port):
+        serialport = TCPFakeSerial(args.port)
+        print("Opened TCP!")
+    else:
+        try:
+            serialport = Serial(baudrate=115200, timeout=0.5)
+            serialport.port = args.port
+            serialport.rts = False  # Don't reset the esp32
+            serialport.open()
+            serialport.flush()
+            serialport.read_all()
+        except:
+            print("Error! could not open serial port")
+            exit(1)
 
     send_thread = Thread(target=sender_thread, daemon=True, args=[args])
     recv_thread = Thread(target=receiver_thread, daemon=True, args=[args])
