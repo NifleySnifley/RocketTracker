@@ -135,6 +135,8 @@ class LogDataEventRaw(Structure):
         s = f"{LOGEVENT2STR_HUMAN.get(self.event_type, '<unknown>')}"
         if (self.event_type == LOGDATA_EVENT_STATE):
             s += f" {self.parse_state_argument()[1]}Hz"
+        if (self.event_type == LOGDATA_EVENT_BOOT):
+            s += f" sensors disabled: {bin(self.argument)}"
         return s
 
 

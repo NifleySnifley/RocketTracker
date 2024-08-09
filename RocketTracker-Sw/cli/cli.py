@@ -1505,30 +1505,25 @@ def config_erase(args):
 
 def config_reset(args):
     init_cli(args)
-    cont = input(
+    cont = args.yes or input(
         "Are you sure you want to erase the device's configuration? [y/n]:")
     if (not strtobool(cont)):
         print("Aborting.")
         exit(0)
 
-    n_erased = 0
-    vnames = []
-    for v in tqdm(flatten_config_values(CONFIGURATION), desc="Erasing configuration"):
-        d = Datum(protocol.CMD_Config)
-        pb = protocol.Config(
-            key_hashed=CONFIG_KEY_ENCODE[v.path], mode=protocol.ConfigErase)
-        d.load_protobuf(pb)
+    d = Datum(protocol.CMD_Config)
+    pb = protocol.Config(
+        key_hashed="", mode=protocol.ConfigClear)
+    d.load_protobuf(pb)
 
-        tx_queue.put(d)
-        n_erased += 1
-        vnames.append(v.path)
+    tx_queue.put(d)
 
-    for i in tqdm(range(n_erased), desc="Verifying configuration"):
-        resp = wait_for_datum([protocol.RESP_ConfigSet], 5.0)
-        if (resp is None):
-            print("Error: timed out")
-        elif ("error" in resp.to_dict()):
-            print(f"Error erasing config value {vnames[i]}")
+    resp = wait_for_datum([protocol.RESP_ConfigSet], 5.0)
+    if (resp is None):
+        print("Error: timed out")
+    elif ("error" in resp.to_dict()):
+        print(
+            f"Error erasing configuration memory: {resp.to_protobuf().error}")
 
 
 def get_configvals():
@@ -1837,6 +1832,8 @@ if __name__ == "__main__":
     parser_config_reset = config_subparsers.add_parser(
         'reset', description="Erase configuration memory, all values will be restored to default")
     parser_config_reset.set_defaults(func=config_reset)
+    parser_config_reset.add_argument(
+        "-y", "--yes", action='store_true', help="bypass confirmation dialog")
 
     parser_config_list = config_subparsers.add_parser(
         'list', description="List the keys and values of all configuration parameters of a attached tracker")

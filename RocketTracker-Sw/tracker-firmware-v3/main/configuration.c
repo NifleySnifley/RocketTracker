@@ -526,11 +526,16 @@ Config config_handle_request(Config* cmd, DatumTypeID* typeout) {
         response.error = 0;
     } else if (cmd->mode == ConfigMode_ConfigClear) {
         // Erase all values in the NVS namespace
+        *typeout = DatumTypeID_RESP_ConfigSet;
+
+        ESP_LOGI("CONFIG", "Erasing configuration memory!");
         esp_err_t e = nvs_erase_all(GLOBAL_CONFIG.nvs);
         if (e != ESP_OK) {
             response.has_error = true;
             response.error = e;
         } else {
+            response.has_error = false;
+            ESP_LOGI("CONFIG", "Successfully erased configuration memory");
             nvs_commit(GLOBAL_CONFIG.nvs);
         }
     }

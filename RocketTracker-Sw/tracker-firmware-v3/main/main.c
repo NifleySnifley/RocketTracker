@@ -1842,9 +1842,6 @@ void link_wifi_tcp_task(void* arg) {
     int keepCount = 3;
     struct sockaddr_storage dest_addr;
 
-    fmgr_init(&tcp_outgoing_fmgr, USB_SERIAL_BUF_SIZE);
-    fmgr_init(&tcp_incoming_fmgr, USB_SERIAL_BUF_SIZE);
-
     int bufsize = 0;
     uint8_t* fmgr_in_buffer = fmgr_get_buffer(&tcp_incoming_fmgr, &bufsize);
 
@@ -1979,10 +1976,13 @@ void app_main(void) {
     fmgr_init(&lora_incoming_fmgr, 255);
     fmgr_init(&usb_outgoing_fmgr, USB_SERIAL_BUF_SIZE);
     fmgr_init(&usb_incoming_fmgr, USB_SERIAL_BUF_SIZE);
+    fmgr_init(&tcp_outgoing_fmgr, USB_SERIAL_BUF_SIZE);
+    fmgr_init(&tcp_incoming_fmgr, USB_SERIAL_BUF_SIZE);
 
     init_nvs();
 
     init_config("config");
+
     config_get_string(CONFIG_WIFI_SSID_KEY, WIFI_SSID);
     if (strlen(WIFI_SSID) == 0) {
         config_get_string(CONFIG_DEVICE_NAME_KEY, WIFI_SSID);
@@ -2037,8 +2037,11 @@ void app_main(void) {
 
     config_get_bool(CONFIG_WIFI_ENABLED_KEY, &WIFI_ENABLED);
     // Init WiFi + TCP link
-    if (WIFI_ENABLED)
+    if (WIFI_ENABLED) {
         link_wifi_init();
+    } else {
+        ESP_LOGI("SYS", "WIFI Disabled");
+    }
 
     // Stack overflowing... when no battery...
     xTaskCreate(battmon_task, "battmon_task", 4 * 1024, NULL, 10, NULL);

@@ -67,7 +67,7 @@
 	"wifi_enabled": {
 		"!name": "Enable WiFi",
 		"!type": "bool",
-		"!default": true
+		"!default": false
 	},
 	"wifi": "!include(wifi_config.jsonc)",
 	"gps": {

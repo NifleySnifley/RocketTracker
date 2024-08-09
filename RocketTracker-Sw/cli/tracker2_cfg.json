@@ -66,18 +66,18 @@
         "armed_ringbuf_hz": 200
     },
     "misc": {
-        "batt_hz": 0.10000000149011612,
+        "batt_hz": 0.1,
         "debug_monitor_en": false,
         "debug_monitor_usb": true,
         "debug_monitor": {
             "hz": 60.0,
             "lps22": true,
-            "lsm6dsm": false,
-            "lis3mdl": false,
-            "adxl375": false,
+            "lsm6dsm": true,
+            "lis3mdl": true,
+            "adxl375": true,
             "compass": false,
             "orientation": false,
-            "world_acc": true
+            "world_acc": false
         }
     }
 }
