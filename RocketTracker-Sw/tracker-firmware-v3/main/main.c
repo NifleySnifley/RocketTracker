@@ -768,7 +768,7 @@ static void init_logging() {
     set_logstate(LOGSTATE_LOGGING_STOPPED, -1);
 
     // Would need larger stack, but for now it's just using static buffers;
-    xTaskCreate(log_download_task, "log_dl_task", 1024 * 8, NULL, 10, &log_download_task_handle);
+    xTaskCreate(log_download_task, "log_dl_task", 1024 * 8, NULL, 11, &log_download_task_handle);
 
     // flight_timer = xTimerCreate("flight_timer", pdMS_TO_TICKS(1000 * LIFTOFF_DURATION), pdFALSE, (void*)0, flight_timer_callback);
     const esp_timer_create_args_t flight_timer_args = {
@@ -868,6 +868,8 @@ static void log_download_task(void* arg) {
                 // esp_task_wdt_reset();
                 // TODO: Feed the WDT during this task...
                 // Or maybe sleep a little bit during the flush...
+                // TODO: Properly feed WDT instead of sleep???
+                vTaskDelay(1);
                 n_segments++;
                 current_address += segment_length;
             }

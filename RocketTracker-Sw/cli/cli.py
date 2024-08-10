@@ -102,7 +102,8 @@ def receiver_thread(args):
                             # print(d)
                             rx_queue.put(d)
                     else:
-                        print(f"Received corrupt frame: {data.hex(':')}")
+                        # print(f"Received corrupt frame: {data.hex(':')}")
+                        print(f"Length mismatch:", length, len(data)-2)
                 buffer.clear()
                 continue
             else:
@@ -660,6 +661,10 @@ def telemetry(args):
 
             if sock is not None:
                 sock.send(d.to_dict())
+            if (args.log):
+                args.log.writelines([
+                    f"{json.dumps({'timestamp': time.time(), 'datum': d.to_dict()})}\n"
+                ])
         else:
             # stdscr.clear()
             # print("Timed out")
@@ -669,6 +674,10 @@ def telemetry(args):
         if (stdscr.getch() == ord('q')):
             break
         stdscr.refresh()
+
+    if (args.log is not None):
+        args.log.flush()
+        args.log.close()
     exit(0)
     # args.log.close()
 
@@ -797,7 +806,7 @@ def sensormon(args):
 
             stdscr.refresh()
             if (args.log):
-                args.log.writelines([f"{d.to_dict()}"])
+                args.log.writelines([f"{d.to_dict()}\n"])
 
             if (sock is not None):
                 sock.send(d.to_dict())
@@ -886,6 +895,33 @@ def set_2_pt_calibration(basename, calib):
 
     set_configval(offset_key, offset)
     set_configval(scale_key, scale)
+
+
+def calibrate_reset(args):
+    init_cli(args)
+    d = CONFIG_LOOKUP
+
+    cont = input(
+        "Are you sure you want to reset the device's calibration? [y/n]:")
+    if (not strtobool(cont)):
+        print("Aborting.")
+        exit(0)
+
+    for k, v in sorted(d.items()):
+        if (k.startswith('config.calibration.')):
+            d = Datum(protocol.CMD_Config)
+            pb = protocol.Config(
+                key_hashed=CONFIG_KEY_ENCODE[k], mode=protocol.ConfigErase)
+            d.load_protobuf(pb)
+            tx_queue.put(d)
+
+            resp = wait_for_datum([protocol.RESP_ConfigSet], 5.0)
+            # print(resp)
+            if (resp is None):
+                print(f"Error: timed out erasing parameter with key '{k}'")
+            elif ("error" in resp.to_dict()):
+                print(f"Error erasing config value: {resp.to_dict()['error']}")
+    print("Done.")
 
 
 def calibrate_acc(args):
@@ -1504,24 +1540,21 @@ def config_reset(args):
         print("Aborting.")
         exit(0)
 
-    n_erased = 0
-    vnames = []
-    for v in tqdm(flatten_config_values(CONFIGURATION), desc="Erasing configuration"):
-        d = Datum(protocol.CMD_Config)
-        pb = protocol.Config(
-            key_hashed=CONFIG_KEY_ENCODE[v.path], mode=protocol.ConfigErase)
-        d.load_protobuf(pb)
+    # n_erased = 0
+    # vnames = []
+    # for v in tqdm(flatten_config_values(CONFIGURATION), desc="Erasing configuration"):
+    d = Datum(protocol.CMD_Config)
+    pb = protocol.Config(
+        key_hashed="", mode=protocol.ConfigClear)
+    d.load_protobuf(pb)
 
-        tx_queue.put(d)
-        n_erased += 1
-        vnames.append(v.path)
+    tx_queue.put(d)
 
-    for i in tqdm(range(n_erased), desc="Verifying configuration"):
-        resp = wait_for_datum([protocol.RESP_ConfigSet], 5.0)
-        if (resp is None):
-            print("Error: timed out")
-        elif ("error" in resp.to_dict()):
-            print(f"Error erasing config value {vnames[i]}")
+    resp = wait_for_datum([protocol.RESP_ConfigSet], 5.0)
+    if (resp is None):
+        print("Error: timed out")
+    elif ("error" in resp.to_dict()):
+        print(f"Error erasing config value {resp.to_protobuf().error}")
 
 
 def get_configvals():
@@ -1711,6 +1744,11 @@ if __name__ == "__main__":
         "accel", description="Calibrate the accelerometer of a connected tracker")
     parser_calib_acc.set_defaults(func=calibrate_acc)
 
+    parser_calib_reset = calib_subparsers.add_parser(
+        "reset", description="Reset all calibration parameters")
+    parser_calib_reset.set_defaults(func=calibrate_reset)
+    parser_calib_reset.add_argument("-y", "--yes", action='store_true')
+
     parser_calib_gyr = calib_subparsers.add_parser(
         "gyro", description="Calibrate the gyro of a connected tracker")
     parser_calib_gyr.set_defaults(func=calibrate_gyr)
@@ -1740,6 +1778,8 @@ if __name__ == "__main__":
     parser_telemetry.set_defaults(func=telemetry)
     parser_telemetry.add_argument(
         '-u', '--udp', default=None, type=str, help="Send all received data (JSON) to ip:port")
+    parser_telemetry.add_argument(
+        '-l', '--log', type=argparse.FileType('w'), help="Write all received data (JSON) to log file")
 
     parser_3d = subparsers.add_parser(
         'sensors3d', description="Visualize the orientation of a connected tracker in 3D. Requires USB connection and a web browser with OpenGL support")
