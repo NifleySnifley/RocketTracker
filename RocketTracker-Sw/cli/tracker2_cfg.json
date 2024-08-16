@@ -51,11 +51,11 @@
         "altitude_stdev": 0.4339637756347656,
         "vert_accel_stdev": 0.018984146416187286
     },
-    "telemetry_divider": 3,
+    "telemetry_divider": 5,
     "device_name": "tracker_2",
     "gps": {
         "nav_count": 1,
-        "nav_period_ms": 100
+        "nav_period_ms": 200
     },
     "logging": {
         "launch_threshold": 4.0,

@@ -48,6 +48,8 @@ def log_convert(args):
         sublogs = log.split_logs()
         if (args.sublog < (-len(sublogs)) or args.sublog >= len(sublogs)):
             print(f"Error, invalid sublog index {args.sublog}")
+            # if args.sublog > 0:
+            #     args.sublog -= 1
             exit(1)
         else:
             log = sublogs[args.sublog]

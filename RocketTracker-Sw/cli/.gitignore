@@ -4,3 +4,4 @@ venv/
 **/*.pyc
 **/__pycache__
 logs/
+tripoli_2/
