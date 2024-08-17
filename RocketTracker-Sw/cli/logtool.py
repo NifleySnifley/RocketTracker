@@ -3,13 +3,14 @@
 import loglib
 import argparse
 from pathlib import Path
+import re
 
 LOG_MEMORY_SIZE_B = 32000000
 
 
 def log_info(args):
     log = loglib.RTRKLog()
-    log.load_raw_pickle(args.logfile)
+    log.load_file_auto(args.logfile)
 
     print(f"Log '{args.logfile.name}'")
     print(
@@ -36,6 +37,39 @@ def log_info(args):
         else:
             print(f"\tNo events")
 
+        txtlogs = [f for f in sl.frames if isinstance(
+            f.data, loglib.LogDataTextLog)]
+        if len(txtlogs) != 0:
+            print(f"\tLog contains {len(txtlogs)} lines of text logs")
+
+
+def log_textdump(args):
+    log = loglib.RTRKLog()
+    log.load_file_auto(args.logfile)
+
+    # Need escape sequences
+    import os
+    os.system("")
+
+    ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+
+    print(f"Log '{args.logfile.name}'")
+    print(
+        f"Size: {log.raw_size_bytes/1000}KB ({(log.raw_size_bytes/LOG_MEMORY_SIZE_B)*100.0:.2f}% of log memory)")
+    log.split_logs()
+
+    def strprintfn(s: str):
+        if not args.quiet:
+            print(s, end="")
+        if args.output is not None:
+            args.output.writelines([ansi_escape.sub('', s)])
+
+    for f in log.frames:
+        if isinstance(f.data, loglib.LogDataTextLog):
+            strprintfn(f"[{f.timestamp:0.4f}] {f.data}")
+        elif isinstance(f.data, loglib.LogDataEventRaw):
+            strprintfn(f"\n[{f.timestamp:0.4f}] <<EVENT>> {f.data}\n\n")
+
 
 def log_convert(args):
     infile = args.input
@@ -43,7 +77,7 @@ def log_convert(args):
     fmt = args.format
 
     log = loglib.RTRKLog()
-    log.load_raw_pickle(infile)
+    log.load_file_auto(infile)
     if (args.sublog is not None):
         sublogs = log.split_logs()
         if (args.sublog < (-len(sublogs)) or args.sublog >= len(sublogs)):
@@ -89,6 +123,14 @@ if __name__ == "__main__":
     parser_info = subparsers.add_parser('info')
     parser_info.set_defaults(func=log_info)
     parser_info.add_argument("logfile", type=argparse.FileType('rb'))
+    parser_info.add_argument("-r", "--raw", action='store_true')
+
+    parser_txtdump = subparsers.add_parser('text')
+    parser_txtdump.set_defaults(func=log_textdump)
+    parser_txtdump.add_argument("logfile", type=argparse.FileType('rb'))
+    parser_txtdump.add_argument("-q", "--quiet", action='store_true')
+    parser_txtdump.add_argument(
+        "-o", "--output", required=False, type=argparse.FileType('w'))
 
     parser_convert = subparsers.add_parser('convert')
     parser_convert.set_defaults(func=log_convert)

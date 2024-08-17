@@ -8,6 +8,17 @@ def encode_key(k: str):
     return kenc.decode('ascii')
 
 
+def pytype2ctype(value: any):
+    if (isinstance(value, int)):
+        return "int32_t"
+    elif isinstance(value, str):
+        return "const char*"
+    elif isinstance(value, float):
+        return "float"
+    elif isinstance(value, bool):
+        return "bool"
+
+
 if __name__ == "__main__":
     from configparse import *
     from csnake import CodeWriter, Struct, Enum, Function, Variable, Typecast, FormattedLiteral
@@ -48,13 +59,40 @@ if __name__ == "__main__":
             e = Enum(typename, typedef=True)
             for v in t.values:
                 v_clean = ''.join(
-                    [(c.upper() if (c.lower() in "1234567890abcdefghijklmnopqrstuvwxyz") else '_') for c in v.upper()])
+                    [(c.upper() if (c.lower() in "1234567890abcdefghijklmnopqrstuvwxyz") else '_') for c in v.name.upper()])
                 if (v_clean[0].isnumeric()):
                     v_clean = '_'+v_clean
-                e.add_value(v_clean)
+                e.add_value(v_clean, v.enum_idx)
 
             print(e.generate_declaration())
             cw.add_enum(e)
+            
+            
+            # Value Converter function
+            if (t.is_valued):
+                print(f"Valued enum! {tname}")
+                valuetype = {pytype2ctype(e_val.value) for e_val in t.values}
+                if len(valuetype) > 1:
+                    print("Error, mixed-value enums are not allowed!")
+                else:
+                    valuetype = list(valuetype)[0]
+                    
+                print(valuetype)
+                fn = Function(f"{typename}_CONVERT", valuetype, qualifiers="static inline")
+                fn.add_argument(Variable("enum_value", typename))
+                fncode = ["switch (enum_value) {"]
+                for e_val in t.values:
+                    realval = f"\"{e_val.value}\"" if isinstance(e_val.value, str) else e_val.value
+                    fncode.append(f"\tcase {e_val.enum_idx}: return {realval}; break;")
+                
+                defval = t.values[0].value
+                realval_def = f"\"{defval}\"" if isinstance(defval, str) else defval
+                fncode.append(f"\tdefault: return {realval_def}; break;")
+                
+                fncode.append("}")
+                fn.add_code(fncode)
+                
+                cw.add_function_definition(fn)
             # print(basename)
 
     defs = ['\n']
@@ -64,7 +102,7 @@ if __name__ == "__main__":
         print(vpath_clean)
         defval = v.default
         if (isinstance(v.type, EnumType)):
-            defval = v.type.values.index(defval)
+            defval = v.type.values[defval].enum_idx
 
             # Test for duplicate keys after hashing
         enkey = encode_key(v.path)
@@ -107,7 +145,7 @@ if __name__ == "__main__":
     def convert_value(type, value):
         v = None
         if (isinstance(type, EnumType)):
-            v = Typecast(type.values.index(value), "int32_t")
+            v = Typecast(type.values[value].enum_idx, "int32_t")
         elif isinstance(type, FloatType):
             v = Typecast(value, "float")
         elif isinstance(type, IntType):

@@ -23,3 +23,4 @@ DebugDataOutput.suffix max_size:32
 
 DeviceInfo.name max_size:32
 DeviceInfo.fw_version max_size:32
+DeviceInfo.peripherals max_count:8

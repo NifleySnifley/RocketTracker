@@ -179,5 +179,6 @@
 				"!default": false
 			}
 		}
-	}
+	},
+	"debug": "!include(debug_config.jsonc)"
 }

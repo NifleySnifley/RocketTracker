@@ -1,0 +1,87 @@
+{
+	"!defs": {
+		"LogOutputMode": [
+			"LogMode_UART0",
+			"LogMode_Expansion"
+		],
+		"BaudRate": [
+			{
+				"!name": "Baud_110",
+				"!value": 110
+			},
+			{
+				"!name": "Baud_150",
+				"!value": 150
+			},
+			{
+				"!name": "Baud_300",
+				"!value": 300
+			},
+			{
+				"!name": "Baud_1200",
+				"!value": 1200
+			},
+			{
+				"!name": "Baud_2400",
+				"!value": 2400
+			},
+			{
+				"!name": "Baud_4800",
+				"!value": 4800
+			},
+			{
+				"!name": "Baud_9600",
+				"!value": 9600
+			},
+			{
+				"!name": "Baud_19200",
+				"!value": 19200
+			},
+			{
+				"!name": "Baud_38400",
+				"!value": 38400
+			},
+			{
+				"!name": "Baud_57600",
+				"!value": 57600
+			},
+			{
+				"!name": "Baud_115200",
+				"!value": 115200
+			},
+			{
+				"!name": "Baud_230400",
+				"!value": 230400
+			},
+			{
+				"!name": "Baud_460800",
+				"!value": 460800
+			},
+			{
+				"!name": "Baud_921600",
+				"!value": 921600
+			}
+		]
+	},
+	"!name": "Debug Configuration",
+	"logging_mode": {
+		"!name": "Logging output mode",
+		"!type": "LogOutputMode",
+		"!default": "LogMode_UART0"
+	},
+	"logging_uart_baudrate": {
+		"!name": "Logging UART Baudrate",
+		"!type": "BaudRate",
+		"!default": "Baud_115200"
+	},
+	"log_to_logmem": {
+		"!name": "Write debug logs to log memory",
+		"!type": "bool",
+		"!default": false
+	},
+	"report_rtos_stats": {
+		"!name": "Report RTOS runtime stats",
+		"!type": "bool",
+		"!default": false
+	}
+}

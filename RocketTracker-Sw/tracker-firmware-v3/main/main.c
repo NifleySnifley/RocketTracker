@@ -29,6 +29,7 @@
 
 #include "max17048.h"
 #include "sensors.h"
+#include "dd_board.h"
 
 #include "nmea.h"
 #include "gpgll.h"
@@ -47,6 +48,7 @@
 #include "prelog.h"
 
 #include "configuration.h"
+// #include "config_generated.h"
 config_provider_t GLOBAL_CONFIG; // Define this here
 
 ////////////////// GLOBALS //////////////////
@@ -60,6 +62,9 @@ MAX17048_t battery_monitor;
 SemaphoreHandle_t radio_mutex; // Used to "hold" the radio during transmit/receive gaps
 sx127x* radio = NULL;
 spi_device_handle_t radio_spi_device;
+
+// TODO: Make this truly global...
+dd_board_t* dd_board_global = NULL;
 
 ////////////////// GLOBAL HANDLES //////////////////
 fmgr_t lora_outgoing_fmgr;
@@ -133,6 +138,7 @@ static void init_leds(void) {
     gpio_set_direction(PIN_LED_G, GPIO_MODE_OUTPUT);
     gpio_set_direction(PIN_LED_R, GPIO_MODE_OUTPUT);
 
+    // FIXME: Use a FreeRTOS timer here!
     const esp_timer_create_args_t args = {
         .callback = &log_led_toggle,
         .name = "log_led"
@@ -357,7 +363,8 @@ void link_decode_datum(int i, DatumTypeID id, int len, uint8_t* data, bool is_us
     } else if (id == DatumTypeID_CMD_RequestDeviceInfo) {
         DeviceInfo info = {
             .device_type = TalkerID_Tracker_V3,
-            .has_name = false
+            .has_name = false,
+            .peripherals_count = 0
         };
 
         char* appvers = esp_app_get_description()->version;
@@ -366,6 +373,16 @@ void link_decode_datum(int i, DatumTypeID id, int len, uint8_t* data, bool is_us
         if (config_is_set(CONFIG_DEVICE_NAME_KEY)) {
             info.has_name = true;
             config_get_string(CONFIG_DEVICE_NAME_KEY, (char*)info.name);
+        }
+
+        if (dd_board_global != NULL) {
+            info.peripherals[info.peripherals_count++] = PeripheralType_ExpansionDDIO;
+        }
+
+        LogOutputMode_t mode = CONFIG_DEBUG_LOGGING_MODE_DEFAULT;
+        config_get_enum(CONFIG_DEBUG_LOGGING_MODE_KEY, &mode);
+        if (mode == LOGMODE_EXPANSION) {
+            info.peripherals[info.peripherals_count++] = PeripheralType_ExpansionDebug;
         }
 
         link_send_datum(DatumTypeID_RESP_DeviceInfo, DeviceInfo_fields, &info);
@@ -1305,11 +1322,13 @@ static void init_gps_worker(void* arg) {
     int32_t err = uPortInit();
     if (err) {
         ESP_LOGE("GPS", "UBXLIB Port init error: %" PRIi32, err);
+        vTaskDelete(NULL);
         return;
     }
     err = uGnssInit();
     if (err) {
         ESP_LOGE("GPS", "UBXLIB GNSS init error: %" PRIi32, err);
+        vTaskDelete(NULL);
         return;
     }
 
@@ -1318,6 +1337,7 @@ static void init_gps_worker(void* arg) {
     err = uGnssAdd(U_GNSS_MODULE_TYPE_M8, U_GNSS_TRANSPORT_UART, transportHandle, -1, true, &gnssHandle);
     if (err) {
         ESP_LOGE("GPS", "UBXLIB GNSS add error: %" PRIi32, err);
+        vTaskDelete(NULL);
         return;
     }
 
@@ -1339,6 +1359,7 @@ static void init_gps_worker(void* arg) {
     err = uGnssAdd(U_GNSS_MODULE_TYPE_M8, U_GNSS_TRANSPORT_UART, transportHandle, -1, true, &gnssHandle);
     if (err) {
         ESP_LOGE("GPS", "UBXLIB GNSS2 re-add error: %" PRIi32, err);
+        vTaskDelete(NULL);
         return;
     }
 
@@ -1365,6 +1386,7 @@ static void init_gps_worker(void* arg) {
     err = uGnssCfgSetRate(gnssHandle, measprdms, measpernav, -1);
     if (err) {
         ESP_LOGE("GPS", "UBXLIB GNSS rate error: %" PRIi32, err);
+        vTaskDelete(NULL);
         return;
     }
 
@@ -1374,7 +1396,7 @@ static void init_gps_worker(void* arg) {
 
     ESP_LOGI("GPS", "Successfully init GPS!");
     gpio_set_level(PIN_LED_R, 0);
-    vTaskSuspend(NULL);
+    vTaskDelete(NULL);
 }
 
 static void init_gps() {
@@ -1613,17 +1635,41 @@ static void init_nvs() {
     }
 }
 
-static bool s_led_state = false;
+static void init_core1_task(void* arg) {
+    // TODO: Fix intr alloc error
+    // If DD enabled
+    if (true) {
+        dd_board_global = (dd_board_t*)calloc(1, sizeof(dd_board_t));
+        esp_err_t e = dd_board_init(dd_board_global, PIN_EXP1, PIN_EXP2, PIN_EXP4, PIN_EXP3);
+        if (e != ESP_OK) {
+            ESP_LOGW("DD", "Error initializing board: %s", esp_err_to_name(e));
+            free(dd_board_global);
+            dd_board_global = NULL;
+        }
+    }
+    // TODO: Make sure it's OK to interoperate with the dual deploy board if it's in the other core (can I still call functions on it???)
+
+    while (1) {
+        vTaskDelay(portMAX_DELAY);
+    }
+}
+
+int debug_logging_logmem_vprintf(const char* fmt, va_list args) {
+    static char buffer[256] = { 0 };
+
+    int ret = vsnprintf(buffer, sizeof(buffer), fmt, args);
+    if (ret < 0)
+        return ret;
+
+    logger_log_data_now(&logger, LOG_DTYPE_TEXT_LOG, (uint8_t*)buffer, strlen(buffer));
+
+    // Still STDOUT it...
+    return vprintf(fmt, args);
+    // return 0;
+}
 
 void app_main(void) {
     gpio_install_isr_service(0);
-
-#if DEBUG_ON_EXP
-    ESP_ERROR_CHECK(uart_set_pin(UART_NUM_0,
-        DEBUG_UART_RX, DEBUG_UART_TX,
-        UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
-    ESP_ERROR_CHECK(uart_set_baudrate(UART_NUM_0, DEBUG_UART_BAUD));
-#endif
 
     fmgr_mutex = xSemaphoreCreateRecursiveMutex();
     tl_spi_hold_sem = xSemaphoreCreateMutex();
@@ -1635,8 +1681,32 @@ void app_main(void) {
     fmgr_init(&usb_incoming_fmgr, USB_SERIAL_BUF_SIZE);
 
     init_nvs();
-
     init_config("config");
+
+    LogOutputMode_t debug_logmode = CONFIG_DEBUG_LOGGING_MODE_DEFAULT;
+    config_get_enum(CONFIG_DEBUG_LOGGING_MODE_KEY, (int32_t*)&debug_logmode);
+    BaudRate_t debug_baudrate = CONFIG_DEBUG_LOGGING_UART_BAUDRATE_DEFAULT;
+    config_get_enum(CONFIG_DEBUG_LOGGING_UART_BAUDRATE_KEY, (int32_t*)&debug_baudrate);
+    bool log_to_memory = CONFIG_DEBUG_LOG_TO_LOGMEM_DEFAULT;
+    config_get_bool(CONFIG_DEBUG_LOG_TO_LOGMEM_KEY, &log_to_memory);
+
+    if (debug_logmode == LOGMODE_UART0) {
+        // Do nothing, this is where log UART output goes by default
+    } else if (debug_logmode == LOGMODE_EXPANSION) {
+        ESP_ERROR_CHECK(uart_set_pin(DEBUG_UART_NUM,
+            DEBUG_UART_EXPANSION_TX, DEBUG_UART_EXPANSION_RX,
+            UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
+    }
+    ESP_ERROR_CHECK(uart_set_baudrate(DEBUG_UART_NUM, BaudRate_t_CONVERT(debug_baudrate)));
+
+    init_i2c();
+    init_sensor_spi();
+    init_tl_spi();
+
+    init_logging();
+    if (log_to_memory) {
+        esp_log_set_vprintf(debug_logging_logmem_vprintf);
+    }
 
     init_usb();
 
@@ -1646,12 +1716,6 @@ void app_main(void) {
     // TODO: Maybe in the future allow hot-reloading (or just quick-reboot) and changing of config over-the-air with LoRa
 
     init_leds();
-
-    init_i2c();
-    init_sensor_spi();
-    init_tl_spi();
-
-    init_logging();
 
     init_radio();
 
@@ -1683,6 +1747,8 @@ void app_main(void) {
     init_sensors();
 
     init_gps();
+
+    xTaskCreatePinnedToCore(init_core1_task, "core1 init", 1024 * 4, NULL, 11, NULL, 1);
 
     // Stack overflowing... when no battery...
     xTaskCreate(battmon_task, "battmon_task", 4 * 1024, NULL, 10, NULL);
@@ -1717,11 +1783,17 @@ void app_main(void) {
     ESP_ERROR_CHECK(esp_timer_create(&pps_timer_args, &once_per_second_timer));
     ESP_ERROR_CHECK(esp_timer_start_periodic(once_per_second_timer, 1000000));
 
+    bool rtos_runtime_stats_en = CONFIG_DEBUG_REPORT_RTOS_STATS_DEFAULT;
+    config_get_bool(CONFIG_DEBUG_REPORT_RTOS_STATS_KEY, &rtos_runtime_stats_en);
+
+
     while (1) {
-        /* Toggle the LED state */
-        s_led_state = !s_led_state;
-        // gpio_set_level(PIN_LED_G, s_led_state);
-        // gpio_set_level(PIN_LED_R, !s_led_state);
-        vTaskDelay(pdMS_TO_TICKS(500));
+        if (rtos_runtime_stats_en) {
+            // vTaskGetRunTimeStats();
+            // TODO: Implement!
+            vTaskDelay(2000);
+        } else {
+            vTaskDelay(portMAX_DELAY);
+        }
     }
 }

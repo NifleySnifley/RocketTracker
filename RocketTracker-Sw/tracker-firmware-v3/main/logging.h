@@ -99,6 +99,8 @@ typedef enum log_datatype_t {
     LOG_DTYPE_DATA_DEFAULT = 0, // log_data_default_t
     LOG_DTYPE_DATA_RAW = 1, // Bytes, variable length
     LOG_DTYPE_DATA_EVENT = 2, // log_data_event_t
+    LOG_DTYPE_TEXT_LOG = 3, // Data from an ESP_LOGx function
+    LOG_DTYPE_RADIORX = 4,
 } log_datatype_t;
 
 // Instead of 0 being the delimiter, make 0xFF the delimiter!!

@@ -218,9 +218,23 @@ class LogDataDefault():
             cjson, "config.calibration.adxl375", self.adxl_acc)
 
 
+class LogDataTextLog():
+    def __init__(self) -> None:
+        self.text = ""
+
+    def from_buffer_copy(buffer: bytes):
+        s = LogDataTextLog()
+        s.text = buffer.decode('ascii')
+        return s
+
+    def __repr__(self) -> str:
+        return self.text
+
+
 LOG_FRAMETYPE_TO_CLASS = {
     0: LogDataDefaultRaw,
-    2: LogDataEventRaw
+    2: LogDataEventRaw,
+    3: LogDataTextLog
 }
 
 
@@ -241,6 +255,7 @@ class LogFrame():
             if isinstance(self.data, LogDataDefaultRaw):
                 self.data = LogDataDefault(self.data)
         else:
+            print(f"Unknown frametype")
             self.data = None
 
     def __str__(self) -> str:
@@ -253,6 +268,7 @@ class RTRKLog():
     def __init__(self, frames=[]):
         self.frames = frames
         self.raw_size_bytes = 0
+        self.data = bytes()
 
     def load_raw_pickle(self, filename):
         segments = []
@@ -261,7 +277,37 @@ class RTRKLog():
         else:
             with open(filename, 'rb') as f:
                 segments = pickle.load(f)
+
         self.load_segments(segments)
+
+    def load_raw_binary(self, filename):
+        data = None
+        if not isinstance(filename, str):
+            data = filename.read()
+        else:
+            with open(filename, 'rb') as f:
+                data = f.read()
+
+        self.load_data(data)
+
+    def load_file_auto(self, filename):
+        try:
+            self.load_raw_pickle(filename)
+        except Exception:
+            self.load_raw_binary(filename)
+
+    def load_data(self, data=None):
+        if data is None:
+            data = self.data
+        else:
+            self.data = data
+
+        self.raw_size_bytes = len(data)
+        self.frames = [
+            LogFrame(log_cobs_decode(f))
+            for f in data.split(b'\xFF')
+        ]
+        self.frames = [f for f in self.frames if f.valid]
 
     def load_segments(self, segments: list) -> bool:
         segments, ack = segments[:-1], segments[-1]
@@ -274,26 +320,21 @@ class RTRKLog():
             # CRC Fail!
             return False
 
-        databuffer = bytes()
+        self.data = bytes()
         for s in segments:
             ddec = base64.b64decode(s['data'])
-            self.raw_size_bytes += len(ddec)
-            databuffer += ddec
+            self.data += ddec
 
-        self.frames = [
-            LogFrame(log_cobs_decode(f))
-            for f in databuffer.split(b'\xFF')
-        ]
-        self.frames = [f for f in self.frames if f.valid]
-        # self.frames.sort(key=lambda f: f.timestamp)
-        # print(Counter([len(f) for f in frames_dec]))
+        self.load_data()
 
     def split_logs(self):
         frame_buckets = [[]]
 
         def split():
+            print("sp")
             frame_buckets.append([])
 
+        clr = 0
         for f in self.frames:
             if isinstance(f.data, LogDataEventRaw):
                 # print(LOGEVENT2STR[f.data.event_type], f.data.argument)
@@ -301,15 +342,16 @@ class RTRKLog():
 
                 if ev.event_type == LOGDATA_EVENT_BOOT:
                     split()
+                    clr = 0
                 elif ev.event_type == LOGDATA_EVENT_STATE:
-                    state = ev.parse_state_argument()[0]
-                    if state in [LOGSTATE_LOGGING_STOPPED]:
+                    state, hz = ev.parse_state_argument()
+                    if clr != 0 and state in [LOGSTATE_LOGGING_STOPPED]:
                         split()
+                    clr = hz
 
             frame_buckets[-1].append(f)
 
-        logs_out = [RTRKLog(fb) for fb in frame_buckets if len(
-            [f for f in fb if isinstance(f.data, LogDataDefault)])]
+        logs_out = [RTRKLog(fb) for fb in frame_buckets if len(fb)]
         for l in logs_out:
             l.sort()
         return logs_out

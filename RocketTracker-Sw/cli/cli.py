@@ -35,6 +35,7 @@ from lib.comms_lib.crctabgen import crc16
 import serial.tools.list_ports
 import serial.tools
 from logtool import log_convert, log_info
+from loglib import RTRKLog
 
 colinit()
 
@@ -483,10 +484,17 @@ def log_download(args):
             segments.append(segment.to_dict())  # Get the ACK too!
             # print(segments)
 
-            pickle.dump(segments, args.outfile)
-            args.outfile.flush()
-            args.outfile.close()
-            print("Saved to pickle")
+            if (args.raw):
+                pickle.dump(segments, args.outfile)
+                args.outfile.flush()
+                args.outfile.close()
+                print("Saved to pickle")
+            else:
+                # Semi-decode
+                log = RTRKLog()
+                log.load_segments(segments)
+                args.outfile.write(log.data)
+                pass
 
             segments, ack = segments[:-1], segments[-1]
             # print(ack)
@@ -1369,6 +1377,10 @@ def devinfo(args):
             f"Device name: {Fore.GREEN if pb.HasField('name') else Fore.RED}{pb.name if pb.HasField('name') else '<not set>'}{Style.RESET_ALL}")
         print(
             f"Firmware Version: {Fore.GREEN}{pb.fw_version}{Style.RESET_ALL}")
+        print(f"Peripherals:")
+        for p in pb.peripherals:
+            print(
+                f"\t- {Fore.GREEN}{protocol.PeripheralType.DESCRIPTOR.values_by_number[p].name}{Style.RESET_ALL}")
 
 
 def receiver_config(args):
@@ -1621,8 +1633,11 @@ def config_list_default(args):
         suf = ""
         if '!suffix' in v.data:
             suf = v.data['!suffix']
-            print(f"\tunits: {suf}")
+            print(f"\tunits: {suf}F")
         vv = f"\"{v.default}\"" if isinstance(v.default, str) else v.default
+        if isinstance(v.type, EnumType):
+            vv = str(v.type.values[v.default])
+
         print(f"\tdefault: {Fore.RED}{vv}{suf}{Style.RESET_ALL}")
         print("\n")
 
@@ -1842,6 +1857,8 @@ if __name__ == "__main__":
         'download', description="Download the contents of a connected tracker's log memory. USB connection required.")
     parser_log_download.add_argument(
         '-o', '--outfile', required=True, type=argparse.FileType('wb'), help="Output file")
+    parser_log_download.add_argument(
+        '-r', '--raw', action='store_true', help="Dump log memory in raw format (pickle file of received frames)")
     # TODO: Log parsing and output formats!
     parser_log_download.set_defaults(func=log_download)
 

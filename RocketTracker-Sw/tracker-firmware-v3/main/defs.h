@@ -50,19 +50,16 @@
 #define USB_TIMEOUT_MS 500
 
 // Switches the pins of the debug UART (UART0) to be pins on the expansion header
-#define DEBUG_ON_EXP true
 
-#if (DEBUG_ON_EXP)
-#define DEBUG_UART_RX PIN_EXP1
-#define DEBUG_UART_TX PIN_EXP2
+#define DEBUG_UART_EXPANSION_RX UART_PIN_NO_CHANGE
+#define DEBUG_UART_EXPANSION_TX PIN_EXP2
 #define DEBUG_UART_BAUD 9600
-#endif
+#define DEBUG_UART_NUM UART_NUM_0
 
-#ifndef DEBUG_UART_BAUD
-#define DEBUG_UART_BAUD 115200
-#endif
 
 #define DEBUG_PRINT_CONFIG false
 #define DEBUG_PRINT_UBXLIB false
+
+
 
 #define GRAVITY_G 9.81

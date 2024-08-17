@@ -11,7 +11,7 @@
     "idf.openOcdConfigs": [
         "board/esp32s3-builtin.cfg"
     ],
-    "idf.portWin": "COM3",
+    "idf.portWin": "COM37",
     "idf.pythonBinPathWin": "C:/Espressif/python_env/idf5.2_py3.11_env/Scripts/python.exe",
     "idf.toolsPathWin": "C:\\Espressif",
     "terminal.integrated.defaultProfile.windows": "Command Prompt",
@@ -72,7 +72,9 @@
         "u_port_debug.h": "c",
         "u_port_i2c.h": "c",
         "i2c.h": "c",
-        "semphr.h": "c"
+        "semphr.h": "c",
+        "dd_board.h": "c",
+        "tca6408.h": "c"
     },
     "editor.tabSize": 4,
     "editor.insertSpaces": true,

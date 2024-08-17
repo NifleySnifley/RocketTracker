@@ -5,3 +5,4 @@ venv/
 **/__pycache__
 logs/
 tripoli_2/
+debugging/

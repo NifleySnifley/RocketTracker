@@ -137,10 +137,17 @@ enum DatumTypeID {
   RESP_DeviceInfo = 153; // DeviceInfo
 }
 
+enum PeripheralType {
+    ExpansionDebug = 1;
+    ExpansionDDIO = 2; // Pyros+Servos+ADC+LEDs
+    ExpansionSBus = 3; // S.Bus RC receiver connection
+}
+
 message DeviceInfo {
   optional string name = 1;
   required string fw_version = 2;
   required TalkerID device_type = 3;
+  repeated PeripheralType peripherals = 4;
 }
 
 enum ConfigMode {

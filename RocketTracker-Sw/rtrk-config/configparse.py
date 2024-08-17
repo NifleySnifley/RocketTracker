@@ -159,22 +159,54 @@ class StringType(TypeBase):
         return nativeval
 
 
+class EnumValue():
+    def __init__(self, idx, value) -> None:
+        self.value = None
+        self.name = None
+        self.enum_idx = idx
+
+        if isinstance(value, dict):
+            self.value = value['!value']
+            self.name = value['!name']
+        elif isinstance(value, str):
+            self.value = idx
+            self.name = value
+        else:
+            print("ERROR PARSING ENUM VALUE!!!")
+
+    def __repr__(self) -> str:
+        return str(self.name)
+
+
 class EnumType(TypeBase):
     def __init__(self) -> None:
-        self.values: list[str] = []
+        self.values: list[EnumValue] = []
+        self.is_valued = False
+        self.lookup = {}
 
     def parse_type(self, nativeval: any):
         assert isinstance(nativeval, list)
-        self.values = nativeval
+        self.values = [EnumValue(i, v) for i, v in enumerate(nativeval)]
+        self.is_valued = any([v.value != v.enum_idx for v in self.values])
+        self.lookup = {
+            v.name: v for v in self.values
+        }
         return self
 
     def __repr__(self) -> str:
-        return f"enum({', '.join(self.values)})"
+        return f"enum({', '.join([v.name for v in self.values])})"
 
     def parse_value(self, nativeval: any):
-        if not (isinstance(nativeval, str) and nativeval in self.values):
+        if not (isinstance(nativeval, str) and (nativeval in self.lookup)):
             return None
-        return nativeval
+        return self.lookup[nativeval].enum_idx
+
+    def get_value(self, enum_idx: int):
+        if (enum_idx < 0 or enum_idx >= len(self.values)):
+            return None
+        return self.values[enum_idx].value
+
+    # TODO: Make value converter functions!
 
 
 def get_type(t: any, customtypes={}):
@@ -334,7 +366,8 @@ def parse_configuration(file, root=""):
 
 
 if __name__ == "__main__":
-    c = parse_configuration(open("./tracker_config.jsonc"))
+    c = parse_configuration(
+        open("./configfiles/tracker_config.jsonc"), "./configfiles/")
     # print_tree(c)
     print("Values:")
     for v in flatten_config_values(c):

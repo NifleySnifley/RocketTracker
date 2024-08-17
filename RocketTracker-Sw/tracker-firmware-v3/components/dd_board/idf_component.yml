@@ -1,10 +1,6 @@
 ## IDF Component Manager Manifest File
 dependencies:
   espressif/led_strip: "^2.5.5"
-  espressif/eigen: "^3.4.0~2"
-  espressif/esp-dsp: "^1.4.12"
-  dernasherbrezon/sx127x: "^3.1.2"
-  igrr/libnmea: "^0.1.0"
   ## Required IDF version
   idf:
     version: ">=4.1.0"
