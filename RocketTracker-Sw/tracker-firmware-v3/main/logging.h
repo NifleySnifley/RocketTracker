@@ -35,6 +35,7 @@ typedef struct logger_t {
 
     QueueHandle_t log_queue;
     TaskHandle_t log_task;
+    SemaphoreHandle_t log_flash_sem;
 } logger_t;
 
 typedef enum logging_state_t {
@@ -95,12 +96,18 @@ typedef struct log_data_event_t {
     uint16_t argument;
 } log_data_event_t;
 
+typedef struct log_data_adc_t {
+    uint8_t channel;
+    int16_t value;
+} log_data_adc_t;
+
 typedef enum log_datatype_t {
     LOG_DTYPE_DATA_DEFAULT = 0, // log_data_default_t
     LOG_DTYPE_DATA_RAW = 1, // Bytes, variable length
     LOG_DTYPE_DATA_EVENT = 2, // log_data_event_t
     LOG_DTYPE_TEXT_LOG = 3, // Data from an ESP_LOGx function
     LOG_DTYPE_RADIORX = 4,
+    LOG_DTYPE_ADC = 5
 } log_datatype_t;
 
 // Instead of 0 being the delimiter, make 0xFF the delimiter!!
@@ -109,7 +116,7 @@ typedef enum log_datatype_t {
 // If variable-length data can be written to the log, 0xFF can be used as a delimiter, and 0xFFFF will then mark the start of erased areas
 
 // 1 <- DONE
-esp_err_t logger_init(logger_t* logger, esp_flash_t* flash);
+esp_err_t logger_init(logger_t* logger, esp_flash_t* flash, SemaphoreHandle_t log_flash_sem);
 // 3.75 <- DONE
 esp_err_t logger_refresh(logger_t* logger);
 

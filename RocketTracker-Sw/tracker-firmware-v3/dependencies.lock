@@ -29,6 +29,6 @@ dependencies:
     source:
       type: service
     version: 0.1.1
-manifest_hash: a816d13116ba9a0e45dfe5efb7224daba7f3d52d964a1269f8206531ae398b4d
+manifest_hash: e8c21d6e3d5dae631fbbb4d6d8c77a5aabe7e0733cbfcf81cb31e3c0f1e7a288
 target: esp32s3
 version: 1.0.0

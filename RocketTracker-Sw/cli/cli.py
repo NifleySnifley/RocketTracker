@@ -494,6 +494,7 @@ def log_download(args):
                 log = RTRKLog()
                 log.load_segments(segments)
                 args.outfile.write(log.data)
+                args.outfile.flush()
                 pass
 
             segments, ack = segments[:-1], segments[-1]
@@ -877,7 +878,7 @@ def set_configval(key, val):
     elif isinstance(parameter.type, StringType):
         pb.string_value = value
     elif isinstance(parameter.type, EnumType):
-        pb.enum_value = parameter.type.values.index(value)
+        pb.enum_value = value
 
     d.load_protobuf(pb)
 
@@ -1487,7 +1488,7 @@ def config_set(args):
     elif isinstance(parameter.type, StringType) or isinstance(parameter.type, EnumType):
         value = str(args.value)
     elif isinstance(parameter.type, BoolType):
-        value = bool(args.value)
+        value = strtobool(args.value)
     value = parameter.type.parse_value(value)
 
     if (value is None):
@@ -1599,7 +1600,7 @@ def get_configvals():
             elif (response.HasField("string_value")):
                 value = response.string_value
             elif (response.HasField("enum_value")):
-                value = CONFIG_LOOKUP[value_path].type.values[response.enum_value]
+                value = CONFIG_LOOKUP[value_path].type.values[response.enum_value].name
 
             # print(f"{value_path} = {value}")
             cfgdict[value_path] = value

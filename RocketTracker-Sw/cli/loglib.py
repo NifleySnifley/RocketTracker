@@ -231,10 +231,30 @@ class LogDataTextLog():
         return self.text
 
 
+class LogDataADCRaw(Structure):
+    _fields_ = [
+        ("channel", c_uint8),
+        ("value", c_int16),
+    ]
+
+
+class LogDataADC(Structure):
+    _fields_ = [
+        ("channel", c_uint8),
+        ("value", c_float),
+    ]
+
+    def __init__(self, data: LogDataADCRaw):
+        self.channel = data.channel
+        # ADC reading with 4.096v max scale
+        self.value = (data.value * 2.0) / 1000.0
+
+
 LOG_FRAMETYPE_TO_CLASS = {
     0: LogDataDefaultRaw,
     2: LogDataEventRaw,
-    3: LogDataTextLog
+    3: LogDataTextLog,
+    5: LogDataADCRaw
 }
 
 
@@ -254,9 +274,10 @@ class LogFrame():
                 data[10:])
             if isinstance(self.data, LogDataDefaultRaw):
                 self.data = LogDataDefault(self.data)
+            if isinstance(self.data, LogDataADCRaw):
+                self.data = LogDataADC(self.data)
         else:
-            print(f"Unknown frametype")
-            self.data = None
+            self.data = (None, dtype)
 
     def __str__(self) -> str:
         return f"{self.data} @ T{self.timestamp:+.2f}s"
@@ -331,7 +352,6 @@ class RTRKLog():
         frame_buckets = [[]]
 
         def split():
-            print("sp")
             frame_buckets.append([])
 
         clr = 0
@@ -345,13 +365,14 @@ class RTRKLog():
                     clr = 0
                 elif ev.event_type == LOGDATA_EVENT_STATE:
                     state, hz = ev.parse_state_argument()
-                    if clr != 0 and state in [LOGSTATE_LOGGING_STOPPED]:
+                    if clr != 0 and state == LOGSTATE_LOGGING_STOPPED:
                         split()
                     clr = hz
 
             frame_buckets[-1].append(f)
 
-        logs_out = [RTRKLog(fb) for fb in frame_buckets if len(fb)]
+        logs_out = [RTRKLog(fb) for fb in frame_buckets if len(
+            [f for f in fb if not (isinstance(f.data, LogDataEventRaw) and f.data.event_type == LOGDATA_EVENT_STATE)])]
         for l in logs_out:
             l.sort()
         return logs_out

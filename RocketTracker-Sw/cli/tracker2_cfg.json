@@ -49,7 +49,11 @@
         "acc_trans_lo": 15.5,
         "acc_trans_hi": 15.899999618530273,
         "altitude_stdev": 0.4339637756347656,
-        "vert_accel_stdev": 0.018984146416187286
+        "vert_accel_stdev": 0.018984146416187286,
+        "lsm6dsm_disable": false,
+        "adxl375_disable": false,
+        "lis3mdl_disable": false,
+        "LPS22_disable": false
     },
     "telemetry_divider": 5,
     "device_name": "tracker_2",
@@ -79,5 +83,11 @@
             "orientation": false,
             "world_acc": true
         }
+    },
+    "debug": {
+        "logging_mode": "LogMode_Expansion",
+        "logging_uart_baudrate": "Baud_115200",
+        "log_to_logmem": false,
+        "report_rtos_stats": false
     }
 }

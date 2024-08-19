@@ -74,7 +74,11 @@
         "i2c.h": "c",
         "semphr.h": "c",
         "dd_board.h": "c",
-        "tca6408.h": "c"
+        "tca6408.h": "c",
+        "protocol.pb.h": "c",
+        "esp_intr_alloc.h": "c",
+        "esp_memory_utils.h": "c",
+        "logging.h": "c"
     },
     "editor.tabSize": 4,
     "editor.insertSpaces": true,

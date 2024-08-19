@@ -1,5 +1,7 @@
 from hashlib import shake_128
 import base64
+import pathlib
+import sys
 
 
 def encode_key(k: str):
@@ -19,13 +21,18 @@ def pytype2ctype(value: any):
         return "bool"
 
 
+def slocalpath(p: str):
+    spath = pathlib.Path(sys.path[0])
+    return spath.joinpath(p).absolute()
+
+
 if __name__ == "__main__":
     from configparse import *
     from csnake import CodeWriter, Struct, Enum, Function, Variable, Typecast, FormattedLiteral
     from csnake.cconstructs import CFloatLiteral
 
     c = parse_configuration(
-        open("./configfiles/tracker_config.jsonc"), root="./configfiles/")
+        open(slocalpath("./configfiles/tracker_config.jsonc")), root=slocalpath("./configfiles/"))
 
     types = flatten_config_types(c)
     values = flatten_config_values(c)
@@ -66,8 +73,7 @@ if __name__ == "__main__":
 
             print(e.generate_declaration())
             cw.add_enum(e)
-            
-            
+
             # Value Converter function
             if (t.is_valued):
                 print(f"Valued enum! {tname}")
@@ -76,22 +82,26 @@ if __name__ == "__main__":
                     print("Error, mixed-value enums are not allowed!")
                 else:
                     valuetype = list(valuetype)[0]
-                    
+
                 print(valuetype)
-                fn = Function(f"{typename}_CONVERT", valuetype, qualifiers="static inline")
+                fn = Function(f"{typename}_CONVERT", valuetype,
+                              qualifiers="static inline")
                 fn.add_argument(Variable("enum_value", typename))
                 fncode = ["switch (enum_value) {"]
                 for e_val in t.values:
-                    realval = f"\"{e_val.value}\"" if isinstance(e_val.value, str) else e_val.value
-                    fncode.append(f"\tcase {e_val.enum_idx}: return {realval}; break;")
-                
+                    realval = f"\"{e_val.value}\"" if isinstance(
+                        e_val.value, str) else e_val.value
+                    fncode.append(
+                        f"\tcase {e_val.enum_idx}: return {realval}; break;")
+
                 defval = t.values[0].value
-                realval_def = f"\"{defval}\"" if isinstance(defval, str) else defval
+                realval_def = f"\"{defval}\"" if isinstance(
+                    defval, str) else defval
                 fncode.append(f"\tdefault: return {realval_def}; break;")
-                
+
                 fncode.append("}")
                 fn.add_code(fncode)
-                
+
                 cw.add_function_definition(fn)
             # print(basename)
 
@@ -177,4 +187,4 @@ if __name__ == "__main__":
 
     cw.add_line("#endif")
 
-    cw.write_to_file("./generated/config_generated.h")
+    cw.write_to_file(slocalpath("./generated/config_generated.h"))

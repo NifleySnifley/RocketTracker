@@ -2,6 +2,7 @@
 	"!name": "Configuration",
 	"radio": "!include(lora_radio_config.jsonc)",
 	"calibration": "!include(calibration_config.jsonc)",
+	"ddio": "!include(dd_config.jsonc)",
 	"sensors": {
 		"!name": "Sensor Settings",
 		"ahrs_no_mag": {

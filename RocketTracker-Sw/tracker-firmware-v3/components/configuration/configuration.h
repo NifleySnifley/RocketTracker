@@ -1,11 +1,11 @@
 #ifndef CONFIGURATION_H
 #define CONFIGURATION_H
 
+#include "stdint.h"
+#include "stdbool.h"
 #include "nvs.h"
 #include "esp_log.h"
 #include "config_generated.h"
-#include "fmgr.h"
-#include "protocol.pb.h"
 
 typedef struct config_provider_t {
     nvs_handle_t nvs;
@@ -43,11 +43,5 @@ esp_err_t config_set_enum(char* key_hash, int32_t val);
 
 void config_reset_to_default(int manifest_idx);
 bool config_is_set(char* key_hash);
-
-// Miscellany
-
-int config_convert_bandwidth(LoRa_Bandwidth_t bw);
-Config config_handle_request(Config* req, DatumTypeID* typeout);
-Config config_value_as_message(config_entry_t entry);
 
 #endif

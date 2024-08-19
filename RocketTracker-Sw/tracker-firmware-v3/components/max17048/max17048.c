@@ -9,6 +9,7 @@
 #include "driver/i2c_master.h"
 
 #include "MAX17048.h"
+#include "esp_log.h"
 
  /*============================================================================*/
 void MAX17048_Init(MAX17048_t* Obj, i2c_master_bus_handle_t bus) {
@@ -17,6 +18,9 @@ void MAX17048_Init(MAX17048_t* Obj, i2c_master_bus_handle_t bus) {
             .device_address = MAX17048_ADDR_SLAVE >> 1,
             .scl_speed_hz = 400000
     };
+
+    // Suppress stupid annoying I2C logs
+    esp_log_level_set("i2c.master", 0);
 
     ESP_ERROR_CHECK(i2c_master_bus_add_device(bus, &max17048_dev_config, &Obj->dev_handle));
 

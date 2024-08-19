@@ -18,6 +18,9 @@ adxl375_handle_t adxl;
 spi_device_handle_t adxl_device;
 TaskHandle_t adxl_int_handler;
 
+TaskHandle_t sensors_worker_task;
+esp_timer_handle_t sensor_timer;
+
 bool LIS3MDL_DISABLE = false;
 bool LSM6DSM_DISABLE = false;
 bool ADXL_DISABLE = false;
@@ -65,7 +68,8 @@ bool ahrs_no_magnetometer = false;
 float acc_transition_low = CONFIG_SENSORS_ACC_TRANS_LO_DEFAULT;
 float acc_transition_high = CONFIG_SENSORS_ACC_TRANS_LO_DEFAULT;
 
-void init_sensors() {
+void init_sensors(SemaphoreHandle_t mtx) {
+    sensors_mutex = mtx;
     // ADXL375 Calibration
     config_get_float(CONFIG_CALIBRATION_ADXL375_X_OFFSET_KEY, &adxl_acc_calib[0].offset);
     config_get_float(CONFIG_CALIBRATION_ADXL375_X_SCALE_KEY, &adxl_acc_calib[0].scale);
@@ -129,6 +133,16 @@ void init_sensors() {
     config_get_float(CONFIG_SENSORS_VERT_ACCEL_STDEV_KEY, &vertical_acceleration_stdev);
 
     altimetry_filter_init(&alt_filter, 1.0f / SENSOR_HZ, vertical_acceleration_stdev, altimetry_stdev);
+
+    xTaskCreatePinnedToCore(sensors_worker, "sensors_worker", 1024 * 4, NULL, 19, &sensors_worker_task, 0);
+
+    const esp_timer_create_args_t sensor_timer_args = {
+        .callback = &sensors_timer_cb,
+        .name = "sensors_routine"
+    };
+
+    ESP_ERROR_CHECK(esp_timer_create(&sensor_timer_args, &sensor_timer));
+    ESP_ERROR_CHECK(esp_timer_start_periodic(sensor_timer, 1000000 / SENSOR_HZ));
 }
 
 void init_sensor_spi() {
@@ -452,6 +466,18 @@ static float pressure_hPa_to_alt_m(float hPa) {
     return 44330.f * (1 - powf(hPa / 1013.25f, 0.190284f));
 }
 
+void sensors_timer_cb(void* arg) {
+    BaseType_t hpt_woken = pdFALSE;
+    xTaskNotifyFromISR(sensors_worker_task, 0, eNoAction, &hpt_woken);
+}
+
+void sensors_worker(void* arg) {
+    while (1) {
+        xTaskNotifyWait(0, 0, NULL, portMAX_DELAY);
+        sensors_routine(arg);
+    }
+}
+
 void sensors_routine(void* arg) {
     static uint32_t data_raw_pressure;
     static int16_t data_raw_magnetic[3];
@@ -461,7 +487,7 @@ void sensors_routine(void* arg) {
     // static int16_t data_raw_temperature;
 
 
-    if (xSemaphoreTake(sensors_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+    if (xSemaphoreTakeRecursive(sensors_mutex, pdMS_TO_TICKS(1)) == pdTRUE) {
 
         ///////////////////////// LPS22 /////////////////////////
         if (!LPS22_DISABLE) {
@@ -592,8 +618,8 @@ void sensors_routine(void* arg) {
                 memcpy(log_data.adxl_acc_raw, data_raw_acceleration_adxl, sizeof(data_raw_acceleration_adxl));
                 log_data.flags |= LOG_FLAG_ADXL_ACC_FRESH;
             }
-            xSemaphoreGive(sensors_mutex);
         }
+        xSemaphoreGive(sensors_mutex);
 
     }
 

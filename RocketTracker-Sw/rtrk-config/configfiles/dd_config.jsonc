@@ -1,0 +1,38 @@
+{
+	"!name": "Dual Deploy/IO Expansion Configuration",
+	"adc": {
+		"!name": "Analog Input Configuration",
+		"adc0_en": {
+			"!name": "Enable Analog Channel 0",
+			"!type": "bool",
+			"!default": false
+		},
+		"adc1_en": {
+			"!name": "Enable Analog Channel 1",
+			"!type": "bool",
+			"!default": false
+		},
+		"adc2_en": {
+			"!name": "Enable Analog Channel 2",
+			"!type": "bool",
+			"!default": false
+		},
+		"adc3_en": {
+			"!name": "Enable Analog Channel 3",
+			"!type": "bool",
+			"!default": false
+		},
+		// TODO: Option to follow normal logging rate (for autolog, etc.)
+		"rate": {
+			"!name": "Analog Sampling Rate",
+			"!suffix": "Hz",
+			"!type": "float(0.1, 256.0)",
+			"!default": 256.0
+		}
+	},
+	"brightness": {
+		"!name": "Indicator Light Brightness",
+		"!type": "int(0,255)",
+		"!default": 64
+	}
+}

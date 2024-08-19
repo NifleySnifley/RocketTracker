@@ -22,6 +22,8 @@
 #include "adxl375.h"
 #include "driver/ledc.h"
 #include "esp_app_desc.h"
+#include <inttypes.h>
+#include "driver/gptimer.h"
 
 #include "ubxlib.h"
 
@@ -48,6 +50,7 @@
 #include "prelog.h"
 
 #include "configuration.h"
+#include "configutils.h"
 // #include "config_generated.h"
 config_provider_t GLOBAL_CONFIG; // Define this here
 
@@ -92,6 +95,7 @@ esp_timer_handle_t flight_timer;
 esp_timer_handle_t log_led_timer;
 
 static SemaphoreHandle_t tl_spi_hold_sem;
+static SemaphoreHandle_t sensor_spi_sem;
 
 nvs_handle_t nvs_config_handle;
 
@@ -190,7 +194,7 @@ void link_decode_datum(int i, DatumTypeID id, int len, uint8_t* data, bool is_us
         resp.has_error = false;
 
         if (pb_decode(&istream, Command_EraseLog_fields, &cmd)) {
-            if (xSemaphoreTake(tl_spi_hold_sem, pdMS_TO_TICKS(1000)) == pdTRUE) {
+            if (xSemaphoreTakeRecursive(tl_spi_hold_sem, pdMS_TO_TICKS(1000)) == pdTRUE) {
                 telemetry_enable = false;
                 set_logstate(LOGSTATE_LOGGING_STOPPED, 0);
                 if (cmd.type == EraseType_Erase_Log) {
@@ -314,7 +318,7 @@ void link_decode_datum(int i, DatumTypeID id, int len, uint8_t* data, bool is_us
             if ((sensor_output_hz == 0) && (cmd.rate_hz > 0)) {
                 // Start
                 sensor_output_hz = cmd.rate_hz;
-                xTaskCreate(sensor_output_task, "sensor_output", 1024 * 4, NULL, 10, &sensor_output_task_handle);
+                xTaskCreate(sensor_output_task, "sensor_output", 1024 * 4, NULL, 8, &sensor_output_task_handle);
             } else if ((sensor_output_hz > 0) && (cmd.rate_hz <= 0)) {
                 // Stop
                 sensor_output_hz = 0;
@@ -339,7 +343,6 @@ void link_decode_datum(int i, DatumTypeID id, int len, uint8_t* data, bool is_us
             ESP_LOGW("LINK", "Error decoding Config");
         }
     } else if (id == DatumTypeID_CMD_ConfigEnumerate) {
-        // TODO: USB ONLY???
         telemetry_enable = false;
 
         int num = 0;
@@ -367,7 +370,7 @@ void link_decode_datum(int i, DatumTypeID id, int len, uint8_t* data, bool is_us
             .peripherals_count = 0
         };
 
-        char* appvers = esp_app_get_description()->version;
+        char* appvers = (char*)esp_app_get_description()->version;
         memcpy(info.fw_version, appvers, 32);
 
         if (config_is_set(CONFIG_DEVICE_NAME_KEY)) {
@@ -380,7 +383,7 @@ void link_decode_datum(int i, DatumTypeID id, int len, uint8_t* data, bool is_us
         }
 
         LogOutputMode_t mode = CONFIG_DEBUG_LOGGING_MODE_DEFAULT;
-        config_get_enum(CONFIG_DEBUG_LOGGING_MODE_KEY, &mode);
+        config_get_enum(CONFIG_DEBUG_LOGGING_MODE_KEY, (int32_t*)&mode);
         if (mode == LOGMODE_EXPANSION) {
             info.peripherals[info.peripherals_count++] = PeripheralType_ExpansionDebug;
         }
@@ -509,7 +512,7 @@ static void init_usb() {
     ESP_ERROR_CHECK(usb_serial_jtag_driver_install(&usb_serial_jtag_config));
     ESP_LOGI("USB", "USB_SERIAL_JTAG init done");
 
-    xTaskCreate(usb_receive_task, "usb_receive_task", 1024 * 4, NULL, 10, NULL);
+    xTaskCreate(usb_receive_task, "usb_receive_task", 1024 * 4, NULL, 8, NULL);
     ESP_LOGI("USB", "Created USB receiving task");
 }
 
@@ -674,9 +677,13 @@ static void log_timer_task() {
     if (e != ESP_OK) {
         ESP_LOGE("LOGGER", "Error logging data in timer task!");
         esp_timer_restart(log_led_timer, 1000000 / 16);
-
         // set_logstate(LOGSTATE_LOGGING_STOPPED, 0);
     }
+
+    if (dd_board_global != NULL) {
+        dd_board_log_now(dd_board_global);
+    }
+
     prelog_flush_some(&prelogger);
 }
 
@@ -765,7 +772,7 @@ static void init_logging() {
     ESP_ERROR_CHECK(esp_flash_read_id(ext_flash, &id));
     ESP_LOGI("FLASH", "Initialized external Flash, size=%" PRIu32 " KB, ID=0x%" PRIx32, ext_flash->size / 1024, id);
 
-    err = logger_init(&logger, ext_flash);
+    err = logger_init(&logger, ext_flash, tl_spi_hold_sem);
     if (err != ESP_OK) {
         ESP_LOGE("FLASH", "Failed to initialize logger.");
     }
@@ -782,10 +789,10 @@ static void init_logging() {
     };
 
     ESP_ERROR_CHECK(esp_timer_create(&logtimer_args, &logging_timer));
-    set_logstate(LOGSTATE_LOGGING_STOPPED, -1);
+    // set_logstate(LOGSTATE_LOGGING_STOPPED, -1);
 
     // Would need larger stack, but for now it's just using static buffers;
-    xTaskCreate(log_download_task, "log_dl_task", 1024 * 8, NULL, 11, &log_download_task_handle);
+    xTaskCreate(log_download_task, "log_dl_task", 1024 * 8, NULL, 9, &log_download_task_handle);
 
     // flight_timer = xTimerCreate("flight_timer", pdMS_TO_TICKS(1000 * LIFTOFF_DURATION), pdFALSE, (void*)0, flight_timer_callback);
     const esp_timer_create_args_t flight_timer_args = {
@@ -811,7 +818,6 @@ static void init_logging() {
     ESP_ERROR_CHECK(esp_timer_start_periodic(prelog_recording_timer, 1000000 / prelog_rate_hz));
 }
 
-// TODO: Make a special extension to the frame manager to reduce the amount of memcpys?
 static Resp_DownloadLog_Segment download_segment;
 static void log_download_task(void* arg) {
     // Log download:
@@ -882,10 +888,6 @@ static void log_download_task(void* arg) {
                     // TODO: wait for ack here, fail download on timeout!
                 }
 
-                // esp_task_wdt_reset();
-                // TODO: Feed the WDT during this task...
-                // Or maybe sleep a little bit during the flush...
-                // TODO: Properly feed WDT instead of sleep???
                 vTaskDelay(1);
                 n_segments++;
                 current_address += segment_length;
@@ -973,7 +975,7 @@ void radio_rx_callback_worker(void* args) {
             // ESP_ERROR_CHECK(sx127x_rx_get_frequency_error(device, &frequency_error));
 
             // xSemaphoreGive(radio_mutex);
-        xSemaphoreGive(tl_spi_hold_sem);
+        // xSemaphoreGive(tl_spi_hold_sem);
 
         fmgr_load_frame(&lora_incoming_fmgr, data, data_length);
         if (fmgr_check_crc(&lora_incoming_fmgr)) {
@@ -1094,14 +1096,14 @@ static void init_radio() {
     ESP_ERROR_CHECK(sx127x_set_opmod(SX127x_MODE_RX_CONT, SX127x_MODULATION_LORA, radio));
     // ESP_ERROR_CHECK(sx127x_set_opmod(SX127x_MODE_CAD, SX127x_MODULATION_LORA, radio));
 
-    BaseType_t task_code = xTaskCreatePinnedToCore(radio_handle_interrupt_task, "handle interrupt", 8196, radio, 3, &radio_handle_interrupt, xPortGetCoreID());
+    BaseType_t task_code = xTaskCreatePinnedToCore(radio_handle_interrupt_task, "handle interrupt", 8196, radio, 15, &radio_handle_interrupt, 0);
     if (task_code != pdPASS) {
         ESP_LOGE("RADIO", "Can't create task: %d", task_code);
         sx127x_destroy(radio);
         return;
     }
 
-    xTaskCreate(radio_rx_callback_worker, "radio_rx_worker", 1024 * 8, NULL, 4, NULL);
+    xTaskCreate(radio_rx_callback_worker, "radio_rx_worker", 1024 * 8, NULL, 7, NULL);
 
 
     gpio_reset_pin(PIN_RFM_D0);
@@ -1137,7 +1139,7 @@ static void init_radio() {
 // }
 
 static void radio_tx(uint8_t* data, int len) {
-    if (xSemaphoreTake(tl_spi_hold_sem, pdMS_TO_TICKS(5)) == pdTRUE) {
+    if (xSemaphoreTakeRecursive(tl_spi_hold_sem, pdMS_TO_TICKS(5)) == pdTRUE) {
         // How to not TX while RXing...
         if (xSemaphoreTake(lora_txdone_sem, pdMS_TO_TICKS(5000)) != pdTRUE) {
             ESP_LOGE("RADIO", "Transmit timed out (5sec). Attempting to continue.");
@@ -1181,33 +1183,29 @@ static void radio_tx(uint8_t* data, int len) {
 
 void start_autolog() {
     // This uses AC mode, expecting the rocket to be in steady-state (on the launch rod) when armed
-    xSemaphoreTake(sensors_mutex, portMAX_DELAY);
+    xSemaphoreTakeRecursive(sensor_spi_sem, portMAX_DELAY);
     adxl375_set_thresh_act(&adxl, LIFTOFF_ACC_THRESHOLD_G * 1000);
     adxl375_set_act_mode(&adxl, false, true, true, true);
+
+    // TODO: ONLY in configurable "forwards" axis (Z)
     adxl375_set_act_mode(&adxl, true, true, true, true);
     adxl375_enable_interrupts(&adxl, ADXL_INT_ACT);
-
-    // TODO: Determine acceptable inact threshold for flight phase detection
-    // FIXME: Inact might not work, because:
-    // - Falling can be 0g
-    // - Accelerometer will still have gravitational acceleration during landing
-    // Implement a solution in sensor_task that checks the deltas of acceleration values, if they are changing under the noise threshold, we're good
 
     // Probably want to switch it to AC mode because 
     // adxl375_set_inact_mode(&adxl, false, true, true, true);
     // adxl375_set_thresh_inact(&adxl, LAND_THRESHOLD_G * 1000);
     // adxl375_set_time_inact(&adxl, LAND_TIME);
-    xSemaphoreGive(sensors_mutex);
+    xSemaphoreGive(sensor_spi_sem);
 
     set_logstate(LOGSTATE_LOGGING_AUTO_ARMED, 0);
 }
 
 void stop_autolog() {
     if (esp_timer_is_active(flight_timer)) esp_timer_stop(flight_timer);
-    xSemaphoreTake(sensors_mutex, portMAX_DELAY);
+    xSemaphoreTakeRecursive(sensor_spi_sem, portMAX_DELAY);
     adxl375_set_act_mode(&adxl, false, false, false, false);
     adxl375_enable_interrupts(&adxl, 0);
-    xSemaphoreGive(sensors_mutex);
+    xSemaphoreGive(sensor_spi_sem);
 }
 
 // TODO: LOGSTATE_LOGGING_AUTO_FLIGHT -> LOGSTATE_LOGGING_AUTO_LANDED
@@ -1219,7 +1217,7 @@ static void flight_timer_callback(void* arg) {
 static void adxl_int_worker(void* arg) {
     while (1) {
         xTaskNotifyWait(0, 0, NULL, portMAX_DELAY);
-        xSemaphoreTake(sensors_mutex, portMAX_DELAY);
+        xSemaphoreTakeRecursive(sensor_spi_sem, portMAX_DELAY);
         // At ADXL ISR right now
         uint8_t intsrc;
         adxl375_get_int_source(&adxl, &intsrc);
@@ -1240,16 +1238,14 @@ static void adxl_int_worker(void* arg) {
                             .has_data = false
                     };
 
-                    // TODO: Make sure it's safe to flush here!
                     link_send_datum(DatumTypeID_INFO_Alert, Alert_fields, &alt);
                     link_flush();
                 }
                 break;
-                // TODO: Inact interrupt for LANDED?
             default:
                 break;
         }
-        xSemaphoreGive(sensors_mutex);
+        xSemaphoreGive(sensor_spi_sem);
     }
 }
 
@@ -1400,7 +1396,7 @@ static void init_gps_worker(void* arg) {
 }
 
 static void init_gps() {
-    xTaskCreate(&init_gps_worker, "gps_init_task", 1024 * 4, NULL, 10, NULL);
+    xTaskCreate(&init_gps_worker, "gps_init_task", 1024 * 4, NULL, 5, NULL);
 }
 
 static void battmon_task(void* arg) {
@@ -1425,8 +1421,6 @@ static void battmon_task(void* arg) {
         }
     }
 }
-
-esp_timer_handle_t sensor_timer;
 
 void DEBUG_send_float(char* name, char* suffix, float value) {
     DebugDataOutput message;
@@ -1636,22 +1630,21 @@ static void init_nvs() {
 }
 
 static void init_core1_task(void* arg) {
-    // TODO: Fix intr alloc error
     // If DD enabled
     if (true) {
         dd_board_global = (dd_board_t*)calloc(1, sizeof(dd_board_t));
-        esp_err_t e = dd_board_init(dd_board_global, PIN_EXP1, PIN_EXP2, PIN_EXP4, PIN_EXP3);
+        esp_err_t e = dd_board_init(dd_board_global, PIN_EXP1, PIN_EXP2, PIN_EXP4, PIN_EXP3, &logger);
         if (e != ESP_OK) {
-            ESP_LOGW("DD", "Error initializing board: %s", esp_err_to_name(e));
             free(dd_board_global);
             dd_board_global = NULL;
+        } else {
+            ESP_LOGI("DD", "Successfully initialized DDIO expansion");
         }
     }
     // TODO: Make sure it's OK to interoperate with the dual deploy board if it's in the other core (can I still call functions on it???)
 
-    while (1) {
-        vTaskDelay(portMAX_DELAY);
-    }
+    ESP_LOGI("SYS", "Initialize finished on CORE1");
+    vTaskDelete(NULL);
 }
 
 int debug_logging_logmem_vprintf(const char* fmt, va_list args) {
@@ -1662,18 +1655,41 @@ int debug_logging_logmem_vprintf(const char* fmt, va_list args) {
         return ret;
 
     logger_log_data_now(&logger, LOG_DTYPE_TEXT_LOG, (uint8_t*)buffer, strlen(buffer));
+    logger_flush(&logger);
 
     // Still STDOUT it...
     return vprintf(fmt, args);
     // return 0;
 }
 
+#if CONFIG_APPTRACE_SV_ENABLE
+
+// Allow full JTAG access by the debugger
+#define LINK_USB_DISABLED true
+
+#define SYSVIEW_EXAMPLE_SEND_EVENT_ID     0
+#define SYSVIEW_EXAMPLE_WAIT_EVENT_ID     1
+
+#define SYSVIEW_EXAMPLE_SEND_EVENT_START()  SEGGER_SYSVIEW_OnUserStart(SYSVIEW_EXAMPLE_SEND_EVENT_ID)
+#define SYSVIEW_EXAMPLE_SEND_EVENT_END(_val_)    SEGGER_SYSVIEW_OnUserStop(SYSVIEW_EXAMPLE_SEND_EVENT_ID)
+#define SYSVIEW_EXAMPLE_WAIT_EVENT_START()  SEGGER_SYSVIEW_OnUserStart(SYSVIEW_EXAMPLE_WAIT_EVENT_ID)
+#define SYSVIEW_EXAMPLE_WAIT_EVENT_END(_val_)    SEGGER_SYSVIEW_OnUserStop(SYSVIEW_EXAMPLE_WAIT_EVENT_ID)
+
+#else
+
+#define SYSVIEW_EXAMPLE_SEND_EVENT_START()
+#define SYSVIEW_EXAMPLE_SEND_EVENT_END(_val_)
+#define SYSVIEW_EXAMPLE_WAIT_EVENT_START()
+#define SYSVIEW_EXAMPLE_WAIT_EVENT_END(_val_)
+
+#endif // CONFIG_APPTRACE_SV_ENABLE
+
 void app_main(void) {
     gpio_install_isr_service(0);
 
     fmgr_mutex = xSemaphoreCreateRecursiveMutex();
-    tl_spi_hold_sem = xSemaphoreCreateMutex();
-    sensors_mutex = xSemaphoreCreateMutex();
+    tl_spi_hold_sem = xSemaphoreCreateRecursiveMutex();
+    sensor_spi_sem = xSemaphoreCreateRecursiveMutex();
 
     fmgr_init(&lora_outgoing_fmgr, 255);
     fmgr_init(&lora_incoming_fmgr, 255);
@@ -1706,13 +1722,13 @@ void app_main(void) {
     init_logging();
     if (log_to_memory) {
         esp_log_set_vprintf(debug_logging_logmem_vprintf);
+        ESP_LOGI("SYS", "Logging to log memory");
     }
 
+#ifndef LINK_USB_DISABLED
     init_usb();
+#endif
 
-    // TODO: Set default values if neccesary!!
-    // Reboot will be required to set configuration!!
-    // Make a sub-app that is a pop-out window from the telemetry app that allows configuration
     // TODO: Maybe in the future allow hot-reloading (or just quick-reboot) and changing of config over-the-air with LoRa
 
     init_leds();
@@ -1726,7 +1742,7 @@ void app_main(void) {
     config_get_bool(CONFIG_SENSORS_LSM6DSM_DISABLE_KEY, &LSM6DSM_DISABLE);
     config_get_bool(CONFIG_SENSORS_LPS22_DISABLE_KEY, &LPS22_DISABLE);
 
-    xTaskCreate(adxl_int_worker, "adxl_int", 1024 * 4, NULL, 2, &adxl_int_handler);
+    xTaskCreate(adxl_int_worker, "adxl_int", 1024 * 4, NULL, 20, &adxl_int_handler);
     if (!ADXL_DISABLE) {
         ESP_LOGI("SYS", "Initializing ADXL375");
         init_adxl375(&adxl_int_handler);
@@ -1744,14 +1760,14 @@ void app_main(void) {
         init_lps22();
     }
 
-    init_sensors();
+    init_sensors(sensor_spi_sem);
 
     init_gps();
 
-    xTaskCreatePinnedToCore(init_core1_task, "core1 init", 1024 * 4, NULL, 11, NULL, 1);
+    xTaskCreatePinnedToCore(init_core1_task, "core1 init", 1024 * 4, NULL, 5, NULL, 1);
 
     // Stack overflowing... when no battery...
-    xTaskCreate(battmon_task, "battmon_task", 4 * 1024, NULL, 10, NULL);
+    xTaskCreate(battmon_task, "battmon_task", 4 * 1024, NULL, 6, NULL);
 
     // Log the boot, also log sensor disabilities
     log_data_event_t* logevent = (log_data_event_t*)calloc(1, sizeof(log_data_event_t));
@@ -1763,17 +1779,9 @@ void app_main(void) {
     bool debug_mon_on;
     config_get_bool(CONFIG_MISC_DEBUG_MONITOR_EN_KEY, &debug_mon_on);
     if (debug_mon_on)
-        xTaskCreate(DEBUG_output_task, "debug_task", 4 * 1024, NULL, 10, NULL);
+        xTaskCreate(DEBUG_output_task, "debug_task", 4 * 1024, NULL, 8, NULL);
 
     xTaskCreate(telemetry_tx_task, "telemetry_tx_task", 4 * 1024, NULL, 10, &telemetry_task);
-
-    const esp_timer_create_args_t sensor_timer_args = {
-        .callback = &sensors_routine,
-        .name = "sensors_routine"
-    };
-
-    ESP_ERROR_CHECK(esp_timer_create(&sensor_timer_args, &sensor_timer));
-    ESP_ERROR_CHECK(esp_timer_start_periodic(sensor_timer, 1000000 / SENSOR_HZ));
 
     const esp_timer_create_args_t pps_timer_args = {
         .callback = &once_per_second,
@@ -1789,9 +1797,14 @@ void app_main(void) {
 
     while (1) {
         if (rtos_runtime_stats_en) {
-            // vTaskGetRunTimeStats();
+            int ntasks = uxTaskGetNumberOfTasks();
+            char* stats_buffer = (char*)malloc((ntasks + 2) * 40);
+            vTaskGetRunTimeStats(stats_buffer);
+            ESP_LOGI("SYS", "FreeRTOS Runtime stats:\n\n%s", stats_buffer);
+            esp_timer_dump(stdout);
+
             // TODO: Implement!
-            vTaskDelay(2000);
+            vTaskDelay(1000);
         } else {
             vTaskDelay(portMAX_DELAY);
         }

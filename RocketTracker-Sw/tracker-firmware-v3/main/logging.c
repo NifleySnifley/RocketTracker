@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include "sys/time.h"
 #include "configuration.h"
+#include "esp_check.h"
 
 
 int32_t LOG_HZ_AUTO_ARMED = 10;
@@ -54,7 +55,8 @@ void logger_task(void* arg) {
     }
 }
 
-esp_err_t logger_init(logger_t* logger, esp_flash_t* flash) {
+esp_err_t logger_init(logger_t* logger, esp_flash_t* flash, SemaphoreHandle_t sem) {
+    logger->log_flash_sem = sem;
     logger->ext_flash = flash;
 
     esp_err_t e = esp_partition_register_external(
@@ -118,7 +120,7 @@ esp_err_t logger_init(logger_t* logger, esp_flash_t* flash) {
     }
 
     // Create the logger task
-    xTaskCreate(logger_task, "logger_task", 1024 * 4, logger, 10, &logger->log_task);
+    xTaskCreate(logger_task, "logger_task", 1024 * 4, logger, 18, &logger->log_task);
 
     config_get_int(CONFIG_LOGGING_LIFTOFF_LOGRATE_KEY, &LOG_HZ_AUTO_LIFTOFF);
     config_get_int(CONFIG_LOGGING_FLIGHT_LOGRATE_KEY, &LOG_HZ_AUTO_FLIGHT);
@@ -135,14 +137,23 @@ esp_err_t logger_read_bytes_raw(logger_t* logger, size_t start_address, size_t s
         return ESP_ERR_INVALID_ARG;
     }
 
-    return esp_partition_read_raw(logger->log_partition, start_address, buffer, size);
+    ESP_RETURN_ON_FALSE(xSemaphoreTakeRecursive(logger->log_flash_sem, portMAX_DELAY) == pdPASS, ESP_ERR_TIMEOUT, "LOGGER", "Error acquiring flash lock for log raw read");
+    esp_err_t e = esp_partition_read_raw(logger->log_partition, start_address, buffer, size);
+    xSemaphoreGive(logger->log_flash_sem);
+
+    return e;
 }
 
 esp_err_t logger_write_bytes_raw(logger_t* logger, size_t start_address, size_t data_length, uint8_t* data) {
     if (start_address + data_length > LOG_MEMORY_SIZE_B) {
         return ESP_ERR_INVALID_ARG;
     }
-    return esp_partition_write_raw(logger->log_partition, start_address, data, data_length);
+
+    ESP_RETURN_ON_FALSE(xSemaphoreTakeRecursive(logger->log_flash_sem, portMAX_DELAY) == pdPASS, ESP_ERR_TIMEOUT, "LOGGER", "Error acquiring flash lock for log raw write");
+    esp_err_t e = esp_partition_write_raw(logger->log_partition, start_address, data, data_length);
+    xSemaphoreGive(logger->log_flash_sem);
+
+    return e;
 }
 
 size_t logger_get_current_log_size(logger_t* logger) {
@@ -158,6 +169,8 @@ esp_err_t logger_erase_log(logger_t* logger) {
     if (logger_get_current_log_size(logger) <= 0) {
         return ESP_ERR_NOT_ALLOWED;
     }
+
+    ESP_RETURN_ON_FALSE(xSemaphoreTakeRecursive(logger->log_flash_sem, portMAX_DELAY) == pdPASS, ESP_ERR_TIMEOUT, "LOGGER", "Error acquiring flash lock for log erase");
 
     esp_err_t e = ESP_OK;
 
@@ -181,19 +194,26 @@ esp_err_t logger_erase_log(logger_t* logger) {
 
     // Start new ringbuffer where it last ended
     logger->log_start_address = logger->log_end_address;
+
+    xSemaphoreGive(logger->log_flash_sem);
     logger_flush(logger);
 
     return e;
 }
 
 esp_err_t logger_clean_log(logger_t* logger) {
+    ESP_RETURN_ON_FALSE(xSemaphoreTakeRecursive(logger->log_flash_sem, portMAX_DELAY) == pdPASS, ESP_ERR_TIMEOUT, "LOGGER", "Error acquiring flash lock for log clean");
+
     esp_err_t e = esp_partition_erase_range(logger->log_partition, 0, (LOG_MEMORY_SIZE_B / LOG_FLASH_SECTOR_SIZE + 1) * LOG_FLASH_SECTOR_SIZE);
     if (e != ESP_OK) {
+        xSemaphoreGive(logger->log_flash_sem);
         return e;
     }
     logger->log_start_address = 0;
     logger->log_end_address = 0;
     e = logger_flush(logger);
+
+    xSemaphoreGive(logger->log_flash_sem);
     return e;
 }
 
@@ -209,6 +229,8 @@ esp_err_t logger_refresh(logger_t* logger) {
         cur_end_address = LOG_MEMORY_SIZE_B;
     }
 
+    ESP_RETURN_ON_FALSE(xSemaphoreTakeRecursive(logger->log_flash_sem, portMAX_DELAY) == pdPASS, ESP_ERR_TIMEOUT, "LOGGER", "Error acquiring flash lock for log raw read");
+
     uint8_t lastb;
     bool lastb_set = false;
     bool done = false;
@@ -217,7 +239,10 @@ esp_err_t logger_refresh(logger_t* logger) {
     while (!done) {
         int tmp_len = min(sizeof(logger_tmp_buffer), LOG_MEMORY_SIZE_B - cur_end_address);
         esp_err_t e = logger_read_bytes_raw(logger, cur_end_address, tmp_len, logger_tmp_buffer);
-        if (e != ESP_OK) return e;
+        if (e != ESP_OK) {
+            xSemaphoreGive(logger->log_flash_sem);
+            return e;
+        }
         // ESP_LOGI("LOGGER", "Refresh read %d bytes starting at address %d.", tmp_len, cur_end_address);
         // ESP_LOG_BUFFER_HEX("LOGREFRESH", logger_tmp_buffer, tmp_len);
 
@@ -252,6 +277,7 @@ esp_err_t logger_refresh(logger_t* logger) {
         vTaskDelay(1);
     }
 
+
     if (done) {
         logger->log_end_address = cur_end_address;
         ESP_LOGI("LOGGER", "Refreshed log status, log_end_address = %d", logger->log_end_address);
@@ -259,8 +285,9 @@ esp_err_t logger_refresh(logger_t* logger) {
         ESP_LOGW("LOGGER", "No result from refresh!");
     }
 
+    xSemaphoreGive(logger->log_flash_sem);
+
     return logger_flush(logger);
-    return ESP_OK;
 }
 
 esp_err_t logger_queue_log_data_now(logger_t* logger, log_datatype_t typeid, uint8_t* data_allocd, size_t data_length) {
@@ -275,8 +302,12 @@ esp_err_t logger_queue_log_data(logger_t* logger, log_datatype_t typeid, uint8_t
         .data = data_allocd,
         .typeid = typeid
     };
-    // TODO: Not max delay...
-    xQueueSend(logger->log_queue, &req, portMAX_DELAY);
+
+    if (xQueueSend(logger->log_queue, &req, pdMS_TO_TICKS(5)) != pdPASS) {
+        ESP_LOGE("LOGGER", "Unable to write queue!");
+        free(req.data);
+        return ESP_ERR_TIMEOUT;
+    }
     return ESP_OK;
 }
 
@@ -347,48 +378,14 @@ esp_err_t logger_log_data(logger_t* logger, log_datatype_t typeid, uint8_t* data
         return ESP_ERR_NO_MEM;
     }
 
-    // Encode timestamp
-    // for (int i = 0; i < sizeof(timestamp); ++i) {
-    //     uint8_t b = ts_bytes[i];
-    //     if (buf_idx + 2 > log_cobs_buf_size) {
-    //         return ESP_ERR_NO_MEM;
-    //     }
-
-    //     if (b == 0xFF) {
-    //         log_cobs_buf[buf_idx++] = LOGGER_COBS_ESC;
-    //         log_cobs_buf[buf_idx++] = LOGGER_COBS_ESC_FF;
-    //     } else if (b == 0xAA) {
-    //         log_cobs_buf[buf_idx++] = LOGGER_COBS_ESC;
-    //         log_cobs_buf[buf_idx++] = LOGGER_COBS_ESC_AA;
-    //     } else {
-    //         log_cobs_buf[buf_idx++] = b;
-    //     }
-    // }
-
-    // // Encode data payload
-    // for (int i = 0; i < data_length; ++i) {
-    //     uint8_t b = data[i];
-    //     if (buf_idx + 2 > log_cobs_buf_size) {
-    //         return ESP_ERR_NO_MEM;
-    //     }
-
-    //     if (b == 0xFF) {
-    //         log_cobs_buf[buf_idx++] = LOGGER_COBS_ESC;
-    //         log_cobs_buf[buf_idx++] = LOGGER_COBS_ESC_FF;
-    //     } else if (b == 0xAA) {
-    //         log_cobs_buf[buf_idx++] = LOGGER_COBS_ESC;
-    //         log_cobs_buf[buf_idx++] = LOGGER_COBS_ESC_AA;
-    //     } else {
-    //         log_cobs_buf[buf_idx++] = b;
-    //     }
-    // }
-
     // Frame spacer!
     log_cobs_buf[buf_idx++] = 0xFF;
 
     // DONE: Write to flash "ring buffer"
     size_t write_len = buf_idx;
 
+
+    ESP_RETURN_ON_FALSE(xSemaphoreTakeRecursive(logger->log_flash_sem, portMAX_DELAY) == pdPASS, ESP_ERR_TIMEOUT, "LOGGER", "Error acquiring flash lock for log write");
     size_t end_ptr = (logger->log_end_address + write_len + 1) % LOG_MEMORY_SIZE_B;
     bool wrapped = end_ptr < logger->log_end_address;
     bool unable_to_write = false;
@@ -401,6 +398,7 @@ esp_err_t logger_log_data(logger_t* logger, log_datatype_t typeid, uint8_t* data
     }
     if (unable_to_write) {
         ESP_LOGW("LOGGER", "Error, unable to write!");
+        xSemaphoreGive(logger->log_flash_sem);
         return ESP_ERR_NO_MEM;
     }
 
@@ -425,9 +423,7 @@ esp_err_t logger_log_data(logger_t* logger, log_datatype_t typeid, uint8_t* data
         logger->log_end_address = bytes_from_start;
     }
 
-    // logger_flush(logger);
-
-    // Don't flush!
+    xSemaphoreGive(logger->log_flash_sem);
 
     return ESP_OK;
 }

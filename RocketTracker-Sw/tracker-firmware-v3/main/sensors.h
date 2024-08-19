@@ -33,6 +33,9 @@ extern adxl375_handle_t adxl;
 extern spi_device_handle_t adxl_device;
 extern TaskHandle_t adxl_int_handler;
 
+extern TaskHandle_t sensors_worker_task;
+extern esp_timer_handle_t sensor_timer;
+
 extern volatile float pressure_hPa;
 extern volatile float magnetic_mG[3];
 extern volatile float acceleration_g[3];
@@ -54,9 +57,6 @@ extern bool LSM6DSM_DISABLE;
 extern bool ADXL_DISABLE;
 extern bool LPS22_DISABLE;
 
-
-extern SemaphoreHandle_t sensors_mutex;
-
 extern FusionAhrs ahrs;
 extern volatile float altitude_m;
 extern volatile float v_speed_m_s;
@@ -74,8 +74,11 @@ void init_lps22();
 void init_lis3mdl();
 void init_lsm6dsm();
 void init_adxl375(TaskHandle_t* interrupt_task);
+
+void sensors_timer_cb(void* arg);
+void sensors_worker(void* arg);
 void sensors_routine(void* arg);
 
-void init_sensors();
+void init_sensors(SemaphoreHandle_t sem);
 
 #endif
