@@ -30,6 +30,34 @@
 			"!default": 256.0
 		}
 	},
+	"pyro": {
+		"!name": "Pyro Channel Configuration",
+		"pyro0_en": {
+			"!name": "Enable Pyro Channel 0",
+			"!type": "bool",
+			"!default": false
+		},
+		"pyro1_en": {
+			"!name": "Enable Pyro Channel 1",
+			"!type": "bool",
+			"!default": false
+		},
+		"pyro2_en": {
+			"!name": "Enable Pyro Channel 2",
+			"!type": "bool",
+			"!default": false
+		},
+		"pyro3_en": {
+			"!name": "Enable Pyro Channel 3",
+			"!type": "bool",
+			"!default": false
+		},
+		"cont_rate": {
+			"!name": "Pyro continuity checking rate",
+			"!type": "float(0.1, 50.0)",
+			"!default": 10.0
+		}
+	},
 	"brightness": {
 		"!name": "Indicator Light Brightness",
 		"!type": "int(0,255)",

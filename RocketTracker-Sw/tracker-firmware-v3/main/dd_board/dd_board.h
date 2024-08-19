@@ -9,9 +9,11 @@
 #include "esp_timer.h"
 #include "configuration.h"
 #include "logging.h"
+#include "protocol.pb.h"
 
 #include "tca6408.h"
 #include "tla2024.h"
+#include "pca9633.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -25,25 +27,39 @@
 #define TCA_PIN_PYRO_4_CTL 6
 #define TCA_PIN_PYRO_4_STAT 7
 
+typedef struct dd_pwm_gen_ctx_t {
+    void* board;
+    int channel;
+} dd_pwm_gen_ctx_t;
 typedef struct dd_board_t {
     led_strip_handle_t leds;
     int32_t led_brightness;
 
     i2c_master_bus_handle_t i2c;
+    SemaphoreHandle_t i2c_lock;
+
     TCA6408_t pyro_expander;
+    bool pyro_continuity[4];
+    bool pyro_enabled[4];
+    float pyro_hz;
+
     TLA2024_t adc;
-
-    uint16_t adc_channel_reading[4]; // read by adc_reader_task at a configurable rate up to 1100Hz???? wow that fast.
-    // TODO: How to allow multicore processing of sensor fresh... this is a BAD situation
+    uint16_t adc_channel_reading[4];
     EventGroupHandle_t adc_reading_fresh;
-
     TaskHandle_t adc_reader_task;
     float adc_hz;
     bool adc_channel_enabled[4];
     int adc_num_channels_enabled;
-
-
     esp_timer_handle_t adc_timer;
+
+
+    PCA9633_t pwm_expander;
+    esp_timer_handle_t pwm_50Hz_timer;
+    esp_timer_handle_t pwm_timers[4];
+    dd_pwm_gen_ctx_t pwm_timer_ctx[5];
+    int pwm_channel_setting_us[4];
+    TaskHandle_t pwm_gen_task_handle;
+
 
     TaskHandle_t task_handle;
 
@@ -69,7 +85,9 @@ esp_err_t dd_board_init(dd_board_t* board, gpio_num_t pin_leds, gpio_num_t pin_s
 void dd_board_set_indicator_rgb(dd_board_t* board, int indicator, uint8_t red, uint8_t green, uint8_t blue);
 void dd_board_set_indicator_color(dd_board_t* board, int indicator, led_color_t color);
 
+
 /// Call this from the global logging function
 void dd_board_log_now(dd_board_t* board);
+DDSensorData dd_board_get_data_report(dd_board_t* board);
 
 #endif

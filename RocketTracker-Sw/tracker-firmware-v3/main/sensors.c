@@ -138,7 +138,8 @@ void init_sensors(SemaphoreHandle_t mtx) {
 
     const esp_timer_create_args_t sensor_timer_args = {
         .callback = &sensors_timer_cb,
-        .name = "sensors_routine"
+        .name = "sensors_routine",
+        .dispatch_method = ESP_TIMER_ISR
     };
 
     ESP_ERROR_CHECK(esp_timer_create(&sensor_timer_args, &sensor_timer));
@@ -466,14 +467,17 @@ static float pressure_hPa_to_alt_m(float hPa) {
     return 44330.f * (1 - powf(hPa / 1013.25f, 0.190284f));
 }
 
-void sensors_timer_cb(void* arg) {
+void IRAM_ATTR sensors_timer_cb(void* arg) {
     BaseType_t hpt_woken = pdFALSE;
     xTaskNotifyFromISR(sensors_worker_task, 0, eNoAction, &hpt_woken);
+    if (hpt_woken) esp_timer_isr_dispatch_need_yield();
 }
 
 void sensors_worker(void* arg) {
     while (1) {
-        xTaskNotifyWait(0, 0, NULL, portMAX_DELAY);
+        if (xTaskNotifyWait(0, 0, NULL, pdMS_TO_TICKS(10)) != pdPASS) {
+            ESP_LOGW("SENSORS", "Not running at timer speed: %d", esp_timer_is_active(sensor_timer));
+        }
         sensors_routine(arg);
     }
 }
@@ -620,7 +624,8 @@ void sensors_routine(void* arg) {
             }
         }
         xSemaphoreGive(sensors_mutex);
-
+    } else {
+        ESP_LOGW("SENSORS", "Failed");
     }
 
     FusionVector gyro, accel, mag;

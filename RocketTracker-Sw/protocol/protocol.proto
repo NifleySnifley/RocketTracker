@@ -239,6 +239,26 @@ message Command_ConfigSensorOutput {
     required uint32 rate_hz = 1;
     required bool raw = 2;
 }
+
+message DDADCData {
+    optional float ch0 = 1;
+    optional float ch1 = 2;
+    optional float ch2 = 3;
+    optional float ch3 = 4;
+}
+
+message DDPyroStatus {
+    optional bool ch0_cont = 1;
+    optional bool ch1_cont = 2;
+    optional bool ch2_cont = 3;
+    optional bool ch3_cont = 4;
+}
+
+message DDSensorData {
+    required DDADCData adc = 1;
+    required DDPyroStatus pyros = 2;
+}
+
 message SensorData {
     repeated float lsm_acceleration_g = 1;
     repeated float lsm_gyro_dps = 2;
@@ -249,6 +269,8 @@ message SensorData {
 
     optional Quaternion filtered_orientation = 6;
     optional Altitude filtered_altimetry = 7;
+
+    optional DDSensorData dd_data = 9;
 }
 
 message DebugDataOutput {

@@ -1103,7 +1103,7 @@ static void init_radio() {
         return;
     }
 
-    xTaskCreate(radio_rx_callback_worker, "radio_rx_worker", 1024 * 8, NULL, 7, NULL);
+    xTaskCreate(radio_rx_callback_worker, "radio_rx_worker", 1024 * 8, NULL, 9, NULL);
 
 
     gpio_reset_pin(PIN_RFM_D0);
@@ -1547,7 +1547,9 @@ static void telemetry_tx_task(void* arg) {
 
 static void sensor_output_task(void* arg) {
     while (1) {
-        SensorData data;
+        SensorData data = {
+            .has_dd_data = false
+        };
 
         // Raw option mostly for calibration reasons!
         if (sensor_output_raw) {
@@ -1581,6 +1583,12 @@ static void sensor_output_task(void* arg) {
         data.filtered_altimetry.alt_m = altitude_m;
         data.filtered_altimetry.v_speed = v_speed_m_s;
         data.filtered_altimetry.has_v_speed = true;
+
+        // Add DD data
+        if (dd_board_global != NULL) {
+            data.has_dd_data = true;
+            data.dd_data = dd_board_get_data_report(dd_board_global);
+        }
 
         if (USB_AVAILABLE) {
             link_send_datum(DatumTypeID_INFO_SensorData, SensorData_fields, &data);

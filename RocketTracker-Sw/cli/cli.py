@@ -813,6 +813,19 @@ def sensormon(args):
                 stdscr.addstr(
                     8, 0, f"Filtered V-Speed (m/s): {pb.filtered_altimetry.v_speed:9.4f}")
 
+            if (pb.HasField('dd_data')):
+                adc_readings = [
+                    d.to_dict()['dd_data']['adc'].get(f"ch{n}", None) for n in range(4)
+                ]
+                pyro_conts = [
+                    d.to_dict()['dd_data']['pyros'].get(f"ch{n}_cont", None) for n in range(4)
+                ]
+
+                stdscr.addstr(
+                    9, 0, f"[DD] Pyro Continuity: {str(pyro_conts)}")
+                stdscr.addstr(
+                    10, 0, f"[DD] Analog Channels (mV): {str(adc_readings)}")
+
             stdscr.refresh()
             if (args.log):
                 args.log.writelines([f"{d.to_dict()}\n"])
