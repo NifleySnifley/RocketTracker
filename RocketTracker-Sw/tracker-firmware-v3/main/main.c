@@ -1670,28 +1670,6 @@ int debug_logging_logmem_vprintf(const char* fmt, va_list args) {
     // return 0;
 }
 
-#if CONFIG_APPTRACE_SV_ENABLE
-
-// Allow full JTAG access by the debugger
-#define LINK_USB_DISABLED true
-
-#define SYSVIEW_EXAMPLE_SEND_EVENT_ID     0
-#define SYSVIEW_EXAMPLE_WAIT_EVENT_ID     1
-
-#define SYSVIEW_EXAMPLE_SEND_EVENT_START()  SEGGER_SYSVIEW_OnUserStart(SYSVIEW_EXAMPLE_SEND_EVENT_ID)
-#define SYSVIEW_EXAMPLE_SEND_EVENT_END(_val_)    SEGGER_SYSVIEW_OnUserStop(SYSVIEW_EXAMPLE_SEND_EVENT_ID)
-#define SYSVIEW_EXAMPLE_WAIT_EVENT_START()  SEGGER_SYSVIEW_OnUserStart(SYSVIEW_EXAMPLE_WAIT_EVENT_ID)
-#define SYSVIEW_EXAMPLE_WAIT_EVENT_END(_val_)    SEGGER_SYSVIEW_OnUserStop(SYSVIEW_EXAMPLE_WAIT_EVENT_ID)
-
-#else
-
-#define SYSVIEW_EXAMPLE_SEND_EVENT_START()
-#define SYSVIEW_EXAMPLE_SEND_EVENT_END(_val_)
-#define SYSVIEW_EXAMPLE_WAIT_EVENT_START()
-#define SYSVIEW_EXAMPLE_WAIT_EVENT_END(_val_)
-
-#endif // CONFIG_APPTRACE_SV_ENABLE
-
 void app_main(void) {
     gpio_install_isr_service(0);
 
@@ -1733,9 +1711,7 @@ void app_main(void) {
         ESP_LOGI("SYS", "Logging to log memory");
     }
 
-#ifndef LINK_USB_DISABLED
     init_usb();
-#endif
 
     // TODO: Maybe in the future allow hot-reloading (or just quick-reboot) and changing of config over-the-air with LoRa
 

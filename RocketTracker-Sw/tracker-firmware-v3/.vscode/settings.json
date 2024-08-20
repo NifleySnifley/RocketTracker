@@ -78,7 +78,14 @@
         "protocol.pb.h": "c",
         "esp_intr_alloc.h": "c",
         "esp_memory_utils.h": "c",
-        "logging.h": "c"
+        "logging.h": "c",
+        "charconv": "c",
+        "optional": "c",
+        "ratio": "c",
+        "system_error": "c",
+        "tuple": "c",
+        "type_traits": "c",
+        "utility": "c"
     },
     "editor.tabSize": 4,
     "editor.insertSpaces": true,

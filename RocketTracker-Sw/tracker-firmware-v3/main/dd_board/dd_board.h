@@ -13,7 +13,6 @@
 
 #include "tca6408.h"
 #include "tla2024.h"
-#include "pca9633.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -27,10 +26,6 @@
 #define TCA_PIN_PYRO_4_CTL 6
 #define TCA_PIN_PYRO_4_STAT 7
 
-typedef struct dd_pwm_gen_ctx_t {
-    void* board;
-    int channel;
-} dd_pwm_gen_ctx_t;
 typedef struct dd_board_t {
     led_strip_handle_t leds;
     int32_t led_brightness;
@@ -51,15 +46,6 @@ typedef struct dd_board_t {
     bool adc_channel_enabled[4];
     int adc_num_channels_enabled;
     esp_timer_handle_t adc_timer;
-
-
-    PCA9633_t pwm_expander;
-    esp_timer_handle_t pwm_50Hz_timer;
-    esp_timer_handle_t pwm_timers[4];
-    dd_pwm_gen_ctx_t pwm_timer_ctx[5];
-    int pwm_channel_setting_us[4];
-    TaskHandle_t pwm_gen_task_handle;
-
 
     TaskHandle_t task_handle;
 

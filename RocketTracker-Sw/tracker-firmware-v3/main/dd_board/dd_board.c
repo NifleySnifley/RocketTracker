@@ -4,87 +4,6 @@
 #include "esp_check.h"
 #include "configutils.h"
 
-#define GREEN_DEBUG ((gpio_num_t)44)
-static bool GREEN_DEBUG_STATE = false;
-
-static void IRAM_ATTR dd_pwm_generation_timer_cb(void* arg) {
-    dd_pwm_gen_ctx_t* ctx = (dd_pwm_gen_ctx_t*)arg;
-    BaseType_t hpt_woken;
-    gpio_set_level(GREEN_DEBUG, 1);
-    xTaskNotifyFromISR(((dd_board_t*)ctx->board)->pwm_gen_task_handle, ctx->channel + 1, eSetValueWithOverwrite, &hpt_woken);
-    if (hpt_woken) esp_timer_isr_dispatch_need_yield();
-
-    // Version 2
-}
-
-static void dd_pwm_generation_task(void* arg) {
-    // Need IRAM??
-    dd_board_t* board = (dd_board_t*)arg;
-    uint8_t ldr_state = 0b01010101;
-
-    while (1) {
-        BaseType_t notval;
-        // Get notified by 50Hz timer
-        xTaskNotifyWait(0, ULONG_MAX, &notval, portMAX_DELAY);
-
-
-        if (notval == 0) {
-            // Notification = 0 -> Levels high
-            ldr_state = 0;//0b01010101 & ~((uint8_t)((uint16_t)(1 << (channel * 2)) & 0xFF));
-
-            if (xSemaphoreTakeRecursive(board->i2c_lock, pdMS_TO_TICKS(20)) == pdPASS) {
-                // START TIMERS!
-
-                for (int i = 0; i < 4; ++i) {
-                    if (board->pwm_channel_setting_us[i] == 0) {
-                        ldr_state |= ((uint8_t)((uint16_t)(1 << (i * 2)) & 0xFF));
-                    }
-                }
-
-                pca9633_write(&board->pwm_expander, PCA9633_REG_LEDOUT, ldr_state);
-                gpio_set_level(GREEN_DEBUG, 0);
-
-                for (int i = 0; i < 4; ++i) {
-                    if (board->pwm_channel_setting_us[i] != 0) {
-                        // if (esp_timer_is_active(board->pwm_timers[i])) esp_timer_stop(board->pwm_timers[i]);
-                        esp_err_t e = esp_timer_start_once(board->pwm_timers[i], board->pwm_channel_setting_us[i]);
-                    }
-                }
-
-            } else {
-                ESP_LOGW("DD-PWM", "Failed to get i2c - missed send");
-            }
-        } else {
-            // Notification = channel to go low + 1
-            int channel = notval - 1;
-            ldr_state |= ((uint8_t)((uint16_t)(1 << (channel * 2)) & 0xFF));
-            pca9633_write(&board->pwm_expander, PCA9633_REG_LEDOUT, ldr_state);
-
-            if (ldr_state == 0b01010101) {
-                // ESP_LOGI("DD-PWM", "Finished Send");
-                xSemaphoreGive(board->i2c_lock);
-            }
-            gpio_set_level(GREEN_DEBUG, 0);
-        }
-    }
-
-    // while (1) {
-    //     BaseType_t notval;
-    //     // Get notified by 50Hz timer
-    //     xTaskNotifyWait(0, ULONG_MAX, &notval, portMAX_DELAY);
-
-    //     int channel = notval;
-    //     int channel = notval - 1;
-    //     ldr_state |= ((uint8_t)((uint16_t)(1 << (channel * 2)) & 0xFF));
-    //     pca9633_write(&board->pwm_expander, PCA9633_REG_LEDOUT, ldr_state);
-
-    //     if (ldr_state == 0b01010101) {
-    //         // ESP_LOGI("DD-PWM", "Finished Send");
-    //         // xSemaphoreGive(board->i2c_lock);
-    //     }
-    // }
-}
-
 // TODO: Somehow be able to access configuration from here.... Make it a component? Need brightness for LEDs.....
 void dd_pyro_task(void* args) {
     dd_board_t* board = (dd_board_t*)args;
@@ -102,7 +21,6 @@ void dd_pyro_task(void* args) {
         dd_board_set_indicator_color(board, 2, board->pyro_enabled[2] ? (board->pyro_continuity[2] ? LED_COLOR_GREEN : LED_COLOR_RED) : LED_COLOR_NONE);
         dd_board_set_indicator_color(board, 3, board->pyro_enabled[3] ? (board->pyro_continuity[3] ? LED_COLOR_GREEN : LED_COLOR_RED) : LED_COLOR_NONE);
 
-        // ESP_LOGI("DD-PWM", "50Hz timer running: %d", esp_timer_is_active(board->pwm_50Hz_timer));
         vTaskDelay(pdMS_TO_TICKS(1000 / board->pyro_hz));
     }
 }
@@ -219,50 +137,6 @@ esp_err_t dd_init_adc(dd_board_t* board) {
     }
 }
 
-esp_err_t dd_init_pwms(dd_board_t* board) {
-    ESP_RETURN_ON_ERROR(pca9633_init(&board->pwm_expander, board->i2c), "PCA9633", "Error initializing PCA9633");
-    // 21? really? I guess it's time critical...
-    xTaskCreatePinnedToCore(dd_pwm_generation_task, "pwm_gen_task", 1024 * 8, board, 19, &board->pwm_gen_task_handle, 1);
-
-    board->pwm_channel_setting_us[0] = 0;
-    board->pwm_channel_setting_us[1] = 1000;
-    board->pwm_channel_setting_us[2] = 1500;
-    board->pwm_channel_setting_us[3] = 2000;
-
-    for (int i = 0; i < 4;++i) {
-        board->pwm_timer_ctx[i] = (dd_pwm_gen_ctx_t){
-            .board = board,
-            .channel = i
-        };
-
-        const esp_timer_create_args_t timer_args = {
-            .callback = &dd_pwm_generation_timer_cb,
-            .name = "dd_pwm_gen", // TODO: Add index
-            .arg = &board->pwm_timer_ctx[i],
-            .dispatch_method = ESP_TIMER_ISR
-        };
-
-        ESP_RETURN_ON_ERROR(esp_timer_create(&timer_args, &board->pwm_timers[i]), "DD-PWM", "Error initializing timer %d", i);
-    }
-
-    board->pwm_timer_ctx[4] = (dd_pwm_gen_ctx_t){
-        .board = board,
-        .channel = -1
-    };
-
-    const esp_timer_create_args_t timer_args = {
-        .callback = &dd_pwm_generation_timer_cb,
-        .name = "dd_pwm_seq", // TODO: Add index
-        .arg = &board->pwm_timer_ctx[4],
-        .dispatch_method = ESP_TIMER_ISR
-    };
-
-    ESP_RETURN_ON_ERROR(esp_timer_create(&timer_args, &board->pwm_50Hz_timer), "DD-PWM", "Error initializing 50Hz timer");
-    ESP_RETURN_ON_ERROR(esp_timer_start_periodic(board->pwm_50Hz_timer, 1000000 / 50), "DD-PWM", "Error initializing 50Hz timer");
-
-    return ESP_OK;
-}
-
 esp_err_t dd_init_pyros(dd_board_t* board) {
     esp_err_t e = tca6408_init(&board->pyro_expander, board->i2c);
     ESP_RETURN_ON_ERROR(e, "TCA6408", "Error initializing TCA6408");
@@ -298,10 +172,6 @@ esp_err_t dd_init_pyros(dd_board_t* board) {
 esp_err_t dd_board_init(dd_board_t* board, gpio_num_t pin_leds, gpio_num_t pin_serial_rx, gpio_num_t pin_sda, gpio_num_t pin_scl, logger_t* logger) {
     board->logger = logger;
     board->i2c_lock = xSemaphoreCreateRecursiveMutex();
-
-    gpio_reset_pin(GREEN_DEBUG);
-    gpio_set_direction(GREEN_DEBUG, GPIO_MODE_OUTPUT);
-
     // esp_timer_init();
 
     // INDICATORS, TODO: USE DMA!!!
@@ -334,8 +204,7 @@ esp_err_t dd_board_init(dd_board_t* board, gpio_num_t pin_leds, gpio_num_t pin_s
         .sda_io_num = pin_sda,
         .scl_io_num = pin_scl,
         .clk_source = I2C_CLK_SRC_DEFAULT,
-        .glitch_ignore_cnt = 7,
-        .trans_queue_depth = 16
+        .glitch_ignore_cnt = 7
     };
     i2c_mst_config.flags.enable_internal_pullup = false;
 
@@ -350,18 +219,12 @@ esp_err_t dd_board_init(dd_board_t* board, gpio_num_t pin_leds, gpio_num_t pin_s
         return ESP_ERR_NOT_FOUND;
     }
 
-    // Pyro Expander
-
     // PWM is NOT working, due to hardware issues and limitations with attempted software solutions
-    // e = dd_init_pwms(board);
-    // ESP_RETURN_ON_ERROR(e, "DD", "Error initializing PWM expander");
-
     e = dd_init_pyros(board);
     ESP_RETURN_ON_ERROR(e, "DD", "Error initializing pyro IO expander");
 
     e = dd_init_adc(board);
     ESP_RETURN_ON_ERROR(e, "DD", "Error initializing ADC");
-
 
     xTaskCreatePinnedToCore(dd_pyro_task, "dd_task", 1024 * 4, board, 10, &board->task_handle, 1);
 
