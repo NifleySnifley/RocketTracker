@@ -680,7 +680,7 @@ CONFIG_GPTIMER_ISR_HANDLER_IN_IRAM=y
 #
 # I2C Configuration
 #
-# CONFIG_I2C_ISR_IRAM_SAFE is not set
+CONFIG_I2C_ISR_IRAM_SAFE=y
 # CONFIG_I2C_ENABLE_DEBUG_LOG is not set
 # end of I2C Configuration
 # end of Driver Configurations
