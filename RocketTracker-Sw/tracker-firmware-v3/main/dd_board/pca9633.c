@@ -38,11 +38,11 @@ esp_err_t pca9633_init(PCA9633_t* exp, i2c_master_bus_handle_t bus) {
     pca9633_write(exp, PCA9633_REG_MODE2, 1 << 2);
     pca9633_write(exp, PCA9633_REG_LEDOUT, exp->ldr.reg);
 
-    cbs.on_trans_done = i2c_null_callback;
-    e = i2c_master_register_event_callbacks(exp->device, &cbs, NULL);
-    if (e != ESP_OK) {
-        ESP_LOGE("PCA9633", "Error registering i2c callback: %s", esp_err_to_name(e));
-    }
+    // cbs.on_trans_done = i2c_null_callback;
+    // e = i2c_master_register_event_callbacks(exp->device, &cbs, NULL);
+    // if (e != ESP_OK) {
+    //     ESP_LOGE("PCA9633", "Error registering i2c callback: %s", esp_err_to_name(e));
+    // }
 
     return ESP_OK;
 }
