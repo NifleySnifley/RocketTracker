@@ -85,7 +85,8 @@
         "system_error": "c",
         "tuple": "c",
         "type_traits": "c",
-        "utility": "c"
+        "utility": "c",
+        "ledc.h": "c"
     },
     "editor.tabSize": 4,
     "editor.insertSpaces": true,

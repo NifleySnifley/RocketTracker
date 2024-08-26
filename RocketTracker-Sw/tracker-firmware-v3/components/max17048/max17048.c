@@ -8,7 +8,7 @@
 
 #include "driver/i2c_master.h"
 
-#include "MAX17048.h"
+#include "max17048.h"
 #include "esp_log.h"
 
  /*============================================================================*/
