@@ -1,1 +1,1 @@
-Currently WIP starting over all software-related development to get back on track making the most efficient design possible.
+`stable-launch` - this is the most stable and recently updated version - work here
